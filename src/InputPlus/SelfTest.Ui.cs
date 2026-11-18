@@ -1131,13 +1131,15 @@ public static partial class SelfTest
 
         Check("导航顺序表里有「平滑滚动」页", order.Contains("scroll"),
             string.Join(",", order));
+        Check("导航顺序表里有「按住拖拽」页", order.Contains("holddrag"),
+            string.Join(",", order));
         Check("导航顺序表里有「设置」页", order.Contains("settings"),
             string.Join(",", order));
         Check("导航顺序表没有重复项", order.Distinct().Count() == order.Length,
             string.Join(",", order));
         Check("导航顺序表第一项是「快速上手」", order[0] == "guide", order[0]);
         Check("导航顺序表最后一项是「关于」", order[^1] == "about", order[^1]);
-        Check("导航顺序表是 14 项（与侧栏一致）", order.Length == 14,
+        Check("导航顺序表是 15 项（与侧栏一致）", order.Length == 15,
             $"{order.Length} 项");
 
         /* 托盘提示必须写明能双击 —— 托盘图标本身没有任何可见提示，

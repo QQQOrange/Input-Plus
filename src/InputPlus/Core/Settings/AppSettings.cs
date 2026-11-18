@@ -1301,6 +1301,20 @@ public sealed class AppSettings
     /// </summary>
     public List<ScrollAppRule> ScrollApps { get; set; } = new();
 
+    /// <summary>
+    /// 「按住拖拽」总开关（长按触发键拖动 / 调整窗口，引擎来自 HoldDrag）。
+    /// </summary>
+    public bool HoldDragEnabled { get; set; }
+
+    /// <summary>
+    /// 「按住拖拽」的全部参数，以 JSON 文本存放。
+    ///
+    /// schema 归 HoldDrag 模块自己管（触发键、长按时长、外框样式、吸附阈值、按程序规则…），
+    /// 宿主只负责"随整份设置一起存取"，于是它天然跟着密码库、云端备份、整份导入导出走，
+    /// 不需要在 AppSettings 里再抄一份 40 多个字段的镜像。
+    /// </summary>
+    public string HoldDragJson { get; set; } = "";
+
     public KeyBinding? FindBinding(string combo) =>
         Keys.FirstOrDefault(k => string.Equals(k.Combo, combo, StringComparison.OrdinalIgnoreCase));
 

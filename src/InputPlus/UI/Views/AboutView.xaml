@@ -52,7 +52,7 @@
                             <TextBlock Text="{loc:T 'Input Plus'}" FontSize="26" FontWeight="SemiBold" Foreground="White" />
                             <Border CornerRadius="6" Background="{StaticResource Brush.BrandHairline}" Padding="8,3" Margin="10,0,0,0"
                                     VerticalAlignment="Center">
-                                <TextBlock x:Name="VersionBadge" Text="v1.0.0" FontSize="12" Foreground="White" />
+                                <TextBlock x:Name="VersionBadge" Text="v1.1.0" FontSize="12" Foreground="White" />
                             </Border>
                         </StackPanel>
                         <TextBlock Text="{loc:T 'Input Plus · 让每一个按键都能变成你的快捷键'}" Foreground="{StaticResource Brush.BrandSubtitle}" FontSize="13.5"
@@ -166,7 +166,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
                             <TextBlock Text="{loc:T '当前版本'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock x:Name="CurrentVersionText" Text="1.0.0"
+                            <TextBlock x:Name="CurrentVersionText" Text="1.1.0"
                                        Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" />
                             <!-- 上次检查更新的时间：自动更新默认每天要检查，
                                  用户需要知道"到底查过没有、什么时候查的" -->

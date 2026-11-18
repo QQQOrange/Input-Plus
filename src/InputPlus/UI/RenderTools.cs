@@ -24,7 +24,7 @@ public static class RenderTools
     private static readonly string[] Pages =
     {
         // 「bindings」页已移除：窗口绑定并入按键映射，作为动作处理
-        "guide", "keys", "hotstrings", "layers", "gestures", "scroll", "macros", "qbar",
+        "guide", "keys", "hotstrings", "layers", "gestures", "scroll", "holddrag", "macros", "qbar",
         "clipboard", "backup", "settings", "test", "help", "about",
     };
 
@@ -102,6 +102,19 @@ public static class RenderTools
                 catch (Exception ex) { CoreLog.Warn("渲染平滑滚动例外列表失败：" + ex.Message); }
                 scrollPage.ClearSampleAppsForRender();
                 Pump(120);
+            }
+
+            /* 「按住拖拽」页默认是关着的，直接拍出来是一屏灰字。
+               塞一份示例配置，拍出真实参数填满的样子。 */
+            if (page == "holddrag" && main.GetPage("holddrag") is InputPlus.UI.Views.HoldDragView hdv)
+            {
+                try
+                {
+                    hdv.SetSampleForRender();
+                    Pump(260);
+                    Save(main, Path.Combine(outDir, "holddrag-sample.png"));
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染按住拖拽示例失败：" + ex.Message); }
             }
 
             /* 手势录制窗口：不单独拍一张的话，回归时根本看不到它长什么样。

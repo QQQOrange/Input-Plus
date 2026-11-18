@@ -1,0 +1,794 @@
+#nullable disable
+#pragma warning disable CS0649, CS8632, CS0414, CA1416
+﻿using System;
+using System.Collections.Generic;
+
+namespace InputPlus.Modules.HoldDrag
+{
+	/// <summary>
+	/// 界面文案的集中翻译层。
+	///
+	/// 设计取舍：所有中文文案在**构造控件的那一刻**经 <see cref="T"/> 取一次译文，
+	/// 所以切换语言不需要给每个控件挂监听——由界面层整体重建（设置窗口 RebuildUi、
+	/// 托盘菜单重建）即可完成，绝不会出现"一半中文一半英文"的中间态。
+	///
+	/// 键就是简体中文原文：漏译时原样返回中文，不会抛异常、也不会在界面上露出 key。
+	/// </summary>
+	internal static class Loc
+	{
+		/// <summary>简体中文（默认）。</summary>
+		public const string Zh = "zh";
+
+		/// <summary>English。</summary>
+		public const string En = "en";
+
+		private static string _current = Zh;
+
+		/// <summary>当前语言的外部语言包（zh / en 为 null，走内置逻辑）。</summary>
+		private static Dictionary<string, string> _activePack;
+
+		private static List<LanguagePack> _packs = new List<LanguagePack>();
+
+		/// <summary>已发现的外部语言包（启动时扫描一次）。</summary>
+		public static IReadOnlyList<LanguagePack> Packs => _packs;
+
+		/// <summary>语言真的变了才触发；界面层订阅它做重建。</summary>
+		public static event Action Changed;
+
+		/// <summary>当前语言 id（zh / en）。</summary>
+		public static string Current => _current;
+
+		public static bool IsEnglish => string.Equals(_current, En, StringComparison.OrdinalIgnoreCase);
+
+		/// <summary>把配置里可能出现的各种写法收敛成 zh / en 两个值。</summary>
+		public static string Normalize(string id)
+		{
+			if (string.IsNullOrWhiteSpace(id))
+			{
+				return Zh;
+			}
+			string text = id.Trim().ToLowerInvariant();
+			if (text.StartsWith("en", StringComparison.Ordinal) || text == "english")
+			{
+				return En;
+			}
+			if (text.StartsWith("zh", StringComparison.Ordinal) || text == "chinese" || text == "cn")
+			{
+				return Zh;
+			}
+			foreach (LanguagePack pack in _packs)
+			{
+				if (string.Equals(pack.Id, text, StringComparison.Ordinal))
+				{
+					return pack.Id;
+				}
+			}
+			// 语言包被删掉/配置里写了没装的语言：回落到中文，而不是显示一堆 key
+			return Zh;
+		}
+
+		/// <summary>启动时按配置设定语言：不触发 Changed（此时还没有界面要重建）。</summary>
+		public static void Init(string id)
+		{
+			RefreshPacks();
+			_current = Normalize(id);
+			ApplyPack();
+		}
+
+		/// <summary>重新扫描语言包目录（用户可以在运行中把 json 丢进去）。</summary>
+		public static void RefreshPacks()
+		{
+			try
+			{
+				_packs = LanguagePack.LoadAll();
+			}
+			catch (Exception ex)
+			{
+				Log.Error(ex);
+				_packs = new List<LanguagePack>();
+			}
+		}
+
+		private static void ApplyPack()
+		{
+			_activePack = null;
+			foreach (LanguagePack pack in _packs)
+			{
+				if (string.Equals(pack.Id, _current, StringComparison.Ordinal))
+				{
+					_activePack = pack.Map;
+					return;
+				}
+			}
+		}
+
+		/// <summary>运行中切换语言；真的变了才通知界面层。</summary>
+		public static void Set(string id)
+		{
+			string text = Normalize(id);
+			if (string.Equals(text, _current, StringComparison.Ordinal))
+			{
+				return;
+			}
+			_current = text;
+			ApplyPack();
+			try
+			{
+				Changed?.Invoke();
+			}
+			catch (Exception ex)
+			{
+				Log.Error(ex);
+			}
+		}
+
+		/// <summary>取译文：中文原样，英文查表（查不到回退中文）。</summary>
+		public static string T(string zh)
+		{
+			if (zh == null || string.Equals(_current, Zh, StringComparison.Ordinal))
+			{
+				return zh;
+			}
+			string value;
+			if (IsEnglish)
+			{
+				return Map.TryGetValue(zh, out value) ? value : zh;
+			}
+			// 外部语言包：缺词条就回退中文原文（不会露 key，也不会中英混排）
+			if (_activePack != null && _activePack.TryGetValue(zh, out value) && !string.IsNullOrWhiteSpace(value))
+			{
+				return value;
+			}
+			return zh;
+		}
+
+		/// <summary>全部词条（生成语言包模板用）。</summary>
+		public static List<string> Keys()
+		{
+			List<string> list = new List<string>(Map.Keys);
+			list.Sort(StringComparer.Ordinal);
+			return list;
+		}
+
+		/// <summary>语言下拉框里显示的名字（两种语言下都用各自的母语写法，便于辨认）。</summary>
+		public static string DisplayName(string id)
+		{
+			string text = Normalize(id);
+			if (string.Equals(text, En, StringComparison.Ordinal))
+			{
+				return "English";
+			}
+			if (string.Equals(text, Zh, StringComparison.Ordinal))
+			{
+				return "简体中文";
+			}
+			foreach (LanguagePack pack in _packs)
+			{
+				if (string.Equals(pack.Id, text, StringComparison.Ordinal))
+				{
+					return pack.Name;
+				}
+			}
+			return text;
+		}
+
+		/// <summary>所有可选语言（内置两种 + 外部包）。</summary>
+		public static List<(string Id, string Name)> AllLanguages()
+		{
+			List<(string, string)> list = new List<(string, string)>
+			{
+				(Zh, "简体中文"),
+				(En, "English")
+			};
+			foreach (LanguagePack pack in _packs)
+			{
+				list.Add((pack.Id, pack.Name));
+			}
+			return list;
+		}
+
+		/// <summary>
+		/// 左括号（跟随语言）。界面上的句子常常是「固定文案 + 变量 + 括号说明」拼出来的，
+		/// 括号若写死在代码里，英文界面就会出现「You're up to date (v1.10.0）」这种中英混排。
+		/// </summary>
+		public static string Open => IsEnglish ? " (" : "（";
+
+		/// <summary>右括号（跟随语言）。</summary>
+		public static string Close => IsEnglish ? ")" : "）";
+
+		/// <summary>把一段说明包进括号；空字符串返回空串（不产生「（）」）。</summary>
+		public static string InParens(string text)
+		{
+			return string.IsNullOrEmpty(text) ? string.Empty : Open + text + Close;
+		}
+
+		/// <summary>简体中文 → English。键必须与源码里的中文字面量**完全一致**（含空格与标点）。</summary>
+		private static readonly Dictionary<string, string> Map = new Dictionary<string, string>(StringComparer.Ordinal)
+		{
+			["异常 "] = "Error ",
+			["鼠标键动作"] = "Mouse buttons",
+			["关于"] = "About",
+			["检查更新"] = "Check for updates",
+			["发现新版本 "] = "New version available ",
+			["（当前 v"] = " (current v",
+			["已是最新版本（v"] = "You're up to date (v",
+			["检查失败："] = "Check failed: ",
+			["触发方式"] = "Trigger",
+			["开机自启"] = "Startup",
+			["跟随系统强调色"] = "Follow system accent color",
+			["发布页　："] = "Release page: ",
+			["正在运行"] = "Running",
+			["视觉反馈"] = "Visual feedback",
+			["拖动行为"] = "Dragging",
+			["流畅度"] = "Performance",
+			["启动与权限"] = "Startup & permissions",
+			["帮助"] = "Help",
+			["双击左键 = 最大化 / 还原"] = "Double-click left = maximize / restore",
+			["双击右键 = 九宫格分区"] = "Double-click right = 3×3 snap zones",
+			["允许拖动全屏 / 无边框窗口（有风险）"] = "Allow dragging fullscreen / borderless windows (risky)",
+			["未填写：检查更新走匿名接口"] = "Not set — update checks use the anonymous API",
+			["保存令牌"] = "Save token",
+			["验证令牌"] = "Verify token",
+			["尚未验证"] = "Not verified yet",
+			["样式"] = "Style",
+			["不生效的窗口"] = "Ignored windows",
+			["刷新模式"] = "Refresh mode",
+			["固定值"] = "Fixed",
+			["左键 / 右键 / 中键不能作为触发键，请用键盘按键或鼠标侧键。"] = "Mouse buttons cannot be the trigger key; use a keyboard key or a mouse side button.",
+			["保存失败："] = "Save failed: ",
+			["长按 "] = "Hold ",
+			["当前 v"] = "current v",
+			["写注册表 Run 项失败，可能被安全软件拦截。"] = "Failed to write the Run registry entry; security software may be blocking it.",
+			["计划任务创建失败（"] = "Could not create the scheduled task (",
+			["），已改用注册表方式。注意：注册表方式每次登录会弹一次 UAC 确认框。"] = "); falling back to the registry method. Note: the registry method shows a UAC prompt at every sign-in.",
+			["计划任务与注册表方式都失败了："] = "Both the scheduled task and the registry method failed: ",
+			["设置开机自启时出错："] = "Error while configuring startup: ",
+			["下载文件不存在："] = "The downloaded file does not exist: ",
+			["无法用新版本覆盖程序文件："] = "Could not overwrite the program file with the new version: ",
+			["新版本已就位，但没能自动启动。请手动打开："] = "The new version is in place but could not start automatically. Please open it manually: ",
+			["（未填写）"] = "(not set)",
+			["GitHub 接口限额已用尽（"] = "GitHub API rate limit reached (",
+			["令牌 5000 次/小时"] = "token: 5,000/hour",
+			["匿名 60 次/小时"] = "anonymous: 60/hour",
+			["），约 "] = "), about ",
+			[" 分钟后重置；已自动改用网页方式检查"] = " min until reset; switched to the web page automatically",
+			["还没填令牌，没什么可验证的"] = "No token entered — nothing to verify",
+			["令牌有效"] = "Token is valid",
+			["（接口有响应）"] = " (the API responded)",
+			["，读到最新版本 "] = ", latest version ",
+			["；接口额度剩余 "] = "; API quota remaining ",
+			["令牌无效或已过期（HTTP 401）——请重新复制一个令牌；若刚改过权限，重新生成一个再试"] = "Token is invalid or expired (HTTP 401) — copy a new token; if you just changed permissions, generate a fresh one",
+			["令牌有效，但读不到本仓库（HTTP "] = "Token is valid but cannot read this repository (HTTP ",
+			["）——fine-grained 令牌请在 Resource owner → Repositories 里勾选 QQQOrange/holddrag"] = ") — for a fine-grained token, tick QQQOrange/holddrag under Resource owner → Repositories",
+			["（令牌本身没问题，等重置即可）"] = " (the token itself is fine — just wait for the reset)",
+			["没法验证：HTTP "] = "Cannot verify: HTTP ",
+			["（服务端异常或网络中间设备拦截）"] = " (server error, or blocked by a network device)",
+			["网络不通，没法验证："] = "Network unreachable — cannot verify: ",
+			["（测试）模拟网络不可达：无法连接 github.com"] = "(test) simulated network failure: cannot reach github.com",
+			["没能从发布页解析出最新版本号（可能没有已发布的 Release，或网络被拦截）。"] = "Could not parse the latest version from the release page (no published Release, or the network is blocked).",
+			["发布标签格式无法识别："] = "Unrecognized release tag: ",
+			["接口返回里没有 tag_name"] = "the API response has no tag_name",
+			["令牌无效或没有该仓库的读取权限（HTTP "] = "Token is invalid or lacks read access to the repo (HTTP ",
+			["），已自动改用匿名方式检查"] = "); automatically retried anonymously",
+			["接口返回 HTTP "] = "The API returned HTTP ",
+			["接口请求失败："] = "API request failed: ",
+			["下载失败：HTTP "] = "Download failed: HTTP ",
+			["下载得到 0 字节，可能是被网络中间设备拦截了。"] = "Downloaded 0 bytes; a network device may be blocking it.",
+			["已取消下载"] = "Download cancelled",
+			["（网络不可达：请检查代理 / 防火墙是否允许访问 github.com）"] = " (network unreachable: check that your proxy / firewall allows github.com)",
+			["移动窗口"] = "Move window",
+			["调整大小"] = "Resize",
+			["最大化 / 还原"] = "Maximize / restore",
+			["最小化"] = "Minimize",
+			["关闭窗口"] = "Close window",
+			["置于最底层"] = "Send to back",
+			["置顶 / 取消置顶"] = "Toggle always on top",
+			["在屏幕上居中"] = "Center on screen",
+			["不绑定动作"] = "No action",
+			["按键按下"] = "key down",
+			["按键抬起"] = "key up",
+			["鼠标消息"] = "mouse message",
+			["移动"] = "Move",
+			["缩放"] = "Resize",
+			["薄荷青"] = "Mint",
+			["湖水青"] = "Lagoon",
+			["天青"] = "Sky",
+			["抹茶绿"] = "Matcha",
+			["嫩芽绿"] = "Sprout",
+			["暖金"] = "Warm Gold",
+			["蜜橙"] = "Honey",
+			["珊瑚"] = "Coral",
+			["暖砖红"] = "Brick",
+			["玫瑰"] = "Rose",
+			["藕粉"] = "Lotus Pink",
+			["藕荷"] = "Lilac",
+			["石墨"] = "Graphite",
+			["银灰"] = "Silver",
+			["曜石"] = "Obsidian",
+			["珍珠白"] = "Pearl",
+			["自定义 #"] = "Custom #",
+			["虚线环"] = "Dashed ring",
+			["细线环"] = "Thin ring",
+			["焦点环"] = "Focus ring",
+			["柔光"] = "Soft glow",
+			["柔和投影"] = "Soft shadow",
+			["圆头短划、疏密跟着圆角走，日常最耐看"] = "Rounded dashes that follow the corner radius — the easiest on the eyes day to day",
+			["一根细线，最不打扰界面"] = "A single thin line — the least intrusive",
+			["双层描边，最醒目，接近系统焦点框"] = "Double stroke, the most visible — close to the system focus rectangle",
+			["细腻的多层衰减光晕，暗色窗口上尤其好看"] = "Layered falloff glow — especially good on dark windows",
+			["真实柔化投影，像窗口浮起来了一层"] = "A real blurred drop shadow, as if the window lifts off the page",
+			["Enter 回车"] = "Enter",
+			["空格"] = "Space",
+			["CapsLock 大写锁定"] = "Caps Lock",
+			["菜单键 (Applications)"] = "Menu key (Applications)",
+			["Backspace 退格"] = "Backspace",
+			["方向键 左"] = "Arrow Left",
+			["方向键 上"] = "Arrow Up",
+			["方向键 右"] = "Arrow Right",
+			["方向键 下"] = "Arrow Down",
+			["左 Win"] = "Left Win",
+			["右 Win"] = "Right Win",
+			["（未设置）"] = "(not set)",
+			["左 Alt"] = "Left Alt",
+			["右 Alt（AltGr）"] = "Right Alt (AltGr)",
+			["左 Ctrl"] = "Left Ctrl",
+			["右 Ctrl"] = "Right Ctrl",
+			["左 Shift"] = "Left Shift",
+			["右 Shift"] = "Right Shift",
+			["鼠标侧键 前进 (X1)"] = "Side button: Forward (X1)",
+			["鼠标侧键 后退 (X2)"] = "Side button: Back (X2)",
+			["数字 "] = "Digit ",
+			["字母 "] = "Letter ",
+			["小键盘 "] = "Numpad ",
+			["小键盘 *"] = "Numpad *",
+			["小键盘 +"] = "Numpad +",
+			["小键盘 -"] = "Numpad -",
+			["小键盘 ."] = "Numpad .",
+			["小键盘 /"] = "Numpad /",
+			["虚拟键 0x"] = "VK 0x",
+			["无位图"] = "No bitmap",
+			["越界"] = "out of bounds",
+			["不感知(0)★危险"] = "unaware (0) ★dangerous",
+			["系统感知(1)"] = "system aware (1)",
+			["每显示器感知(2)"] = "per-monitor aware (2)",
+			["查不到("] = "unknown (",
+			["说明　　："] = "Notes: ",
+			["下载地址："] = "Download URL: ",
+			["　　　　　（未填令牌：程序内不会下载，请用上面的地址在浏览器下载）"] = "          (no token: nothing is downloaded in the app — open the URL above in your browser)",
+			["检查抛异常："] = "Check threw an exception: ",
+			["当前正在以【普通用户权限】运行。\r\n\r\n这个状态下：\r\n  · 日常拖动浏览器、编辑器、资源管理器等都正常；\r\n  · 但拖不动以管理员身份运行的窗口（例如任务管理器、部分安装程序）。\r\n\r\n建议改用管理员权限重新打开。现在重启吗？\r\n（选\"否\"就保持现状继续使用，功能不受影响）"] = "HoldDrag is running with normal user rights.\r\n\r\nIn this state:\r\n  · dragging browsers, editors and Explorer works as usual;\r\n  · windows running as administrator (Task Manager, some installers) cannot be dragged.\r\n\r\nRestarting with administrator rights is recommended. Restart now?\r\n(Choose \"No\" to keep running as is — everything else still works)",
+			["长按拖窗 · 权限提示"] = "HoldDrag · Permission",
+			["长按拖窗"] = "HoldDrag",
+			["外框已关闭"] = "Frame is off",
+			["长按拖窗 · 设置"] = "HoldDrag · Settings",
+			["恢复默认值"] = "Restore defaults",
+			["保存并生效"] = "Save and apply",
+			["取消"] = "Cancel",
+			["重新录制"] = "Re-record",
+			["需要长按触发（关闭后按住立即生效）"] = "Require a long press (when off, holding applies immediately)",
+			["长按到达阈值后，光标所在窗口亮起外框"] = "When the hold threshold is reached, the window under the cursor gets a frame",
+			["颜色跟随系统强调色（换 Windows 主题色时外框一起变）"] = "Follow the system accent color (the frame follows Windows theme changes)",
+			["自定义颜色…"] = "Custom color…",
+			["允许拖动已最大化的窗口（先还原再拖）"] = "Allow dragging maximized windows (restore first)",
+			["开始拖动时自动把窗口提到最前"] = "Bring the window to the front when dragging starts",
+			["触发时先把全屏/最大化窗口变回普通"] = "Restore fullscreen/maximized windows before dragging",
+			["选中窗口后晃一晃，其它窗口全部最小化"] = "Shake the selected window to minimize all others",
+			["选择程序…"] = "Choose program…",
+			["点选窗口"] = "Pick window",
+			["开机时自动申请管理员权限（默认开启）"] = "Request administrator rights at startup (on by default)",
+			["没有管理员权限时提示我（可关闭）"] = "Warn me when not running as administrator (can be turned off)",
+			["以管理员重启"] = "Restart as administrator",
+			["自动更新（启动时检查，有新版提示我）"] = "Auto update (check at startup and notify me)",
+			["尚未检查"] = "Not checked yet",
+			["GitHub 个人访问令牌"] = "GitHub personal access token",
+			["可选。填写后检查更新会带上该令牌请求 GitHub 接口，接口限额从匿名 60 次/小时提升到 5000 次/小时"] = "Optional. When set, update checks send this token to the GitHub API, raising the limit from 60/hour (anonymous) to 5,000/hour",
+			["验证 GitHub 个人访问令牌"] = "Verify GitHub personal access token",
+			["用当前输入框里的令牌向 GitHub 发一次请求，确认令牌有效且能读到本仓库的发布信息"] = "Sends one request to GitHub with the token in the box to confirm it is valid and can read this repository's releases",
+			["什么是 GitHub 个人访问令牌"] = "What is a GitHub personal access token",
+			["打开 GitHub 官方中文文档，了解个人访问令牌的定义、创建与权限设置方法"] = "Opens the official GitHub documentation: what personal access tokens are, how to create one and which permissions to grant",
+			["什么是 GitHub 个人访问令牌？\r\n点击用浏览器打开 GitHub 官方中文文档"] = "What is a GitHub personal access token?\r\nClick to open the official GitHub documentation in your browser",
+			["决定什么时候开始接管窗口；短按仍然原样放行"] = "Decides when HoldDrag takes over the window; a short press still passes through untouched",
+			["触发键"] = "Trigger key",
+			["按住它，光标下的窗口才开始响应拖动"] = "Hold it, and the window under the cursor starts responding to dragging",
+			["当前触发键"] = "Current trigger key",
+			["点「重新录制」后按任意键或鼠标侧键即可更换"] = "Click \"Re-record\", then press any key or a mouse side button to change it",
+			["长按判定"] = "Hold detection",
+			["区分「长按触发」和「正常打字」就靠这一段时长"] = "This duration is what separates a deliberate hold from normal typing",
+			["需要长按触发"] = "Require a long press",
+			["关掉后按住触发键立即生效，不再等阈值"] = "When off, holding the trigger key applies immediately without waiting for the threshold",
+			["毫秒"] = "ms",
+			["长按阈值"] = "Hold threshold",
+			["按住多久才算长按；太短容易误触发，太长会显得迟钝"] = "How long counts as a hold; too short triggers by accident, too long feels sluggish",
+			["长按触发键之后，三个鼠标键各自做什么"] = "What each mouse button does once the trigger key is held",
+			["触发期间：左键拖动窗口，右键从边缘缩放，中键执行一次动作"] = "While triggered: left drags the window, right resizes from the edge, middle runs a one-shot action",
+			["左键"] = "Left button",
+			["按住不放，窗口跟着鼠标走"] = "Hold and the window follows the cursor",
+			["右键"] = "Right button",
+			["按住不放，从被抓的那条边/角缩放"] = "Hold and resize from the grabbed edge/corner",
+			["中键"] = "Middle button",
+			["按一下执行一次，不需要按住"] = "One click runs it once; no need to hold",
+			["双击手势"] = "Double-click gestures",
+			["触发期间快速连按两次鼠标键"] = "Press a mouse button twice quickly while triggered",
+			["不用去够标题栏，在窗口任意位置都行"] = "No need to reach the title bar — anywhere in the window works",
+			["把窗口吸附到屏幕的九个区域之一"] = "Snaps the window into one of nine screen zones",
+			["外框的颜色、样式与实时预览"] = "Frame color, style and live preview",
+			["外框"] = "Frame",
+			["触发期间在窗口四周画一圈提示，让你看清这次会拖动谁"] = "Draws a frame around the window while triggered so you can see what you are about to drag",
+			["显示外框"] = "Show frame",
+			["关掉后触发时没有任何视觉提示"] = "When off, triggering gives no visual feedback",
+			["外框颜色"] = "Frame color",
+			["先选一个预设颜色；下面色板可以直接点"] = "Pick a preset first; the swatches below can be clicked too",
+			["色板"] = "Swatches",
+			["颜色跟随系统强调色"] = "Follow the system accent color",
+			["换 Windows 主题色时外框一起变；优先级高于自定义颜色"] = "The frame follows Windows theme color changes; takes precedence over custom colors",
+			["自定义颜色"] = "Custom color",
+			["打开系统取色器，可以选任意颜色"] = "Opens the system color picker — any color you like",
+			["外框长什么样：虚线、细线、焦点、柔光、投影"] = "How the frame looks: dashes, hairline, focus, glow, shadow",
+			["选一种画法；下面的缩略图也可以直接点"] = "Choose a drawing style; the thumbnails below are clickable too",
+			["缩略图"] = "Thumbnails",
+			["粗细"] = "Thickness",
+			["线有多粗；虚线 / 焦点环靠它区分轻重"] = "How thick the line is; the dashed and focus rings use it to set their weight",
+			["圆角"] = "Corner radius",
+			["外框跟着窗口的圆角走，改这里能立刻在下面的预览里看到"] = "The frame follows the window's corner radius; changes show up in the preview below immediately",
+			["不透明度"] = "Opacity",
+			["调低会变成半透明，暗色桌面上更柔和"] = "Lower values make it translucent — softer on dark desktops",
+			["预览"] = "Preview",
+			["和真正拖动时用的是同一段绘制代码，看到什么就是什么"] = "Uses the same drawing code as a real drag — what you see is what you get",
+			["双击手势、全屏窗口与黑名单"] = "Double-click gestures, fullscreen windows and the ignore list",
+			["拖动与缩放"] = "Dragging and resizing",
+			["触发期间的拖动、缩放细节"] = "Details of dragging and resizing while triggered",
+			["缩放角区"] = "Corner grab zone",
+			["鼠标离角多近才算抓住角；越大越好抓，但容易误触"] = "How close to a corner counts as grabbing it; larger is easier to grab but easier to hit by accident",
+			["允许拖动已最大化的窗口"] = "Allow dragging maximized windows",
+			["会先把窗口还原成普通大小，再开始拖"] = "The window is restored to normal size before dragging starts",
+			["窗口层级与全屏"] = "Window z-order and fullscreen",
+			["全屏 / 无边框窗口容易被拖成一片黑"] = "Fullscreen / borderless windows often end up black after being dragged",
+			["开始拖动时把窗口提到最前"] = "Bring the window to the front when dragging starts",
+			["不用先点一下激活它"] = "No need to click it first to activate",
+			["部分游戏和视频窗口拖完会显示异常"] = "Some games and video windows render incorrectly afterwards",
+			["触发时先把全屏 / 最大化窗口变回普通"] = "Restore fullscreen / maximized windows before dragging",
+			["推荐开着：拖动和缩放都从正常尺寸开始"] = "Recommended: dragging and resizing then start from a normal size",
+			["晃窗最小化"] = "Shake to minimize",
+			["选中窗口后左右晃一晃"] = "Shake the selected window left and right",
+			["晃窗把其它窗口最小化"] = "Shake to minimize other windows",
+			["再晃一次还原；判定要求多次往复且净位移接近 0，正常拖动不会误触发"] = "Shake again to restore; detection needs several back-and-forth moves with almost no net movement, so normal dragging never triggers it",
+			["命中黑名单的窗口完全不接管"] = "Windows matching the ignore list are never taken over",
+			["关键字"] = "Keywords",
+			["窗口标题 / 程序名 / 类名，逗号分隔；命中就完全不接管"] = "Window title / process name / class name, comma separated; a match means never take it over",
+			["快速添加"] = "Quick add",
+			["不知道填什么时，用「选择程序」挑 exe，或「点选窗口」直接在屏幕上点那扇窗"] = "Not sure what to enter? Use \"Choose program\" to pick an exe, or \"Pick window\" to click the window on screen",
+			["拖动过程中的刷新节流"] = "Refresh throttling while dragging",
+			["刷新越快越跟手，但也更吃 CPU"] = "Faster refresh feels snappier but costs more CPU",
+			["「自动」会按当前显示器的刷新率决定"] = "\"Auto\" follows the current monitor's refresh rate",
+			["只在「固定值」模式下用得上"] = "Only used in \"Fixed\" mode",
+			["刷新频率"] = "Refresh rate",
+			["0 = 不限制；非 0 时下限钳到 20"] = "0 = unlimited; non-zero values are clamped to a minimum of 20",
+			["语言、开机自启与管理员权限"] = "Language, startup and administrator rights",
+			["语言 / Language"] = "Language",
+			["界面文案用哪种语言显示；切换后立即生效并写入配置"] = "Which language the interface uses; switching applies immediately and is saved",
+			["界面语言"] = "Interface language",
+			["简体中文 / English。选中即保存，整个界面马上换成该语言，下次启动沿用"] = "简体中文 / English. Selecting saves instantly, the whole UI switches right away, and the choice is remembered next launch",
+			["登录 Windows 后自动在托盘运行"] = "Runs in the tray after you sign in to Windows",
+			["显示的是系统里的真实状态（会去查计划任务与注册表）"] = "Shows the real state on this PC (checks the scheduled task and the registry)",
+			["管理员权限"] = "Administrator rights",
+			["管理员权限能拖动更多程序，代价是每次启动弹一次 UAC"] = "Administrator rights let you drag more programs, at the cost of a UAC prompt at every launch",
+			["开机时自动申请管理员权限"] = "Request administrator rights at startup",
+			["默认开启；关掉后遇到管理员程序可能拖不动"] = "On by default; when off, windows running as administrator may not drag",
+			["没有管理员权限时提示我"] = "Warn me when not running as administrator",
+			["不提示的话，拖不动会很像程序坏了"] = "Without the warning, a failed drag looks like the app is broken",
+			["立即生效"] = "Apply now",
+			["改完权限相关设置后，用这个按钮重启一次"] = "After changing permission-related settings, restart once with this button",
+			["每一项功能的实际行为说明"] = "What each feature actually does",
+			["功能说明"] = "Feature notes",
+			["点一下标题，就能展开对应功能的说明"] = "Click a title to expand its explanation",
+			["版本、开发者与更新"] = "Version, developer and updates",
+			["长按拖窗 HoldDrag · 长按触发键，随手拖动 / 缩放任意窗口"] = "HoldDrag · Hold a key, then drag or resize any window",
+			["开发者"] = "Developer",
+			["开发工具"] = "Built with",
+			["当前版本"] = "Current version",
+			["更新时间"] = "Release date",
+			["项目主页"] = "Project home",
+			["自动更新"] = "Auto update",
+			["启动时检查一次，有新版本会提示"] = "Checks once at startup and tells you when a new version is available",
+			["GitHub 访问令牌"] = "GitHub access token",
+			["可选。填了就带令牌请求 GitHub 接口（限额 60 → 5000 次/小时）；无论填不填，下载前都会先弹窗问一次"] = "Optional. With a token, update checks use the GitHub API (limit 60 → 5,000/hour). Either way, downloads always ask before starting.",
+			["个人访问令牌"] = "Personal access token",
+			["只需要公开仓库的读取权限，不需要写权限；令牌明文保存在本机 config.json 里"] = "Only needs read access to a public repository — no write access. Stored in plain text in the local config.json",
+			["点一下立即生效，不必再点底部的「保存并生效」"] = "Applies immediately — no need to click \"Save and apply\" at the bottom",
+			["真的向 GitHub 发一次请求：确认令牌有效、能读到本仓库的发布信息（不改配置）"] = "Sends a real request to GitHub to confirm the token works and can read this repository's releases (does not change your settings)",
+			["按住触发键（默认 Enter，可改成任意键或鼠标侧键）达到设定时长后生效，光标下那扇窗口四周会亮起外框；松开触发键即退出。短按会原样放行，不影响正常打字。"] = "Hold the trigger key (Enter by default; any key or mouse side button works) for the configured time and the window under the cursor gets a frame; release the key to exit. A short press passes straight through, so typing is unaffected.",
+			["触发后：左键拖动窗口、右键缩放窗口、中键执行一次性动作。三个键都能自定义成移动 / 缩放 / 最大化 / 最小化 / 关闭 / 置底 / 置顶 / 居中。双击左键可最大化，双击右键按九宫格吸附。"] = "Once triggered: left drags the window, right resizes it, middle runs a one-shot action. Each button can be set to move / resize / maximize / minimize / close / send to back / always on top / center. Double-click left to maximize, double-click right to snap to a 3×3 zone.",
+			["外框外观"] = "Frame appearance",
+			["外框颜色、样式、粗细、圆角、不透明度都可以调，页面里就是实时预览，和真正拖窗口时用的是同一段绘制代码。窗口贴近屏幕边缘时外框几何保持不变。"] = "Color, style, thickness, radius and opacity are all adjustable, with a live preview on this page drawn by the same code as a real drag. Near screen edges the frame geometry stays unchanged.",
+			["全屏与最大化窗口"] = "Fullscreen and maximized windows",
+			["默认开启「触发时先把全屏 / 最大化窗口变回普通窗口」：这样拖动和缩放都从一个正常的窗口尺寸开始，不会出现全屏窗口拖完一片黑、或者缩放抓不到边的情况。"] = "\"Restore fullscreen / maximized windows before dragging\" is on by default: dragging and resizing then start from a normal window size, avoiding black fullscreen windows or edges you cannot grab.",
+			["晃窗最小化其它窗口"] = "Shake to minimize other windows",
+			["触发后选中窗口，左右来回晃一晃，其它窗口会全部最小化；再晃一次即可还原。判定要求「多次往复 + 净位移接近 0」，正常拖动窗口不会被误触发。"] = "While triggered, shake the window left and right to minimize all others; shake again to restore. Detection needs several back-and-forth moves with almost no net movement, so normal dragging never triggers it.",
+			["把窗口标题 / 程序名 / 窗口类名的关键字填进黑名单（逗号分隔），命中就完全不接管。不知道填什么可以用「选择程序」挑 exe，或用「点选窗口」直接在屏幕上点那扇窗。"] = "Put window title / process name / class name keywords into the ignore list (comma separated); a match means never take it over. Use \"Choose program\" to pick an exe, or \"Pick window\" to click the window on screen.",
+			["跟随屏幕"] = "Follow display",
+			["跟随屏幕：按实测刷新率节流（本机 "] = "Follow display: throttle to the measured refresh rate (this PC ",
+			["未知"] = "unknown",
+			["）。\r\n固定值：自定义频率，0 = 不限制。"] = ").\r\nFixed: a custom rate, 0 = unlimited.",
+			["计划任务（最高权限、登录时静默启动，推荐）"] = "Scheduled task (highest privileges, silent at sign-in — recommended)",
+			["注册表 Run 项（每次登录会弹一次 UAC）"] = "Run registry entry (a UAC prompt at every sign-in)",
+			["不开机启动"] = "Don't start with Windows",
+			["当前颜色："] = "Current color: ",
+			["已设自定义色 "] = "Custom color set: ",
+			["还没有设置自定义颜色"] = "No custom color set yet",
+			["样式（当前粗细 "] = "Style (current thickness ",
+			[" px・圆角 "] = "px · radius ",
+			["外观已改动，点「保存并生效」才会画到实际外框上。"] = "Appearance changed — click \"Save and apply\" to draw it on the real frame.",
+			["颜色与样式即点即换，预览与外框同一段代码。"] = "Color and style apply on click; the preview and the real frame share the same code.",
+			["当前权限：管理员（可拖动任务管理器这类提权窗口）"] = "Rights: administrator (elevated windows such as Task Manager can be dragged)",
+			["当前权限：普通用户（日常窗口没问题，提权窗口拖不动）"] = "Rights: standard user (everyday windows are fine; elevated ones cannot be dragged)",
+			[" + 左键拖动"] = " + left-drag",
+			["请按下要用的按键…"] = "Press the key you want to use…",
+			["正在录制：按任意键或鼠标侧键，Esc 取消。"] = "Recording: press any key or a mouse side button; Esc cancels.",
+			["已取消录制。"] = "Recording cancelled.",
+			["注意：这是切换型按键，本程序会压制它，因此它不会再切换大小写/数字锁定。"] = "Note: this is a toggle key and HoldDrag suppresses it, so it will no longer toggle Caps Lock / Num Lock.",
+			["注意：Win 键被作为触发键期间，Win 组合键（Win+E、Win+D 等）无法使用。"] = "Note: while the Win key is the trigger, Win shortcuts (Win+E, Win+D, …) do not work.",
+			["已绑定："] = "Bound: ",
+			["修饰键（Ctrl / Shift / Alt / Win）不能单独作为触发键，请再按一个主键。"] = "Modifier keys (Ctrl / Shift / Alt / Win) cannot be the trigger on their own — press a main key as well.",
+			["（本次修改没有写入磁盘，重启后会丢失；请检查配置目录权限或磁盘空间）"] = " (this change was not written to disk and will be lost on restart; check the config folder's permissions or free space)",
+			["已保存并立即生效"] = "Saved and applied",
+			["配置已保存，但开机自启设置失败"] = "Settings saved, but configuring startup failed",
+			["开机自启设置失败"] = "Startup configuration failed",
+			["已保存。\r\n\r\n管理员权限只在【启动的时候】申请，所以要重启程序才会生效。\r\n现在以管理员身份重启吗？（选\"否\"就等下次启动再提权）"] = "Saved.\r\n\r\nAdministrator rights are only requested at launch, so a restart is needed to apply them.\r\nRestart as administrator now? (Choose \"No\" to elevate on the next launch instead)",
+			["长按拖窗 · 权限变更"] = "HoldDrag · Permission changed",
+			["语言没能写入配置："] = "Could not save the language: ",
+			["选择要排除的程序（它的窗口将不再被接管）"] = "Choose the program to exclude (its windows will no longer be taken over)",
+			["可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*"] = "Executables (*.exe)|*.exe|All files (*.*)|*.*",
+			["没从文件名里取到关键字"] = "Could not derive a keyword from the file name",
+			["打开文件对话框失败："] = "Could not open the file dialog: ",
+			["打开取色器失败："] = "Could not open the color picker: ",
+			["已取消窗口点选"] = "Window pick cancelled",
+			["请点击要排除的窗口（按 Esc 取消）"] = "Click the window to exclude (Esc cancels)",
+			["窗口点选失败："] = "Window pick failed: ",
+			["没找到窗口，请对着目标窗口的标题栏再点一次"] = "No window found — click the target window's title bar again",
+			["这扇窗口取不到可用的标识，请改用「选择程序…」"] = "This window has no usable identifier; use \"Choose program…\" instead",
+			["已排除："] = "Excluded: ",
+			["点选失败："] = "Pick failed: ",
+			["已载入默认值，点「保存并生效」后写入"] = "Defaults loaded; click \"Save and apply\" to write them",
+			["打不开浏览器，链接已复制到剪贴板："] = "Could not open the browser — the link was copied to the clipboard: ",
+			["先填令牌再验证"] = "Enter a token before verifying",
+			["正在向 GitHub 验证…"] = "Verifying with GitHub…",
+			["（还没保存：点「保存令牌」才会生效）"] = " (not saved yet — click \"Save token\" to apply)",
+			["保存令牌失败："] = "Could not save the token: ",
+			["令牌已改动，请重新验证"] = "Token changed — verify again",
+			["已清空，点「保存令牌」生效"] = "Cleared; click \"Save token\" to apply",
+			["已生效："] = "Active: ",
+			["待保存："] = "Pending save: ",
+			["（5000 次/小时）"] = " (5,000/hour)",
+			["正在检查，请稍候…"] = "Checking, please wait…",
+			["正在检查更新…"] = "Checking for updates…",
+			["当前已是最新版本 v"] = "You're on the latest version v",
+			["检查更新失败：\r\n\r\n"] = "Update check failed:\r\n\r\n",
+			["\r\n\r\n你也可以手动打开发布页查看：\r\n"] = "\r\n\r\nYou can also open the release page manually:\r\n",
+			["还没有填写 GitHub 个人访问令牌，所以这次只是在程序里提示，不会下载到本机。\r\n点下面的链接用浏览器下载；想以后自动下载并替换，就到「关于 → GitHub 访问令牌」填好令牌再点「检查更新」。"] = "No GitHub personal access token is set, so this is only a notice — nothing is downloaded to this PC.\r\nUse the link below to download in your browser. To download and replace automatically next time, add a token under \"About → GitHub access token\" and click \"Check for updates\" again.",
+			["发现新版本"] = "Update available",
+			["下载地址（点击或按回车打开）"] = "Download URL (click or press Enter)",
+			["GitHub 下载地址"] = "GitHub download URL",
+			["在浏览器中打开该链接，下载新版本 "] = "Opens that link in your browser to download version ",
+			["发布页："] = "Release page: ",
+			["GitHub 发布页地址"] = "GitHub release page URL",
+			["复制链接"] = "Copy link",
+			["已复制"] = "Copied",
+			["用浏览器打开"] = "Open in browser",
+			["关闭"] = "Close",
+			["钩子安装失败"] = "Hook installation failed",
+			["无法安装全局键鼠钩子（错误码 "] = "Could not install the global keyboard and mouse hook (error code ",
+			["），程序将无法工作。常见原因是被杀软/安全软件拦截，请把本程序加入信任列表后重启。"] = "), so HoldDrag cannot work. This is usually caused by antivirus or security software — add HoldDrag to its trusted list and restart.",
+			["长按拖窗已启动"] = "HoldDrag is running",
+			[" 毫秒后：左键拖动移动窗口、右键拖动调整大小、中键最大化/还原。双击托盘图标可打开设置。"] = " ms: left-drag moves the window, right-drag resizes it, middle-click maximizes/restores. Double-click the tray icon to open settings.",
+			["长按拖窗：发现新版本 "] = "HoldDrag: new version ",
+			["。双击托盘图标打开设置，点「检查更新」即可下载并自动替换。"] = ". Double-click the tray icon and click \"Check for updates\" to download and replace it.",
+			["。点这个气泡用浏览器打开下载页（未填令牌，不会自动下载）。"] = ". Click this balloon to open the download page in your browser (no token set, so nothing downloads automatically).",
+			["钩子状态：—"] = "Hook status: —",
+			["恢复使用"] = "Resume",
+			["暂停使用"] = "Pause",
+			["长按拖窗（已暂停）"] = "HoldDrag (paused)",
+			["长按拖窗："] = "HoldDrag: ",
+			["已暂停使用"] = "Paused",
+			["已恢复使用"] = "Resumed",
+			["拖拽功能已停止，触发键恢复成它本来的用法。右键托盘图标点「恢复使用」即可重新开启。"] = "Dragging is off and the trigger key behaves normally again. Right-click the tray icon and choose \"Resume\" to turn it back on.",
+			[" 后可以再用鼠标拖窗口了。"] = "; you can drag windows again.",
+			["开机自启切换失败"] = "Could not toggle startup",
+			["配置没能写入磁盘："] = "The config could not be written to disk: ",
+			["（本次切换没有生效，重启后会恢复原样；请检查配置目录权限或磁盘空间）"] = " (the change did not take effect and will revert on restart; check the config folder's permissions or free space)",
+			["无命中"] = "no hit",
+			[" 句柄="] = " hwnd=",
+			[" 根="] = " root=",
+			["查询失败"] = "lookup failed",
+			["三种策略全部失败"] = "all three strategies failed",
+			[" [命中方式="] = " [hit method=",
+			[" 虚拟桌面="] = " virtual desktop=",
+			[" 该点在桌面内="] = " point inside desktop=",
+			[" ←★坐标空间不一致，疑似 DPI 虚拟化"] = " ←★coordinate space mismatch — likely DPI virtualization",
+			["三种命中策略全部返回空（桌面/无窗口区域）"] = "all three hit tests returned nothing (desktop / no window area)",
+			["取不到根窗口"] = "no root window",
+			["命中的全是本进程窗口（浮层/设置窗口），往下找不到别人的窗口"] = "only our own windows were hit (overlays / settings); no other window underneath",
+			["窗口已销毁 类名="] = "window destroyed, class=",
+			["窗口不可见（隐藏）类名="] = "window not visible (hidden), class=",
+			["类名被排除（桌面/任务栏等）类名="] = "class excluded (desktop / taskbar etc.), class=",
+			["窗口没有 WS_VISIBLE 类名="] = "window lacks WS_VISIBLE, class=",
+			["窗口已最小化 类名="] = "window minimized, class=",
+			["命中黑名单（不生效的窗口）标题="] = "matched the ignore list (window not handled), title=",
+			["取不到窗口矩形 类名="] = "could not get the window rectangle, class=",
+			["窗口尺寸为 0（"] = "window size is 0 (",
+			["）类名="] = "), class=",
+			["窗口占满整个显示器（真全屏）—— 可在设置里勾选【允许全屏窗口】"] = "window fills the whole monitor (true fullscreen) — you can tick \"Allow fullscreen windows\" in settings",
+			["未知原因（判定逻辑可能有遗漏）类名="] = "unknown reason (a gap in the decision logic is possible), class=",
+			["诊断本身出错: "] = "the diagnostic itself failed: ",
+			["(无标题)"] = "(untitled)",
+			["(取标题失败)"] = "(could not read the title)",
+			["设置…"] = "Settings…",
+			["打开配置文件夹"] = "Open config folder",
+			["查看日志"] = "View log",
+			["检查更新…"] = "Check for updates…",
+			["项目主页（GitHub）"] = "Project home (GitHub)",
+			["退出"] = "Exit",
+			["已跳过 "] = "Skipped ",
+			["；需要时再点「检查更新」即可"] = "; click \"Check for updates\" whenever you like",
+			["正在下载 "] = "Downloading ",
+			["已取消下载，仍是 v"] = "Download cancelled — still v",
+			["下载失败"] = "Download failed",
+			["更新已就绪，程序即将退出并自动替换"] = "Update ready — the app will exit and be replaced",
+			["下载窗口已关闭"] = "The download window was closed",
+			["当前版本：v"] = "Current version: v",
+			["最新版本："] = "Latest version: ",
+			["现在下载并更新吗？下载完成后会自动替换并重启程序。"] = "Download and install now? The app replaces itself and restarts when the download finishes.",
+			["也可以在浏览器里手动下载："] = "You can also download it in your browser: ",
+			["立即下载"] = "Download now",
+			["稍后"] = "Later",
+			["打开发布页"] = "Open release page",
+			["正在下载更新"] = "Downloading update",
+			["准备下载…"] = "Preparing download…",
+			["取消下载"] = "Cancel download",
+			["正在取消…"] = "Cancelling…",
+			["正在下载…"] = "Downloading…",
+			["正在下载…已接收 "] = "Downloading… received ",
+			["已取消下载，程序保持当前版本。"] = "Download cancelled — you are still on the current version.",
+			["下载已取消"] = "Download cancelled",
+			["下载失败："] = "Download failed: ",
+			["可手动到发布页下载："] = "You can also download it from the release page: ",
+			["更新失败"] = "Update failed",
+			["下载完成，正在替换并重启…"] = "Download complete — replacing and restarting…",
+			["新版本已就位，程序将退出后自动启动新版本。"] = "The new version is in place; the app will exit and start the new version.",
+			["更新已下载完成。"] = "The update has been downloaded.",
+			["点击「确定」后程序将退出，自动替换为新版本并重新启动。"] = "Click OK to exit, replace the files and restart with the new version.",
+			["更新就绪"] = "Ready to update",
+			["已生效（接口限额 5000 次/小时）"] = "Active (API limit 5,000/hour)",
+			["待保存：点「保存令牌」后生效"] = "Not saved yet — click \"Save token\" to apply",
+			["替换失败"] = "Replacement failed",
+			["已下载新版本，但自动替换失败："] = "The new version was downloaded, but the automatic replacement failed: ",
+			["新版本已保存在："] = "The new version was saved to: ",
+			["可手动改名覆盖，或到发布页重新下载："] = "Rename it over the old file manually, or download it again from the release page: ",
+			// ---------------- v1.10.0 新增 ----------------
+			["钩子状态：正常（已检查 {0} 次）"] = "Hook status: OK ({0} checks)",
+			["钩子状态：已自动恢复 {0} 次（检查 {1} 次）"] = "Hook status: recovered automatically {0} times ({1} checks)",
+			["开机启动（注册表）"] = "Start with Windows (registry)",
+			["开机启动（计划任务）"] = "Start with Windows (scheduled task)",
+			["没有可保存的配置。"] = "There is no configuration to save.",
+			["命令超时（8 秒）："] = "Command timed out (8 s): ",
+			["无法启动 "] = "Could not start ",
+			["计划任务没能删掉（多半是它以管理员权限创建，而现在程序不是管理员）。请右键以管理员身份运行后重试。"] = "The scheduled task could not be removed — it was probably created with administrator rights. Run HoldDrag as administrator and try again.",
+			["注册表自启项没能删掉，可能被安全软件拦截。"] = "The registry startup entry could not be removed; security software may be blocking it.",
+			["文件不存在："] = "The file does not exist: ",
+			["文件太小，不像一个完整的程序："] = "The file is too small to be a complete program: ",
+			[" 字节"] = " bytes",
+			["字节。"] = " bytes.",
+			["下载到的内容不是 Windows 程序（文件头不是 MZ），可能被网络中途替换成了网页。"] = "The download is not a Windows program (no MZ header) — a proxy or captive portal probably replaced it with a web page.",
+			["下载到的程序文件头损坏（PE 偏移越界）。"] = "The downloaded program has a damaged header (PE offset out of range).",
+			["下载到的程序文件头损坏（缺少 PE 签名）。"] = "The downloaded program has a damaged header (missing PE signature).",
+			["校验下载文件时出错："] = "Could not validate the downloaded file: ",
+			["下载不完整：期望 "] = "Incomplete download: expected ",
+			[" 字节，实际 "] = " bytes, received ",
+			["新版本已替换，但没能自动启动，已恢复为原来的版本。请到发布页手动下载："] = "The new version was copied in but could not start, so the previous version was restored. Please download it manually from the release page: ",
+			["正在下载… {0}%（{1:F1} / {2:F1} MB）"] = "Downloading… {0}% ({1:F1} / {2:F1} MB)",
+			["正在下载… 已接收 {0:F1} MB"] = "Downloading… {0:F1} MB received",
+			["更新已就绪，点击「确定」后立即替换并重启。"] = "The update is ready. Click OK to replace the files and restart now.",
+			["无法缩放这个窗口（它没有可调整的边框），已保持不变。"] = "This window cannot be resized (it has no resizable border); nothing was changed.",
+			["触发模式"] = "Trigger mode",
+			["长按"] = "Hold",
+			["点按切换"] = "Click toggle",
+			["长按：按住才接管、松手即退出；点按：点一下抓住、再点一下放下（此时触发键不再输入字符）"] = "Hold: the window follows while you hold the key and is released when you let go. Click toggle: click once to grab, click again to release (the trigger key no longer types).",
+			["窗口居中"] = "Center window",
+			["移到下一块显示器"] = "Move to next monitor",
+			["切换置顶"] = "Toggle always on top",
+			["欢迎使用长按拖窗"] = "Welcome to HoldDrag",
+			["上一步"] = "Back",
+			["下一步"] = "Next",
+			["跳过"] = "Skip",
+			["第 "] = "Step ",
+			[" / 3 步"] = " of 3",
+			["开始使用"] = "Get started",
+			["长按一个键，就能拖动任何窗口"] = "Hold one key to drag any window",
+			["按住触发键不要松手 —— 光标下的窗口会出现一圈提示框； 这时按住左键拖动 = 移动窗口，按住右键拖动 = 缩放窗口。"] = "Hold the trigger key. A frame appears around the window under the cursor. With it held: left-drag moves the window, right-drag resizes it.",
+			["松开触发键就退出，鼠标行为立刻恢复正常。"] = "Release the key to leave drag mode; the mouse behaves normally again.",
+			["选一个顺手的触发键"] = "Pick a trigger key",
+			["默认是 Enter 回车。选一个你平时不会用来打字的键最合适。"] = "Enter is the default. A key you never type with works best.",
+			["可以开始了"] = "You are ready",
+			["按住触发键 → 拖动窗口试试。"] = "Hold the trigger key and try dragging a window.",
+			["想改颜色 / 外框样式 / 灵敏度，右键托盘图标 →「设置…」。 出问题时可以在这里一键导出诊断包。"] = "To change colours, frame style or responsiveness: right-click the tray icon → Settings. If something goes wrong, export a diagnostics bundle there.",
+			["开机自动启动"] = "Start with Windows",
+			["辅助"] = "Assistance",
+			["尺寸提示、贴边吸附、键盘布局与撤销"] = "Size HUD, edge snapping, keyboard tiling and undo",
+			["拖动时显示尺寸提示"] = "Show a size HUD while dragging",
+			["在光标旁浮一个小标签，实时显示窗口宽高"] = "A small pill next to the cursor shows the window size",
+			["尺寸提示里带上坐标"] = "Also show the window position",
+			["同时显示窗口左上角的屏幕坐标"] = "Show the top-left screen coordinates too",
+			["拖到屏幕边缘时自动吸附"] = "Snap to screen edges",
+			["离屏幕/工作区边缘很近时自动贴齐；拖动时按住 Shift 可以临时不吸附"] = "Snaps flush to the monitor work area; hold Shift while dragging to skip snapping",
+			["吸附距离"] = "Snap distance",
+			["离边缘多近才吸附；0 = 关闭"] = "How close counts as snapping; 0 disables it",
+			["键盘分屏"] = "Keyboard tiling",
+			["按住触发键后：← 左半屏、→ 右半屏、↑ 最大化、↓ 还原、1-9 九宫格、0 居中"] = "While the trigger key is held: ← left half, → right half, ↑ maximise, ↓ restore, 1-9 grid, 0 centre",
+			["允许 Ctrl+Z 撤销"] = "Allow Ctrl+Z to undo",
+			["拖完 5 秒内按 Ctrl+Z 可以还原窗口原来的位置和大小"] = "Within 5 seconds after a drag, Ctrl+Z restores the previous position and size",
+			["诊断"] = "Diagnostics",
+			["遇到问题先导出诊断包：配置 + 最近日志 + 系统信息"] = "Export a diagnostics bundle first: config, recent logs and system info",
+			["导出诊断包"] = "Export diagnostics bundle",
+			["打成一个 zip，方便发给开发者"] = "Pack everything into one zip to send to the developer",
+			["导出诊断包…"] = "Export diagnostics bundle…",
+			["压缩包"] = "Zip archive",
+			["诊断包已导出："] = "Diagnostics bundle exported: ",
+			["导出失败："] = "Export failed: ",
+			["按程序规则"] = "Per-app rules",
+			["对某个程序单独放行或限制，比黑名单细一档"] = "Allow or restrict individual programs — finer than the blacklist",
+			["添加规则"] = "Add rule",
+			["规则类型"] = "Rule type",
+			["规则列表"] = "Rule list",
+			["点选窗口添加"] = "Pick a window",
+			["先选规则类型，再点右边的按钮，然后把鼠标移到目标窗口上"] = "Pick a rule type, click the button, then move the pointer over the target window",
+			["格式：程序名=类型，分号分隔。例：wps.exe=Ignore; code.exe=MoveOnly"] = "Format: exe=type, separated by semicolons. e.g. wps.exe=Ignore; code.exe=MoveOnly",
+			["完全不接管"] = "Never take over",
+			["只允许移动"] = "Move only",
+			["只允许缩放"] = "Resize only",
+			["接管但不画外框"] = "Take over but draw no frame",
+			["工作区布局"] = "Workspace layouts",
+			["把当前所有窗口的位置存下来，之后一键恢复"] = "Save where every window is, restore it later",
+			["已保存的布局"] = "Saved layouts",
+			["按 程序名 + 标题 匹配窗口，找不到的自动跳过"] = "Matches windows by exe + title; anything missing is skipped",
+			["保存 / 删除"] = "Save / delete",
+			["保存会记录当前所有可见窗口的位置和大小"] = "Saving records the position and size of every visible window",
+			["恢复"] = "Restore",
+			["恢复选中布局"] = "Restore selected",
+			["保存当前…"] = "Save current…",
+			["把窗口搬回保存时的位置；已经关掉的窗口会被忽略"] = "Moves windows back; closed ones are ignored",
+			["保存当前布局…"] = "Save current layout…",
+			["保存布局"] = "Save layout",
+			["布局 "] = "Layout ",
+			[" 个窗口"] = " windows",
+			["已保存布局："] = "Layout saved: ",
+			["保存布局失败："] = "Failed to save layout: ",
+			["还没有保存过布局"] = "No layouts saved yet",
+			["找不到这个布局"] = "Layout not found",
+			["已恢复布局："] = "Layout restored: ",
+			["已删除布局："] = "Layout deleted: ",
+			["没有找到窗口：把鼠标移到目标窗口上再点"] = "No window found: move the pointer over the target window first",
+			["读不到这个窗口的程序名（权限更高？）"] = "Could not read the program name (higher privileges?)",
+			["已添加："] = "Added: ",
+			["确定"] = "OK",
+			["搜索设置…"] = "Search settings…",
+			["没有找到："] = "No match: ",
+			["「"] = "“",
+			["」 "] = "” ",
+			["："] = ": ",
+			["窗口规则"] = "Window rules",
+			["哪些窗口不接管、每个程序怎么对待、布局怎么存"] = "Which windows to skip, how each app is treated, and where layouts live",
+			["尺寸提示与贴边吸附"] = "Size HUD and edge snapping",
+			["拖动时窗口角上浮一个小胶囊，实时显示宽高（可在「拖动行为 → 辅助」里关掉或加上坐标）。拖到屏幕或任务栏边缘附近会自动贴齐；吸附距离可调，0 表示关闭。"] = "While dragging, a small pill shows the window size (toggle it, or add coordinates, under Drag behaviour → Assistance). Dragging near a screen or taskbar edge snaps flush; the snap distance is adjustable, 0 disables it.",
+			["键盘分屏与撤销"] = "Keyboard tiling and undo",
+			["按住触发键不放时，方向键可以直接布局光标下的窗口：左半屏、右半屏、最大化、还原、1-9 九宫格、0 保持大小居中。拖完窗口 5 秒内按 Ctrl+Z 可以把窗口还原到拖动前的位置和大小（只能用一次；在文本框里打字时不会抢你的 Ctrl+Z）。"] = "While the trigger key is held, the arrow keys lay out the window under the cursor: left half, right half, maximise, restore, 1-9 grid, 0 centred. Within 5 seconds of a drag, Ctrl+Z restores the previous position and size (once only; it never steals Ctrl+Z while you are typing in a text field).",
+			["按程序规则"] = "Per-app rules",
+			["在「窗口规则」页可以给单个程序指定行为：完全不接管 / 只允许移动 / 只允许缩放 / 接管但不画外框。选好类型后点「点选窗口添加」，再点屏幕上那扇窗即可。它比黑名单细一档：黑名单是整扇窗都不接管，规则还能只禁用其中一种操作。"] = "On the Window rules page you can give a single program its own behaviour: never take over / move only / resize only / take over without a frame. Pick a type, click Pick a window, then click that window on screen. It is finer than the blacklist: the blacklist skips the window entirely, a rule can disable just one operation.",
+			["工作区布局"] = "Workspace layouts",
+			["「窗口规则 → 工作区布局」可以把当前所有可见窗口的位置和大小存成一个命名快照，之后一键恢复（按「程序名 + 标题」匹配，已经关掉的窗口会自动跳过）。托盘菜单里也有同样的入口。"] = "Window rules → Workspace layouts saves the position and size of every visible window as a named snapshot and restores it later (matched by exe + title; windows that were closed are skipped). The tray menu has the same entry.",
+			["命令行与脚本接口"] = "Command line and scripting",
+			["运行中的实例会监听命名管道，可以用一条命令控制它：带 status 参数查看状态；center / next-monitor / topmost / pause on|off / move x y w h / layout-save 名称 / layout-restore 名称 都是可用命令，用 help 参数可以列出全部。成功返回 OK 且退出码为 0，失败返回 ERR 且退出码为 1。"] = "The running instance listens on a named pipe, so a single command can drive it: status reports the state; center / next-monitor / topmost / pause on|off / move x y w h / layout-save NAME / layout-restore NAME are available, and help lists them all. Success returns OK with exit code 0, failure returns ERR with exit code 1.",
+			["诊断包与便携模式"] = "Diagnostics bundle and portable mode",
+			["「帮助 → 诊断」可以一键导出诊断包：配置文件 + 最近三个日志 + 系统信息（版本、系统、DPI、显示器、权限），遇到问题把它发给开发者即可。把 portable.txt 放在 exe 旁边则进入便携模式，配置、日志和布局都写在该目录的 data 文件夹里，不再写入 AppData。"] = "Help → Diagnostics exports a bundle: the config, the last three logs and system info (version, OS, DPI, monitors, privileges). Put portable.txt next to the exe to enable portable mode; config, logs and layouts then live in a data folder beside the exe instead of AppData.",
+			["双击手势、全屏窗口，以及尺寸提示 / 吸附 / 分屏 / 撤销"] = "Double-click gestures, full-screen windows, and the size HUD / snapping / tiling / undo",
+		};
+	}
+}

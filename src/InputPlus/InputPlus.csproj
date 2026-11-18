@@ -25,9 +25,9 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -37,7 +37,7 @@
     <!-- 文件属性里显示的"说明"来自 AssemblyTitle；不给的话会用程序集名 InputPlus（少个空格）。 -->
     <AssemblyTitle>Input Plus</AssemblyTitle>
     <Company>QQQOrange</Company>
-    <Description>Input Plus：键盘增强与鼠标手势工具。任意键绑定功能、光标移动与选择、快速搜索面板、窗口绑定、直达链接（网址/文件夹/文件）、独立剪贴板、宏与多图层、鼠标手势、平滑滚动</Description>
+    <Description>Input Plus：键盘增强与鼠标手势工具。任意键绑定功能、光标移动与选择、快速搜索面板、窗口绑定、直达链接（网址/文件夹/文件）、独立剪贴板、宏与多图层、鼠标手势、平滑滚动、按住拖拽</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -56,6 +56,12 @@
          改成 WinForms 的 API 反而会让 WPF 那条路失去 Per-Monitor 支持。
          这里只关掉这条针对性建议，其它分析器规则照旧。 -->
     <NoWarn>$(NoWarn);WFO0003;WFAC010</NoWarn>
+
+    <!-- net7.0-windows 是**故意**留的 Win7 专用线（见上面多目标那段注释），
+         SDK 每次都会对它报 NETSDK1138「将来不会收到安全更新」。
+         这条警告是已知且有意接受的：Win7 线不发版给普通用户，只给老机器出应急包。
+         关掉提示，别让 2 条噪音盖住真正的警告。 -->
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
 
     <!-- 性能与体积：ReadyToRun 把 IL 预编译成原生代码，理论上省 JIT；
          但**实测在这台机器上没有收益**（本程序 5 轮交替测量：

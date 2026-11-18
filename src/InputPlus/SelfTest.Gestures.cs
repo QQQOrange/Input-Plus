@@ -442,7 +442,7 @@ public static partial class SelfTest
          * 这里扫的是**会被带出去**的字段：参数、限定程序、名字。
          * 一旦有人把带本机用户名的路径加回库里，自检就红。 */
         var pii = new System.Text.RegularExpressions.Regex(
-            @"64381|C:\\Users|D:\\software|WindowsGet|AppData\\Local\\Programs",
+            @"/Users/[^/\\\s]+|\\Users\\|D:\\software|WindowsGet|AppData\\Local\\Programs",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         var dirty = lib.Where(g => pii.IsMatch((g.Arg ?? "") + "|" + (g.AppPath ?? "") + "|" + g.Name))
             .Select(g => g.Name).ToList();

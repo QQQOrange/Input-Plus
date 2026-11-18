@@ -338,6 +338,7 @@ public sealed partial class AppHost
         /* 平滑滚动的设置是"每次滚轮现读"的，唯一需要收拾的是关掉开关这一下：
          * 手上这段还没滚完的余量得补完，否则会停在半路。 */
         Scroll.ApplySettings();
+        try { HoldDrag.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "重新加载按住拖拽设置"); }
         Context.Mouse.Step = Settings.Global.MouseMoveStep;
         Engine.Suspended = false;
         if (_hookHostReady)

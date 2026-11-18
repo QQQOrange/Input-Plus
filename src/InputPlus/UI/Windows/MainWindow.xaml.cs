@@ -169,7 +169,7 @@ public partial class MainWindow : Window
     internal static readonly string[] NavOrderForTest =
     {
         "guide", "keys", "hotstrings", "qbar", "clipboard", "macros",
-        "layers", "gestures", "scroll", "backup", "settings", "test", "help", "about",
+        "layers", "gestures", "scroll", "holddrag", "backup", "settings", "test", "help", "about",
     };
 
     /// <summary>页面名 → 侧栏下标；未知页面退回第一项（和原来 switch 的 _ => 0 一致）。</summary>
@@ -247,6 +247,7 @@ public partial class MainWindow : Window
             "layers" => new LayersView(),
             "gestures" => new GesturesView(),
             "scroll" => new ScrollView(),
+            "holddrag" => new HoldDragView(),
             "backup" => new BackupView(),
             "settings" => new SettingsView(),
             "test" => new KeyTestView(),
@@ -266,6 +267,7 @@ public partial class MainWindow : Window
             case LayersView lv: lv.Initialize(_host); break;
             case GesturesView gv: gv.Initialize(_host); break;
             case ScrollView sv: sv.Initialize(_host); break;
+            case HoldDragView hd: hd.Initialize(_host); break;
             case BackupView bv: bv.Initialize(_host); break;
             case SettingsView s: s.Initialize(_host); break;
             case KeyTestView kt: kt.Initialize(_host); break;
@@ -299,6 +301,7 @@ public partial class MainWindow : Window
             "layers" => (Loc.T("触发键与层"), Loc.T("多触发键 · 10 层")),
             "gestures" => (Loc.T("鼠标手势"), Loc.T("画一笔 · 执行一个动作")),
             "scroll" => (Loc.T("平滑滚动"), Loc.T("滚轮 · 缓动曲线")),
+            "holddrag" => (Loc.T("按住拖拽"), Loc.T("长按触发键 · 拖动窗口")),
             "backup" => (Loc.T("同步与备份"), Loc.T("WebDAV · 导入导出")),
             "settings" => (Loc.T("设置"), Loc.T("全局选项")),
             "test" => (Loc.T("测试"), Loc.T("按键 · 切层 · 诊断")),
@@ -319,6 +322,7 @@ public partial class MainWindow : Window
             case LayersView lvw: lvw.Reload(); break;
             case GesturesView gvw: gvw.Refresh(); break;
             case ScrollView svw: svw.Refresh(); break;
+            case HoldDragView hdw: hdw.Refresh(); break;
             case BackupView bvw: bvw.Refresh(); break;
             case HelpView h: h.Refresh(); break;
             case AboutView a: a.Refresh(); break;

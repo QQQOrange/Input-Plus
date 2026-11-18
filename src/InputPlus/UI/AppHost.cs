@@ -45,6 +45,9 @@ public sealed partial class AppHost : IDisposable
 
     /// <summary>平滑滚动：接管滚轮、按缓动曲线分帧注入小 delta。</summary>
     public Core.Scroll.SmoothScrollService Scroll { get; }
+
+    /// <summary>按住拖拽：长按触发键拖动 / 调整窗口（引擎来自 HoldDrag）。</summary>
+    public Core.HoldDrag.HoldDragService HoldDrag { get; }
     public bool Enabled => Engine.Enabled;
     public bool HookAlive => Engine.IsHookAlive;
 
@@ -137,6 +140,19 @@ public sealed partial class AppHost : IDisposable
         {
             try { Scroll.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "应用平滑滚动设置"); }
         };
+
+        /* 按住拖拽：独立的一套键盘/鼠标钩子（引擎是 HoldDrag 原样搬过来的），
+         * 开关在「按住拖拽」页。配置存在设置里，所以它也随备份/同步/导入导出走。
+         * 设成关的时候这里什么都不做 —— 出厂是关的：它的触发键默认是长按 Enter，
+         * 默认就接管会让人以为键盘坏了。 */
+        HoldDrag = new Core.HoldDrag.HoldDragService(
+            () => Settings,
+            settings => { try { SettingsStore.RequestSave(settings); } catch { } });
+        SettingsChanged += () =>
+        {
+            try { HoldDrag.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "应用按住拖拽设置"); }
+        };
+        try { HoldDrag.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "启动按住拖拽"); }
 
         /* 宏播放是异步的：`PlayMacro` 早就返回了，失败只能事后弹。
          * 复用动作失败那条出口（同一个 Toast、同一个 ✗ 前缀），

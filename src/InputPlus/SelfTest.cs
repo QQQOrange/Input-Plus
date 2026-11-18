@@ -80,6 +80,9 @@ public static partial class SelfTest
         Section("平滑滚动");
         TestSmoothScroll();
 
+        Section("按住拖拽");
+        TestHoldDrag();
+
         Section("搜索引擎");
         TestSearchEngines();
         TestEngineMigration();

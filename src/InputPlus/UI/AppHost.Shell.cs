@@ -89,6 +89,7 @@ public sealed partial class AppHost
         _watchdog.Dispose();
         _clipboard.Dispose();
         try { Scroll.Dispose(); } catch { }
+        try { HoldDrag.Dispose(); } catch { }
         try { Gestures.Dispose(); } catch { }
         Engine.Dispose();
         _tray?.Dispose();
