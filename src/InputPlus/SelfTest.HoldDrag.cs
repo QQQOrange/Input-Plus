@@ -159,5 +159,153 @@ public static partial class SelfTest
         Check("按住拖拽：拖动线程没有帧间隔节流",
             typeof(DragWorker).GetProperty("FrameIntervalMs") is null
             && typeof(AppConfig).GetMethod("FrameIntervalMs") is null);
+
+        // ---- 拖动跟手：「手停了窗口还在跑」的病根 ----
+        TestHoldDragTailMath();
+        TestHoldDragLiveCursor();
+    }
+
+    // ---------------- 收尾对账的算术 ----------------
+    // 松手时最后那一帧写下去之后要跟窗口的真实矩形对一次，对不上就补写。
+    // 这段全是整数减法，单独钉住，免得哪天"顺手优化"把符号或宽高算反。
+    private static void TestHoldDragTailMath()
+    {
+        var want = new Native.RECT(100, 100, 400, 300);
+
+        Check("收尾对账：严丝合缝不算偏",
+            !DragEngine.TailMismatch(want, new Native.RECT(100, 100, 400, 300), out _, out _, out _, out _));
+
+        bool off = DragEngine.TailMismatch(want, new Native.RECT(103, 96, 403, 296), out int dx, out int dy, out int dw, out int dh);
+        Check("收尾对账：偏 3,-4 能带符号算出来",
+            off && dx == 3 && dy == -4 && dw == 0 && dh == 0, dx + "," + dy + "," + dw + "," + dh);
+
+        bool sized = DragEngine.TailMismatch(want, new Native.RECT(100, 100, 420, 280), out _, out _, out int dw2, out int dh2);
+        Check("收尾对账：目标自己改了尺寸也算偏",
+            sized && dw2 == 20 && dh2 == -20, dw2 + "," + dh2);
+    }
+
+    // ---------------- 拖动只认「此刻的光标」 ----------------
+    // 用户的原话是"我手停了、鼠标都不动了，窗口还会跑一段时间，最后跑到不是我要的位置"。
+    // 病根：钩子 → 工作线程 → 目标程序这条链会排队，事件里带的坐标是"过去的坐标"，
+    // 把它写下去，窗口就是在追历史。AltDrag 的做法是每个事件到了现取 GetCursorPos。
+    //
+    // 这里用**真窗口 + 假光标**把这条规则钉死：事件里的坐标再怎么离谱，窗口也只认光标。
+    // 假光标省得为了跑一次自检去挪用户的鼠标；真窗口则保证走的是真正的 SetWindowPos 链路。
+    private static void TestHoldDragLiveCursor()
+    {
+        nint hwnd = IntPtr.Zero;
+        uint tid = 0u;
+        var ready = new System.Threading.ManualResetEventSlim(initialState: false);
+        var pump = new System.Threading.Thread(() =>
+        {
+            // 窗口必须建在一台会转消息的线程上：工作线程 SetWindowPos 时要跨线程发消息，
+            // 那边不抽消息就会把写窗口的那一帧卡死（测试反而会超时）。
+            hwnd = Native.CreateWindowExW(0u, "STATIC", "inputplus-drag-selftest", 0u, 100, 100, 300, 200, IntPtr.Zero, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
+            tid = Native.GetCurrentThreadId();
+            ready.Set();
+            Native.MSG msg;
+            while (Native.GetMessageW(out msg, IntPtr.Zero, 0u, 0u) > 0)
+            {
+                Native.DispatchMessageW(ref msg);
+            }
+        });
+        pump.IsBackground = true;
+        pump.Start();
+        ready.Wait(3000);
+
+        Func<Native.POINT?> previous = DragEngine.CursorProbeForTest;
+        DragEngine? engine = null;
+        try
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                Check("按住拖拽跟手：自检窗口建不出来（跳过拖动行为断言）", true, "CreateWindowEx 返回 0");
+                return;
+            }
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
+
+            var cfg = ConfigStore.Parse("");
+            cfg.SnapToEdges = false;
+            cfg.ShowDragHud = false;
+            cfg.ShowActivationFrame = false;
+            cfg.BringToFront = false;
+            cfg.ShakeMinimizeOthers = false;
+            cfg.DragThreshold = 0;
+            cfg.DragOutThresholdPx = 0;
+            cfg.MoveRate = 1;
+            DragDiag.Init(InputPlus.Core.AppPaths.DataDir);
+            engine = new DragEngine(() => cfg);
+
+            int fx = 1000;
+            int fy = 800;
+            DragEngine.CursorProbeForTest = () => new Native.POINT(fx, fy);
+            bool began = engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800));
+            Check("按住拖拽跟手：能开始拖动自检窗口", began);
+
+            // ① 事件里的坐标离光标 600px：旧实现会把窗口拽过去，现在它必须纹丝不动
+            for (int i = 0; i < 8; i++)
+            {
+                engine.DeliverCursor(new Native.POINT(1600, 1200));
+            }
+            System.Threading.Thread.Sleep(180);
+            Native.GetWindowRect(hwnd, out Native.RECT r1);
+            Check("按住拖拽跟手：事件里的过期坐标不会把窗口带跑",
+                Math.Abs(r1.Left - 100) <= 1 && Math.Abs(r1.Top - 100) <= 1, r1.Left + "," + r1.Top);
+
+            // ② 光标真的走了 40,50 → 窗口必须正好跟 40,50（哪怕事件里给的是 0,0）
+            fx = 1040;
+            fy = 850;
+            engine.DeliverCursor(new Native.POINT(0, 0));
+            System.Threading.Thread.Sleep(180);
+            Native.GetWindowRect(hwnd, out Native.RECT r2);
+            Check("按住拖拽跟手：光标走 40,50，窗口跟着走 40,50",
+                Math.Abs(r2.Left - 140) <= 1 && Math.Abs(r2.Top - 150) <= 1, r2.Left + "," + r2.Top);
+
+            // ③ 松手：收尾那一帧之后窗口必须还停在光标对应的位置
+            engine.End();
+            System.Threading.Thread.Sleep(300);
+            Native.GetWindowRect(hwnd, out Native.RECT r3);
+            Check("按住拖拽收尾：松手后停在光标对应的位置，不再自己往前跑",
+                Math.Abs(r3.Left - r2.Left) <= 1 && Math.Abs(r3.Top - r2.Top) <= 1, r3.Left + "," + r3.Top);
+
+            bool wrote = false;
+            string diagPath = DragDiag.Path;
+            try
+            {
+                wrote = diagPath.Length > 0 && System.IO.File.Exists(diagPath)
+                    && System.IO.File.ReadAllText(diagPath).Contains("收尾补写");
+            }
+            catch
+            {
+            }
+            Check("按住拖拽：拖动结束会往 drag-diag.txt 记一笔明文账", wrote, diagPath);
+        }
+        finally
+        {
+            DragEngine.CursorProbeForTest = previous;
+            try
+            {
+                engine?.Dispose();
+            }
+            catch
+            {
+            }
+            if (hwnd != IntPtr.Zero)
+            {
+                Native.DestroyWindow(hwnd);
+            }
+            if (tid != 0u)
+            {
+                Native.PostThreadMessageW(tid, 18u, IntPtr.Zero, IntPtr.Zero);
+            }
+            try
+            {
+                pump.Join(1000);
+            }
+            catch
+            {
+            }
+            ready.Dispose();
+        }
     }
 }

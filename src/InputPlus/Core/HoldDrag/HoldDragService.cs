@@ -155,6 +155,9 @@ public sealed class HoldDragService : IDisposable
     private void Start(string blob)
     {
         LastError = "";
+        // 拖动链路的明文账本落在数据目录里（drag-diag.txt）：用户反馈"手停了窗口还在跑"时，
+        // 一行就能看出是链路积压、目标程序慢，还是最后一帧没落到位。
+        Modules.HoldDrag.DragDiag.Init(AppPaths.DataDir);
         var store = new Modules.HoldDrag.ConfigStore(
             () => _settings()?.HoldDragJson ?? "",
             json => Persist(json));

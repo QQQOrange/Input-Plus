@@ -117,8 +117,13 @@ internal sealed class AppConfig
 
 	public string Blacklist { get; set; }
 
+	/// <summary>
+	/// 抽帧（照 AltDrag 的 MoveRate）：每几个鼠标移动事件才真的写一次窗口。
+	/// 1 = 每个事件都写，最跟手；调大能把"目标程序写一次很慢"时的队列积压压下去。
+	/// </summary>
 	public int MoveRate { get; set; }
 
+	/// <summary>缩放的抽帧倍数（照 AltDrag 的 ResizeRate），含义同上。</summary>
 	public int ResizeRate { get; set; }
 
 	public int DragThreshold { get; set; }
@@ -324,8 +329,24 @@ internal sealed class AppConfig
 		{
 			Blacklist = Blacklist.Substring(0, 2000);
 		}
-		MoveRate = 1;
-		ResizeRate = 1;
+		// 抽帧倍数（AltDrag 的 MoveRate / ResizeRate）：默认 1 = 每个鼠标事件都写窗口。
+		// 老配置里没有这两个字段时走 C# 默认值 0，这里一并夹进来。
+		if (MoveRate < 1)
+		{
+			MoveRate = 1;
+		}
+		if (MoveRate > 8)
+		{
+			MoveRate = 8;
+		}
+		if (ResizeRate < 1)
+		{
+			ResizeRate = 1;
+		}
+		if (ResizeRate > 8)
+		{
+			ResizeRate = 8;
+		}
 		if (DragThreshold < 0)
 		{
 			DragThreshold = 0;

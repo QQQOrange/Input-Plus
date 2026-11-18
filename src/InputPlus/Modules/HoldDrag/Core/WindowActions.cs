@@ -223,7 +223,15 @@ internal static class WindowActions
 
 	private static bool _lastWriteValid;
 
+	/// <summary>离上次核对真实矩形过了几次"跳过"（见 SetDragRectFrame 的移动分支）。</summary>
+	private static int SkipProbe;
+
+	private const int SkipProbeEvery = 8;
+
 	public static long FramesWritten;
+
+	/// <summary>"请求跟上次一样但窗口其实不在那儿"的次数（诊断用）。</summary>
+	public static long FramesDrifted;
 
 	public static long FramesNoop;
 
@@ -828,6 +836,8 @@ internal static class WindowActions
 		FramesWritten = 0L;
 		FramesNoop = 0L;
 		FramesAbandoned = 0L;
+		FramesDrifted = 0L;
+		SkipProbe = 0;
 		TotalWriteMs = 0.0;
 		MaxWriteMs = 0.0;
 	}
@@ -839,6 +849,8 @@ internal static class WindowActions
 		SlowFrameStreak = 0;
 		AbandonProbe = 0;
 		_lastWriteValid = false;
+		SkipProbe = 0;
+		FramesDrifted = 0L;
 	}
 
 	public static bool SetDragRectFrame(nint h, Native.RECT target)
@@ -868,8 +880,28 @@ internal static class WindowActions
 			flag = false;
 			if (_lastWriteValid && _lastWriteRect.Left == target.Left && _lastWriteRect.Top == target.Top)
 			{
-				FramesNoop++;
-				return false;
+				// 请求位置跟上次一样，但这里只记了"我们请求了什么"，没记"窗口真的到那儿了"。
+				// 目标程序偶尔会自己把位置挪回去（贴边、DPI 换算、最大化还原），
+				// 那样后面每一帧都会被这条短路挡掉，窗口就永久偏在那里 —— 看起来正是
+				// "手停了它还在慢慢挪、最后停错了地方"。每跳过 8 次就把真实矩形读回来核一次。
+				if (++SkipProbe >= SkipProbeEvery)
+				{
+					SkipProbe = 0;
+					if (!Native.GetWindowRect(h, out var lpNow) || lpNow.Left != target.Left || lpNow.Top != target.Top)
+					{
+						FramesDrifted++;
+					}
+					else
+					{
+						FramesNoop++;
+						return false;
+					}
+				}
+				else
+				{
+					FramesNoop++;
+					return false;
+				}
 			}
 		}
 		else

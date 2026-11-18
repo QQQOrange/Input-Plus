@@ -106,7 +106,33 @@ internal sealed class DragEngine : IDisposable
 	/// <summary>已向目标窗口发过 WM_ENTERSIZEMOVE / 事件 10，退出时必须成对补上（见 Cleanup / End）。</summary>
 	private volatile bool _sizeMoveActive;
 
-	/// <summary>本次拖动是否成功把系统定时器精度提到 1ms（结束时要还回去，别让整个系统陪着耗电）。</summary>
+	/// <summary>本次拖动的抽帧倍数（AltDrag 的 MoveRate / ResizeRate；1 = 每个鼠标事件都写）。</summary>
+	private int _moveRate = 1;
+
+	private int _resizeRate = 1;
+
+	/// <summary>自检用：塞一个假光标进去，省得为了验"跟着光标走"去挪用户的鼠标。</summary>
+	internal static Func<Native.POINT?> CursorProbeForTest;
+
+	/// <summary>抽帧计数（AltDrag 里叫 updaterate）。</summary>
+	private int _moveTick;
+
+	/// <summary>本次是移动还是缩放 —— 抽帧和收尾核对都要用，Begin 时定下。</summary>
+	private bool _moveMode;
+
+	/// <summary>上一帧请求的矩形。收尾时拿它跟窗口的真实矩形比一次（见 ReconcileTail）。</summary>
+	private Native.RECT _lastTarget;
+
+	private bool _lastTargetValid;
+
+	/// <summary>本次拖动的开始时刻（End 时算时长，写进诊断）。</summary>
+	private long _dragStartedAt;
+
+	/// <summary>收尾补写的次数与最大偏移（诊断用）。</summary>
+	private int _tailFixes;
+
+	private int _tailDriftMax;
+
 	internal static int DiagFrameUpdates;
 
 	internal static int DiagWindowSkipped;
@@ -192,10 +218,39 @@ internal sealed class DragEngine : IDisposable
 
 	public void DeliverCursor(Native.POINT pt)
 	{
-		if (_dragging)
+		if (!_dragging)
 		{
-			_worker.PostMove(pt);
+			return;
 		}
+		// 抽帧（照 AltDrag 的 MoveRate / ResizeRate）：不是省性能，是让"写窗口"这一步
+		// 永远有空档。每来一个鼠标事件就排一帧进去，队列只会在目标程序慢的时候越积越长，
+		// 表现出来就是"手停了窗口还在挪"。
+		int rate = (_moveMode ? _moveRate : _resizeRate);
+		if (rate > 1)
+		{
+			_moveTick = (_moveTick + 1) % rate;
+			if (_moveTick != 0)
+			{
+				return;
+			}
+		}
+		_worker.PostMove(pt);
+	}
+
+	/// <summary>
+	/// "此刻的光标在哪"。自检里可以换成假的光标（<see cref="CursorProbeForTest"/>），
+	/// 别的地方一律当真去问系统 —— 这一句就是"窗口为什么不会追着旧坐标跑"的全部来源。
+	/// </summary>
+	private static bool TryLiveCursor(out Native.POINT pt)
+	{
+		Func<Native.POINT?> func = CursorProbeForTest;
+		if (func != null)
+		{
+			Native.POINT? fake = func();
+			pt = (fake ?? default(Native.POINT));
+			return fake.HasValue;
+		}
+		return Native.GetCursorPos(out pt);
 	}
 
 	public bool Begin(nint hwnd, bool move, int button, Native.POINT pt)
@@ -389,6 +444,14 @@ internal sealed class DragEngine : IDisposable
 		}
 		WindowActions.ResetSessionKickCache();
 		DiagReset();
+		_moveMode = move;
+		_moveRate = Math.Clamp(appConfig.MoveRate, 1, 8);
+		_resizeRate = Math.Clamp(appConfig.ResizeRate, 1, 8);
+		_moveTick = 0;
+		_dragStartedAt = Environment.TickCount64;
+		_lastTargetValid = false;
+		_tailFixes = 0;
+		_tailDriftMax = 0;
 		_frameInside = false;
 		WindowActions.NotifySizeMove(hwnd, start: true);
 		_sizeMoveActive = true;
@@ -590,6 +653,13 @@ internal sealed class DragEngine : IDisposable
 				Cancel();
 				return;
 			}
+			// 照 AltDrag：位置一律在"要写的那一刻"现取 GetCursorPos，事件里带的坐标只当兜底。
+			// 钩子也好、工作线程也好，只要有一环排队，事件里的坐标就是"过去的坐标"：
+			// 把它们写下去，就是手停了窗口还在跑，最后停在离光标老远的地方。
+			if (TryLiveCursor(out var livePt))
+			{
+				pt = livePt;
+			}
 			AppConfig appConfig = _cfg();
 			if (Native.GetClipCursor(out var lpRect) && lpRect.Right > lpRect.Left && lpRect.Bottom > lpRect.Top)
 			{
@@ -711,6 +781,9 @@ internal sealed class DragEngine : IDisposable
 				SnapEngine.Result snap = (s.Move ? SnapEngine.SnapMove(rECT, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)) : SnapEngine.SnapResize(rECT, s.Zone == ResizeZone.Left, s.Zone == ResizeZone.Right, s.Zone == ResizeZone.Top, s.Zone == ResizeZone.Bottom, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)));
 				rECT = snap.Rect;
 			}
+			// 记下"这一帧请求的是哪儿"：收尾时用它跟窗口的真实矩形对一次账（ReconcileTail）。
+			_lastTarget = rECT;
+			_lastTargetValid = true;
 			// 先把窗口挪过去，再画 HUD 和外框 —— 顺序照 AltDrag：一个鼠标移动事件进来，
 			// 第一件事就是让窗口跟上光标。装饰晚一帧看不出来，可它们若排在前面，
 			// 那份开销就直接变成用户手上的延迟。
@@ -809,10 +882,20 @@ internal sealed class DragEngine : IDisposable
 				// 最后一帧几何写入与"退出尺寸移动"通知必须在同一个工作项里，且顺序固定：
 				// 很多程序是在 WM_EXITSIZEMOVE 里保存窗口位置的，通知先到就会把"松手前"的矩形存下来。
 				_sizeMoveActive = false;
+				// 收尾要用的东西在这一刻定下来：这条工作项排到队列里之后，
+				// 万一用户马上又开始下一次拖动，这些字段会被下一次重置。
+				Native.RECT want = _lastTarget;
+				bool wantValid = _lastTargetValid;
+				long startedAt = _dragStartedAt;
+				bool moveMode = s.Move;
 				_worker.Post(() =>
 				{
 					Step(pt, s, forceWrite: true);
+					// 最后一帧写完先对账，再通知"尺寸移动结束" —— 顺序反了的话，
+					// 程序会在 WM_EXITSIZEMOVE 里把偏掉的那一版矩形存下来，下次打开就是错的。
+					int residual = ReconcileTail(hwnd, want, wantValid);
 					WindowActions.NotifySizeMove(hwnd, start: false);
+					NoteDragDiag(moveMode, startedAt, residual);
 					_hud.Hide();
 				});
 				_undoHwnd = hwnd;
@@ -832,6 +915,94 @@ internal sealed class DragEngine : IDisposable
 		finally
 		{
 			Cleanup();
+		}
+	}
+
+	/// <summary>
+	/// 收尾对账：最后那一帧写下去之后，把窗口的真实矩形读回来，跟"我们要求的位置"比一次。
+	/// 对不上就再写一次（这一条路不带任何跳过判断），并把残余偏差记进诊断。
+	///
+	/// 为什么要这一步：整条链路（钩子 → 工作线程 → 目标程序）里任何一环掉帧，
+	/// 都会让窗口停在"比光标慢半拍"的地方。用户看到的就是"我手停了，它还在跑，最后位置不对"。
+	/// AltDrag 靠"钩子里同步写"避免这件事，我们隔着一条工作线程，只能在收尾时把账对平。
+	/// </summary>
+	/// <returns>补写之后仍然不一致的最大像素数（0 = 已经严丝合缝）。</returns>
+	private int ReconcileTail(nint hwnd, Native.RECT want, bool wantValid)
+	{
+		try
+		{
+			if (!wantValid || hwnd == IntPtr.Zero || !Native.IsWindow(hwnd))
+			{
+				return 0;
+			}
+			if (!Native.GetWindowRect(hwnd, out var actual))
+			{
+				return 0;
+			}
+			if (!TailMismatch(want, actual, out var dx, out var dy, out var dw, out var dh))
+			{
+				return 0;
+			}
+			WindowActions.SetDragRect(hwnd, want);
+			_tailFixes++;
+			int num = MaxAbs(dx, dy, dw, dh);
+			if (num > _tailDriftMax)
+			{
+				_tailDriftMax = num;
+			}
+			if (!Native.GetWindowRect(hwnd, out var after))
+			{
+				return 0;
+			}
+			TailMismatch(want, after, out var dx2, out var dy2, out var dw2, out var dh2);
+			return MaxAbs(dx2, dy2, dw2, dh2);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+			return 0;
+		}
+	}
+
+	/// <summary>请求的矩形和窗口真实矩形差在哪（四个分量各自带符号）。</summary>
+	internal static bool TailMismatch(Native.RECT want, Native.RECT actual, out int dx, out int dy, out int dw, out int dh)
+	{
+		dx = actual.Left - want.Left;
+		dy = actual.Top - want.Top;
+		dw = (actual.Right - actual.Left) - (want.Right - want.Left);
+		dh = (actual.Bottom - actual.Top) - (want.Bottom - want.Top);
+		return dx != 0 || dy != 0 || dw != 0 || dh != 0;
+	}
+
+	private static int MaxAbs(int a, int b, int c, int d)
+	{
+		return Math.Max(Math.Max(Math.Abs(a), Math.Abs(b)), Math.Max(Math.Abs(c), Math.Abs(d)));
+	}
+
+	/// <summary>
+	/// 每次拖动结束往"数据目录\drag-diag.txt"写一行明文账 —— 这是排查"手停了窗口还在跑"
+	/// 唯一靠得住的东西：合并峰值说明链路积压了多少、写耗时说明目标程序多慢、
+	/// 收尾补写说明最后一帧到底有没有落到光标上。
+	/// </summary>
+	private void NoteDragDiag(bool moveMode, long startedAt, int residual)
+	{
+		try
+		{
+			long num = Environment.TickCount64 - startedAt;
+			int num2 = DiagWindowWritten + DiagWindowSkipped;
+			double num3 = ((WindowActions.FramesWritten > 0) ? (WindowActions.TotalWriteMs / (double)WindowActions.FramesWritten) : 0.0);
+			string text = (moveMode ? "移动" : "缩放")
+				+ " 时长=" + num + "ms"
+				+ " 帧: 请求=" + num2 + " 写=" + DiagWindowWritten + " 跳过=" + DiagWindowSkipped + " 漂移修正=" + WindowActions.FramesDrifted
+				+ " | 写耗时 平均=" + num3.ToString("0.0") + "ms 最大=" + WindowActions.MaxWriteMs.ToString("0.0") + "ms"
+				+ " | 合并峰值=" + DragWorker.MaxDrained
+				+ " | 收尾补写=" + _tailFixes + " 残余偏差=" + residual + "px 最大=" + _tailDriftMax + "px"
+				+ " | 钩子 最大=" + Coordinator.HookMaxMsForTest.ToString("0.0") + "ms 慢=" + Coordinator.SlowHookCountForTest + "次";
+			DragDiag.Note(text);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
 		}
 	}
 
