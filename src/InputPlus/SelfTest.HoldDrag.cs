@@ -107,5 +107,26 @@ public static partial class SelfTest
         // ---- 触发键候选表覆盖住了要显示的名字（下拉框不能出现裸 id） ----
         Check("按住拖拽：候选触发键都有可读名字",
             KeysUtil.DisplayName("M:1").Length > 0 && KeysUtil.DisplayName("K:LShift").Length > 0);
+
+        // ---- 黑名单/规则：两个挑程序的入口与手打共用同一个追加逻辑 ----
+        CheckEqual("黑名单追加：空清单直接放进去",
+            UI.Views.HoldDragView.AppendToken("", "obs64.exe"), "obs64.exe");
+        CheckEqual("黑名单追加：换行分隔、保持原顺序",
+            UI.Views.HoldDragView.AppendToken("obs64.exe\ngame*.exe", "code.exe"),
+            "obs64.exe\ngame*.exe\ncode.exe");
+        CheckEqual("黑名单追加：同一个程序不会进两次（忽略大小写）",
+            UI.Views.HoldDragView.AppendToken("OBS64.exe", "obs64.exe"), "OBS64.exe");
+        CheckEqual("黑名单追加：空白行会被抹掉",
+            UI.Views.HoldDragView.AppendToken("  obs64.exe  \n\n", "code.exe"), "obs64.exe\ncode.exe");
+
+        CheckEqual("按程序规则：新程序写成 程序名=行为",
+            UI.Views.HoldDragView.UpsertRule("", "wps.exe", "Ignore"), "wps.exe=Ignore");
+        CheckEqual("按程序规则：同名换行为，不新增一行",
+            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore", "wps.exe", "MoveOnly"), "wps.exe=MoveOnly");
+        CheckEqual("按程序规则：不同程序各占一行",
+            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore", "code.exe", "NoFrame"),
+            "wps.exe=Ignore\ncode.exe=NoFrame");
+        CheckEqual("按程序规则：行为留空按完全不接管算",
+            UI.Views.HoldDragView.UpsertRule("", "game.exe", ""), "game.exe=Ignore");
     }
 }

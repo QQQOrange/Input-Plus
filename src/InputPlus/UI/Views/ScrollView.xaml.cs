@@ -143,9 +143,9 @@ public partial class ScrollView : UserControl
         EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>入口一：从文件管理器挑 exe（程序没在运行也能加）。</summary>
     private void OnAddApp(object sender, RoutedEventArgs e)
     {
-        if (_host == null) return;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = Loc.T("选择要单独设置的程序"),
@@ -153,9 +153,45 @@ public partial class ScrollView : UserControl
             CheckFileExists = true,
         };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        AddApp(dialog.FileName);
+    }
 
-        string path = dialog.FileName;
-        if (Rules.Any(r => string.Equals(r.AppPath, path, StringComparison.OrdinalIgnoreCase)))
+    /// <summary>
+    /// 入口二：十字准星点选已开的窗口，取它的程序名。
+    /// 和其它页共用 <see cref="UI.Windows.WindowPickerWindow"/>。
+    /// </summary>
+    private void OnAddAppWindow(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var picker = new UI.Windows.WindowPickerWindow();
+        if (Window.GetWindow(this) is { } owner) picker.Owner = owner;
+        picker.ShowDialog();
+
+        IntPtr h = picker.PickedWindow;
+        if (h == IntPtr.Zero) return;                       // 用户按了 Esc
+
+        var info = Core.Windows.WindowService.Describe(h);
+        if (info == null || string.IsNullOrEmpty(info.ExePath))
+        {
+            _host.Notify(Loc.T("取不到这个窗口的程序，改用「选择程序…」挑 exe"));
+            return;
+        }
+        AddApp(info.ExePath);
+    }
+
+    /// <summary>两个入口共用：去重、落盘、刷列表、提示，一条龙。</summary>
+    private void AddApp(string path)
+    {
+        if (_host == null || string.IsNullOrWhiteSpace(path)) return;
+
+        string name = System.IO.Path.GetFileName(path);
+        if (name.Length == 0) name = path;
+
+        /* 匹配既认全路径也认文件名（见 ScrollAppRule.AppPath 的注释），
+           所以去重也要两种都看一遍，否则同一个程序会以两种写法进来两次。 */
+        if (Rules.Any(r => string.Equals(r.AppPath, path, StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(r.AppPath, name, StringComparison.OrdinalIgnoreCase)))
         {
             _host.Notify(Loc.T("这个程序已经在列表里了。"));
             return;

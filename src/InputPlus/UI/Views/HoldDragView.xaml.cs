@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -307,6 +308,148 @@ internal partial class HoldDragView : UserControl
         else if (ReferenceEquals(sender, RulesBox)) _cfg.AppRules = RulesBox.Text ?? "";
         else return;
         ScheduleCommit();
+    }
+
+    // ---------------- 挑程序：两个入口与手打共用同一条校验 ----------------
+
+    /// <summary>
+    /// 把新条目并进「一行一条」的清单：去空白、忽略大小写去重、保持原顺序。
+    /// 黑名单与规则框都用它 —— 手打和挑选走同一段逻辑，不会一边去重一边不去重。
+    /// </summary>
+    internal static string AppendToken(string? existing, string? token)
+    {
+        string add = (token ?? "").Trim();
+        var lines = SplitTokens(existing);
+        if (add.Length == 0) return string.Join("\n", lines);
+        if (!lines.Any(s => string.Equals(s, add, StringComparison.OrdinalIgnoreCase))) lines.Add(add);
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>按程序规则：同名（= 前面那段）就换行为，否则追加一条。</summary>
+    internal static string UpsertRule(string? existing, string? program, string? mode)
+    {
+        string name = (program ?? "").Trim();
+        string m = string.IsNullOrWhiteSpace(mode) ? "Ignore" : mode.Trim();
+        var lines = SplitTokens(existing);
+        if (name.Length == 0) return string.Join("\n", lines);
+
+        int at = lines.FindIndex(s =>
+        {
+            int eq = s.IndexOf('=');
+            string key = (eq < 0 ? s : s[..eq]).Trim();
+            return string.Equals(key, name, StringComparison.OrdinalIgnoreCase);
+        });
+        string entry = name + "=" + m;
+        if (at >= 0) lines[at] = entry;
+        else lines.Add(entry);
+        return string.Join("\n", lines);
+    }
+
+    private static List<string> SplitTokens(string? text) =>
+        (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList();
+
+    /// <summary>挑一个程序的名字（不是全路径：黑名单/规则认的是程序名）。取消返回空。</summary>
+    private string PickProgramName(bool byWindow)
+    {
+        if (byWindow)
+        {
+            var picker = new UI.Windows.WindowPickerWindow();
+            if (Window.GetWindow(this) is { } owner) picker.Owner = owner;
+            picker.ShowDialog();
+
+            IntPtr h = picker.PickedWindow;
+            if (h == IntPtr.Zero) return "";                 // 用户按了 Esc
+
+            var info = Core.Windows.WindowService.Describe(h);
+            if (info == null || string.IsNullOrEmpty(info.ExePath))
+            {
+                _host?.Notify(Loc.T("取不到这个窗口的程序，改用「选择程序…」挑 exe"));
+                return "";
+            }
+            return FileNameOf(info.ExePath);
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("选择要单独设置的程序"),
+            Filter = "程序 (*.exe)|*.exe|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog(Window.GetWindow(this)) != true) return "";
+        return FileNameOf(dlg.FileName);
+    }
+
+    private static string FileNameOf(string path)
+    {
+        try { return System.IO.Path.GetFileName(path); } catch { return ""; }
+    }
+
+    private void OnBlacklistPickFile(object sender, RoutedEventArgs e) => AddToBlacklist(PickProgramName(false));
+
+    private void OnBlacklistPickWindow(object sender, RoutedEventArgs e) => AddToBlacklist(PickProgramName(true));
+
+    private void AddToBlacklist(string name)
+    {
+        if (_sync || _cfg == null) return;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _host?.Notify(Loc.T("没挑到程序：可以用「选择程序…」直接选 exe"));
+            return;
+        }
+
+        string merged = AppendToken(BlacklistBox.Text, name);
+        if (string.Equals(merged, BlacklistBox.Text ?? "", StringComparison.Ordinal))
+        {
+            _host?.Notify(Loc.F("{0} 已经在黑名单里了", name));
+            return;
+        }
+        BlacklistBox.Text = merged;     // TextChanged 会写进 _cfg 并安排一次落盘
+        _host?.Notify(Loc.F("已加入黑名单：{0}", name));
+    }
+
+    private void OnRulePickFile(object sender, RoutedEventArgs e) => AddToRules(PickProgramName(false));
+
+    private void OnRulePickWindow(object sender, RoutedEventArgs e) => AddToRules(PickProgramName(true));
+
+    private void AddToRules(string name)
+    {
+        if (_sync || _cfg == null) return;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            _host?.Notify(Loc.T("没挑到程序：可以用「选择程序…」直接选 exe"));
+            return;
+        }
+
+        string mode = (RuleModeBox?.SelectedItem as ComboBoxItem)?.Tag as string ?? "Ignore";
+        RulesBox.Text = UpsertRule(RulesBox.Text, name, mode);
+        _host?.Notify(Loc.F("已加入规则：{0}", name + "=" + mode));
+    }
+
+    /// <summary>
+    /// 出图用：把左栏滚到最下面，好拍「黑名单」与「按程序规则」那两块
+    /// （它们在这页最底下，默认视口里看不见）。
+    /// </summary>
+    internal void ScrollListsForRender()
+    {
+        FindScroll(this)?.ScrollToEnd();
+    }
+
+    private static System.Windows.Controls.ScrollViewer? FindScroll(System.Windows.DependencyObject? node)
+    {
+        if (node == null) return null;
+        int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < n; i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(node, i);
+            if (child is System.Windows.Controls.ScrollViewer sv) return sv;
+            var deep = FindScroll(child);
+            if (deep != null) return deep;
+        }
+        return null;
     }
 
     private void OnResetDefaults(object sender, RoutedEventArgs e)

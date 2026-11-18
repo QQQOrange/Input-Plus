@@ -3,6 +3,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+             xmlns:controls="clr-namespace:InputPlus.UI.Controls"
              FontFamily="{StaticResource Font.Ui}">
     <Grid Margin="24,4,20,20">
         <Grid.ColumnDefinitions>
@@ -490,6 +491,14 @@
                                  VerticalScrollBarVisibility="Auto"
                                  VerticalContentAlignment="Top" Padding="8,6"
                                  TextChanged="OnTextChanged" />
+                        <!-- 和别的页一样用「选择程序… / 点选窗口」这两个入口：
+                             挑完直接往上面那个框里追加一行，手打与挑选走同一条校验。 -->
+                        <controls:AppPickButtons x:Name="BlacklistPicker" Margin="0,8,0,0"
+                                                 Width="304" HorizontalAlignment="Left"
+                                                 PickFile="OnBlacklistPickFile"
+                                                 PickWindow="OnBlacklistPickWindow" />
+                        <TextBlock Text="{loc:T '点这两个按钮挑程序就行，认得的是程序名（例如 obs64.exe）；要写通配符时再手打。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
                     </StackPanel>
 
                     <Border Style="{StaticResource Divider}" />
@@ -503,6 +512,23 @@
                                  VerticalScrollBarVisibility="Auto"
                                  VerticalContentAlignment="Top" Padding="8,6"
                                  TextChanged="OnTextChanged" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="{loc:T '新加的规则是'}" Style="{StaticResource Text.Tertiary}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox x:Name="RuleModeBox" Style="{StaticResource ComboBox.Base}" Width="168"
+                                      SelectedIndex="0">
+                                <ComboBoxItem Content="{loc:T '完全不接管'}" Tag="Ignore" />
+                                <ComboBoxItem Content="{loc:T '只允许移动'}" Tag="MoveOnly" />
+                                <ComboBoxItem Content="{loc:T '只允许缩放'}" Tag="ResizeOnly" />
+                                <ComboBoxItem Content="{loc:T '接管但不画外框'}" Tag="NoFrame" />
+                            </ComboBox>
+                        </StackPanel>
+                        <controls:AppPickButtons x:Name="RulesPicker" Margin="0,8,0,0"
+                                                 Width="304" HorizontalAlignment="Left"
+                                                 PickFile="OnRulePickFile"
+                                                 PickWindow="OnRulePickWindow" />
+                        <TextBlock Text="{loc:T '先在上面选一种行为，再点按钮挑程序：挑完会写成 程序名=行为 追加到框里。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
                     </StackPanel>
 
                 </StackPanel>

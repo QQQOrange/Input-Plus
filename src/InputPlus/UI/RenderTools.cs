@@ -113,6 +113,12 @@ public static class RenderTools
                     hdv.SetSampleForRender();
                     Pump(260);
                     Save(main, Path.Combine(outDir, "holddrag-sample.png"));
+
+                    /* 黑名单与「按程序规则」在这页最底下，视口里看不到 ——
+                       滚到底再拍一张，验证那里两个挑程序的按钮也在。 */
+                    hdv.ScrollListsForRender();
+                    Pump(160);
+                    Save(main, Path.Combine(outDir, "holddrag-lists.png"));
                 }
                 catch (Exception ex) { CoreLog.Warn("渲染按住拖拽示例失败：" + ex.Message); }
             }
