@@ -1,0 +1,243 @@
+using System.Diagnostics;
+using InputPlus.Core.Input;
+using InputPlus.Core.Settings;
+
+namespace InputPlus.Core.Macro;
+
+/// <summary>
+/// 宏录制器。
+///
+/// 录制期间**照常透传按键**（不吞键，不影响用户正常操作），
+/// 只把每次事件连同高精度时间戳记下来；
+/// 停止时把相邻事件的时间差转成"延迟步骤"，得到可编辑的宏。
+///
+/// 两个关键取舍：
+///  1. 修饰键**不压平成组合键**。Ctrl+C 录成
+///     KeyDown(Ctrl) / Delay / KeyDown(C) / … / KeyUp(C) / KeyUp(Ctrl)，
+///     这样用户事后可以单独改某一边的时长。压平成"组合键"就改不动了。
+///  2. 时间戳用 Stopwatch（QueryPerformanceCounter），
+///     不用 DateTime.Now —— 后者只有 15ms 分辨率，录出来的节奏全是乱的。
+/// </summary>
+public sealed class MacroRecorder
+{
+    private readonly object _gate = new();
+    private readonly List<KeyLog> _events = new();
+    private readonly Stopwatch _clock = new();
+    private bool _recording;
+
+    /// <summary>钩子侧最近若干事件（去重用），只保留很短一截。</summary>
+    private readonly List<(int Vk, bool Down, long Tick)> _hookRecent = new();
+
+    /// <summary>两路来源重合时的判定窗口（毫秒）。</summary>
+    public const int DedupWindowMs = 80;
+
+    /// <summary>本次录制里来自键盘钩子的事件数。</summary>
+    public int HookEventCount { get; private set; }
+
+    /// <summary>本次录制里由 Raw Input 补录的事件数（钩子没看到的那部分）。</summary>
+    public int RawEventCount { get; private set; }
+
+    /// <summary>两次按键之间小于这个毫秒数就不生成延迟步骤（抖动滤除）。</summary>
+    public const int MinDelayMs = 15;
+
+    /// <summary>录到一个按键。<see cref="Vk"/> 是虚拟键码，<see cref="Down"/> 按下还是抬起，
+    /// <see cref="Ms"/> 是距录制开始的毫秒。</summary>
+    public readonly record struct KeyLog(int Vk, bool Down, long Ms);
+
+    /// <summary>
+    /// 每录到一个按键就触发一次 —— **在键盘钩子线程上同步触发**。
+    ///
+    /// 订阅方必须立刻返回（界面侧只做 <c>Dispatcher.BeginInvoke</c>），
+    /// 否则会拖慢钩子回调；钩子回调超过 ~300ms 系统会静默把钩子摘掉。
+    /// </summary>
+    public event Action<int, bool, long>? Recorded;
+
+    /// <summary>是否正在录制。</summary>
+    public bool IsRecording
+    {
+        get { lock (_gate) { return _recording; } }
+    }
+
+    /// <summary>已录制的事件数（界面显示用）。</summary>
+    public int EventCount
+    {
+        get { lock (_gate) { return _events.Count; } }
+    }
+
+    /// <summary>已录制的毫秒数。停止后保留最终值（界面要用它显示总时长）。</summary>
+    public long ElapsedMs
+    {
+        get { lock (_gate) { return _clock.ElapsedMilliseconds; } }
+    }
+
+    /// <summary>已录事件的一份快照（页面被重建 / 重新进入时用来还原实时列表）。</summary>
+    public IReadOnlyList<KeyLog> Snapshot()
+    {
+        lock (_gate) { return _events.ToArray(); }
+    }
+
+    public void Start()
+    {
+        lock (_gate)
+        {
+            _events.Clear();
+            _hookRecent.Clear();
+            _clock.Restart();
+            _recording = true;
+            HookEventCount = 0;
+            RawEventCount = 0;
+        }
+    }
+
+    /// <summary>喂一个真实按键给录制器（由钩子回调调用，必须极快）。</summary>
+    public void Record(int vk, bool down)
+    {
+        long ms;
+        int count;
+        lock (_gate)
+        {
+            if (!_recording) return;
+            ms = _clock.ElapsedMilliseconds;
+            _events.Add(new KeyLog(vk, down, ms));
+            count = _events.Count;
+            HookEventCount++;
+
+            _hookRecent.Add((vk, down, Environment.TickCount64));
+            if (_hookRecent.Count > 24) _hookRecent.RemoveRange(0, _hookRecent.Count - 24);
+        }
+
+        if (count <= 3)
+            CoreLog.Info($"宏录制：vk=0x{vk:X2} down={down}");
+
+        // 事件在锁外抛：订阅方可能要抢别的锁，锁里回调容易互相等死
+        try { Recorded?.Invoke(vk, down, ms); }
+        catch (Exception ex) { CoreLog.Warn("宏录制事件回调出错：" + ex.Message); }
+    }
+
+    /// <summary>
+    /// Raw Input 补录：只有**钩子没看到**这个键时才计入。
+    ///
+    /// 为什么需要：远程桌面 / 向日葵这类工具的按键可能走驱动、注入等路径，
+    /// 低级键盘钩子收不到（日志里"宏录制开始"之后一片空白就是这么来的），
+    /// 但 Raw Input 仍然能收到。两路都会到的情况靠时间窗去重。
+    /// </summary>
+    /// <returns>真的记下来了吗</returns>
+    public bool RecordRaw(int vk, bool down)
+    {
+        long ms;
+        int count;
+        lock (_gate)
+        {
+            if (!_recording) return false;
+
+            long now = Environment.TickCount64;
+            if (IsDuplicate(_hookRecent, vk, down, now, DedupWindowMs)) return false;
+
+            ms = _clock.ElapsedMilliseconds;
+            _events.Add(new KeyLog(vk, down, ms));
+            count = _events.Count;
+            RawEventCount++;
+        }
+
+        if (count <= 3)
+            CoreLog.Info($"宏录制（Raw Input 补录）：vk=0x{vk:X2} down={down}");
+
+        try { Recorded?.Invoke(vk, down, ms); }
+        catch (Exception ex) { CoreLog.Warn("宏录制事件回调出错：" + ex.Message); }
+        return true;
+    }
+
+    /// <summary>
+    /// 钩子最近见过同一个键吗（同一个物理按键两路都会到，只能算一次）。
+    ///
+    /// 只比"键 + 方向"和很短的时间窗：同一个键连按两下（间隔通常 &gt; 100ms）
+    /// 不会被误判成重复；而两路之间通常只差几毫秒。
+    /// </summary>
+    internal static bool IsDuplicate(
+        IEnumerable<(int Vk, bool Down, long Tick)> recent, int vk, bool down, long now, int windowMs)
+    {
+        foreach (var e in recent)
+        {
+            if (e.Vk != vk || e.Down != down) continue;
+            long delta = now - e.Tick;
+            if (delta <= windowMs && delta >= -windowMs) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 停止录制并生成宏。生成后未知键名的步骤用 <c>vk0x??</c> 形式保存，
+    /// <see cref="KeyName.VkOf"/> 支持回解析，播放时不会丢步。
+    /// </summary>
+    /// <param name="name">宏名称</param>
+    /// <param name="fixedDelayMs">
+    /// 大于 0 时，**所有**间隔都写成这个固定值（用户要的是"节奏稳定"，不是"真实节奏"）。
+    /// 0 = 按录到的真实间隔。
+    /// </param>
+    public Core.Settings.Macro Stop(string name, int fixedDelayMs = 0)
+    {
+        lock (_gate)
+        {
+            _recording = false;
+            _clock.Stop();
+            var sw = _clock.ElapsedMilliseconds;
+            var events = _events.ToList();
+
+            var macro = new Core.Settings.Macro { Name = name };
+
+            // 第一个事件之前可能等了很久（用户在想），不留这段
+            foreach (var (e, i) in events.Select((e, i) => (e, i)))
+            {
+                if (i > 0)
+                {
+                    if (fixedDelayMs > 0)
+                    {
+                        /* 固定延迟：每个按键之间都插一个同样的等待。
+                         * 不在这里滤掉"太小"的间隔 —— 用户要的就是均匀节奏。 */
+                        macro.Steps.Add(new MacroStep { Kind = "delay", DelayMs = fixedDelayMs });
+                    }
+                    else
+                    {
+                        int gap = (int)(e.Ms - events[i - 1].Ms);
+                        if (gap >= MinDelayMs)
+                        {
+                            macro.Steps.Add(new MacroStep { Kind = "delay", DelayMs = gap });
+                        }
+                    }
+                }
+
+                macro.Steps.Add(new MacroStep
+                {
+                    Kind = e.Down ? "keyDown" : "keyUp",
+                    Key = KeyName.NameOf(e.Vk) ?? $"vk0x{e.Vk:X2}",
+                });
+            }
+
+            // 收尾补一个延迟，避免循环播放时按键贴在一起
+            if (macro.Steps.Count > 0)
+            {
+                macro.Steps.Add(new MacroStep
+                {
+                    Kind = "delay",
+                    DelayMs = fixedDelayMs > 0 ? fixedDelayMs : 100,
+                });
+            }
+
+            CoreLog.Info($"宏录制完成：{events.Count} 个事件，时长 {sw}ms" +
+                         (fixedDelayMs > 0 ? $"，固定延迟 {fixedDelayMs}ms" : "") + "，" +
+                         Loc.F("生成 {0} 步", macro.Steps.Count));
+            return macro;
+        }
+    }
+
+    /// <summary>取消录制（不生成宏）。</summary>
+    public void Abort()
+    {
+        lock (_gate)
+        {
+            _recording = false;
+            _clock.Stop();
+            _events.Clear();
+        }
+    }
+}

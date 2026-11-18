@@ -1,0 +1,147 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 多目标：net10 是主线（Win10 1809+）；net7.0-windows 是 Win7 专用线
+         （.NET 10 官方不支持 Win7，最后一个支持 Win7 SP1 的是 .NET 7）。
+         两条线共用同一份源码，差异全部在条件编译/条件包里，见本文件末尾。 -->
+    <TargetFrameworks>net10.0-windows;net7.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- net10 用最新 C#；net7 线必须锁到 C# 11（SDK 10 的 Roslyn 默认是 C# 14，
+         里面主构造函数/params collection/field 关键字在 .NET 7 的 ref 程序集上
+         不一定编译得过，锁 11 最稳）。 -->
+    <LangVersion Condition="'$(TargetFramework)' != 'net7.0-windows'">latest</LangVersion>
+    <!-- 只有一个 exe（框架依赖）。.NET 10 桌面运行时需要另行安装，
+         下载地址见 README 顶部与每次的 Release 说明。
+         不再拆"启动器 + 主程序"两个文件 —— 用户不知道该点哪个。 -->
+    <AssemblyName>InputPlus</AssemblyName>
+    <RootNamespace>InputPlus</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <!-- 1.0：改名 Input Plus 之后重新起版本号。
+         老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
+         设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
+         不会把 5.15.0 当成"比 1.0 新"。 -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <!-- 不要把源码 commit 拼进 ProductVersion。
+         默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
+         本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
+         版本号就是版本号，commit 用 tag 与 Release 记录就够了。 -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Product>Input Plus</Product>
+    <!-- 文件属性里显示的"说明"来自 AssemblyTitle；不给的话会用程序集名 InputPlus（少个空格）。 -->
+    <AssemblyTitle>Input Plus</AssemblyTitle>
+    <Company>QQQOrange</Company>
+    <Description>Input Plus：键盘增强与鼠标手势工具。任意键绑定功能、光标移动与选择、快速搜索面板、窗口绑定、直达链接（网址/文件夹/文件）、独立剪贴板、宏与多图层、鼠标手势、平滑滚动</Description>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DebugType>embedded</DebugType>
+
+    <!-- WPF 启动开销控制：去掉不需要的语言资源与调试符号，缩短首屏时间 -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+
+    <!-- WFO0003：分析器建议把 DPI 设置从 app.manifest 挪到 ApplicationHighDpiMode。
+         这条**不能照做** —— 本项目是 WPF 主体，高 DPI 靠清单里的
+         PerMonitorV2 + WPF 自己的 DPI 感知声明生效；WinForms 只用来托管托盘图标，
+         改成 WinForms 的 API 反而会让 WPF 那条路失去 Per-Monitor 支持。
+         这里只关掉这条针对性建议，其它分析器规则照旧。 -->
+    <NoWarn>$(NoWarn);WFO0003;WFAC010</NoWarn>
+
+    <!-- 性能与体积：ReadyToRun 把 IL 预编译成原生代码，理论上省 JIT；
+         但**实测在这台机器上没有收益**（本程序 5 轮交替测量：
+         中位数 718ms → 716ms，差异在噪声内），而它会让单文件大 2.06 MB。
+         原因是框架依赖模式下 WPF / BCL 程序集由运行时提供（它们本来就预编译过），
+         我们自己那点 IL 的 JIT 成本在总启动时间里看不出来。
+         所以这里关掉：体积减 40%，启动速度不变。 -->
+    <TieredPGO>true</TieredPGO>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishSingleFile>true</PublishSingleFile>
+
+    <!-- 框架依赖：体积最小（约 5MB），但运行前必须装 .NET 10 桌面运行时。
+         缺了它双击不会有任何界面 —— 这是这个方案唯一的代价，
+         所以 README / Release 说明里必须把依赖和下载地址写在最前面。 -->
+    <SelfContained>false</SelfContained>
+    <!-- 注意：EnableCompressionInSingleFile 只在自带运行时时有效，
+         框架依赖模式下 SDK 会直接报 NETSDK1176，所以这里不能开。 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!-- 诊断工具开关（审视报告 P1-5）。
+         默认 true：发布版仍带「自检」与「离屏渲染」两个命令行入口，
+         用户报「某功能不灵」时可以让他自己跑一次自检，比远程猜快得多。
+         需要最小体积时用 MSBuild 属性 IncludeDiagnostics=false 发布：
+         会从编译里移除 SelfTest.cs 与 RenderTools.cs（合计约 6.6k 行），
+         并去掉自检文案。两者都不参与运行期逻辑，行为完全一致。 -->
+    <IncludeDiagnostics Condition="'$(IncludeDiagnostics)' == ''">true</IncludeDiagnostics>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+    <!-- 应用图标（512×512 PNG）。界面里的品牌区统一用它，
+         不再用 Segoe 图标字体的 glyph —— 那和 exe 上的图标完全是两回事，
+         用户一眼就看出"里面这个图标跟外面那个不一样"。 -->
+    <Resource Include="Assets\app.png" />
+    <!-- 内置引擎图标（由 QuickSearch 的图标库转换而来，见 tools/qs_gen.py）。
+         以 Resource 形式打包进程序，运行时不依赖磁盘或网络。 -->
+    <Resource Include="Assets\engine-icons\*.png" />
+    <!-- 内置手势库（1.0 起）：一套调好的 59 条鼠标手势，新装即用。
+         用 EmbeddedResource 而不是 content 文件 —— 单文件发布后磁盘上没有这个
+         文件，只有嵌进程序集才读得到。LogicalName 写死，避免 RID 构建时
+         清单名变成 命名空间.目录.文件 之外的样子。 -->
+    <EmbeddedResource Include="Assets\gestures-builtin.json"
+                      LogicalName="InputPlus.Assets.gestures-builtin.json" />
+    <!-- 界面语言包已经挪到 InputPlus.Localization 工程（Assets\Lang），
+         原因见该工程 csproj 顶部：XAML 里的 {loc:T} 一旦引用**本程序集**的类型，
+         WPF 就必须先编一个临时程序集再跑第二趟标记编译，那趟临时编译会和正式产物
+         抢同一个中间文件，带 RID 构建时 bin 里就缺 InputPlus.dll。
+         放到被引用的程序集里就没有这个问题了。 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 本地化内核（Loc / LocToken / {loc:T} 标记扩展）+ 内置语言包 -->
+    <ProjectReference Include="..\InputPlus.Localization\InputPlus.Localization.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UI Automation：直接读取选区，不受 UIPI 限制 -->
+    <PackageReference Include="Interop.UIAutomationClient" Version="10.16299.0" />
+    <!-- WMI：调屏幕亮度（root\wpi）。
+         net7 线只能用 8.0.0（10.x 要求 .NET 8+ 运行时）。 -->
+    <PackageReference Include="System.Management" Version="10.0.13"
+                      Condition="'$(TargetFramework)' != 'net7.0-windows'" />
+    <PackageReference Include="System.Management" Version="8.0.0"
+                      Condition="'$(TargetFramework)' == 'net7.0-windows'" />
+    <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
+  </ItemGroup>
+
+  <!-- Win7 线用自己的清单：补 Win7 的 supportedOS GUID，并去掉 Win10 才认的
+       PerMonitorV2 / longPathAware（Win7 会忽略它们，写上只会误导排查）。
+       Win7 只支持 system-DPI-aware，靠清单里 true/pm 那行落到 system 模式。 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net7.0-windows'">
+    <ApplicationManifest Remove="app.manifest" />
+    <ApplicationManifest Include="app-win7.manifest" />
+  </ItemGroup>
+
+  <!-- P1-5：精简发布形态。这两个文件只服务于自检与离屏渲染两个入口，
+       运行期逻辑没有任何引用，所以可以整份排除。 -->
+  <ItemGroup Condition="'$(IncludeDiagnostics)' == 'false'">
+    <Compile Remove="SelfTest.cs" />
+    <Compile Remove="UI\RenderTools.cs" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(IncludeDiagnostics)' == 'false'">
+    <DefineConstants>$(DefineConstants);NO_DIAGNOSTICS</DefineConstants>
+  </PropertyGroup>
+
+</Project>

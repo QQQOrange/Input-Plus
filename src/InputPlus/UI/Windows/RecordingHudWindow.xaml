@@ -1,0 +1,35 @@
+﻿<Window x:Class="InputPlus.UI.Windows.RecordingHudWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+        Title="{loc:T '正在录制宏'}" SizeToContent="WidthAndHeight" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
+        ShowActivated="False" Focusable="False" IsHitTestVisible="False"
+        FontFamily="{StaticResource Font.Ui}">
+    <!--
+        录制悬浮条：录制期间只有它在屏幕上一直可见。
+
+        为什么需要它：录制时用户通常切到别的窗口里操作（录的是"在别的程序里打字"），
+        主窗口的实时列表这时根本看不见 —— 没有这个条，用户就只能凭记忆确认"我还在录吗"。
+
+        刻意做成**点击穿透**（IsHitTestVisible=False）：它压在别的窗口上方，
+        能点的话会挡住用户真正想点的东西。停止录制回主窗口点。
+    -->
+    <Border CornerRadius="999" Background="{DynamicResource Brush.OverlayCardAlt}"
+            BorderThickness="1" BorderBrush="{DynamicResource Brush.OverlayBorder}"
+            Padding="15,7" Margin="20">
+        <StackPanel Orientation="Horizontal">
+            <Ellipse x:Name="Dot" Width="9" Height="9" Fill="{DynamicResource Brush.Danger}" VerticalAlignment="Center" />
+            <TextBlock Text="{loc:T '录制中'}" Foreground="{DynamicResource Brush.OverlayText}" FontSize="12.5" FontWeight="SemiBold"
+                       Margin="8,0,0,0" VerticalAlignment="Center" />
+            <TextBlock x:Name="Clock" Text="0:00.0" FontFamily="{StaticResource Font.Mono}"
+                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" FontSize="12" Margin="10,0,0,0"
+                       VerticalAlignment="Center" />
+            <TextBlock Text="·" Foreground="{DynamicResource Brush.OverlayTextTertiary}" Margin="8,0" VerticalAlignment="Center" />
+            <TextBlock x:Name="Count" Text="{loc:T '0 个事件'}" Foreground="{DynamicResource Brush.OverlayTextSecondary}" FontSize="12"
+                       VerticalAlignment="Center" />
+            <TextBlock x:Name="LastKey" Text="" Foreground="{DynamicResource Brush.OverlayAccentText}" FontSize="12"
+                       Margin="10,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+    </Border>
+</Window>

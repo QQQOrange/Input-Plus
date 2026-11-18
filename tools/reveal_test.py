@@ -88,8 +88,8 @@ def main():
     data = os.path.join(ROOT, "out-reveal")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "_reveal"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = "_reveal"
 
     p = subprocess.Popen([EXE, "--reveal", TARGET], env=env)
     p.wait(timeout=30)

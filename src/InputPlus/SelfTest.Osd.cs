@@ -1,0 +1,1337 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows.Media;
+using InputPlus.Core;
+using InputPlus.Core.Actions;
+using InputPlus.Core.Icons;
+using InputPlus.Core.Input;
+using InputPlus.Core.Interop;
+using InputPlus.Core.Qbar;
+using InputPlus.Core.Settings;
+using InputPlus.Core.Text;
+using InputPlus.Core.Update;
+using InputPlus.Core.Windows;
+
+namespace InputPlus;
+
+/// <summary>
+/// 自检：不依赖界面，验证核心逻辑。
+/// 用 `InputPlus.exe --selftest` 运行，退出码 0 表示全部通过。
+/// </summary>
+public static partial class SelfTest
+{
+
+    /* 亮度横条（OSD）、音量、提示气泡。
+     * 与 SelfTest.cs 同属 partial 类，只按业务域分文件。 */
+
+    /// <summary>
+    /// 音量：这次把「模拟媒体键」换成了 Core Audio（IAudioEndpointVolume）。
+    ///
+    /// 分两层验：
+    ///   ① 纯换算（夹取、浮点→百分比）—— 不需要声卡，任何机器都能断言；
+    ///   ② 真实读写 —— 这台机器有播放设备时，写一个值、回读、再还原。
+    ///
+    /// ② 必须做，否则"接口写错了但编译通过"这种问题只能等用户发现：
+    /// COM 接口的方法顺序错位不会报编译错，表现是调用失败或写进乱七八糟的值。
+    /// 过程中先静音，避免自检把音量推到 70% 时突然出声。
+    /// </summary>
+    private static void TestVolumeCore()
+    {
+        // ---------- ① 边界换算 ----------
+        CheckEqual("音量 50+5 → 55", Core.Windows.VolumeService.TargetPercent(50, 5), 55);
+        CheckEqual("音量 98+5 → 封顶 100", Core.Windows.VolumeService.TargetPercent(98, 5), 100);
+        CheckEqual("音量 2-5 → 保底 0", Core.Windows.VolumeService.TargetPercent(2, -5), 0);
+        CheckEqual("音量 100+5 → 仍是 100", Core.Windows.VolumeService.TargetPercent(100, 5), 100);
+        CheckEqual("音量 0-5 → 仍是 0", Core.Windows.VolumeService.TargetPercent(0, -5), 0);
+
+        CheckEqual("0.65 → 65%", Core.Windows.VolumeService.ToPercent(0.65f), 65);
+        CheckEqual("0.6499999 → 65%（不能舍成 64）", Core.Windows.VolumeService.ToPercent(0.6499999f), 65);
+        CheckEqual("1.0 → 100%", Core.Windows.VolumeService.ToPercent(1f), 100);
+        CheckEqual("0 → 0%", Core.Windows.VolumeService.ToPercent(0f), 0);
+
+        // ---------- ② 真实读写 + 还原 ----------
+        int? before = Core.Windows.VolumeService.Get();
+        if (before == null)
+        {
+            Check("（环境限制）没有可用的播放设备，跳过真实音量读写", true);
+            return;
+        }
+
+        bool? muteBefore = Core.Windows.VolumeService.GetMute();
+        try
+        {
+            Core.Windows.VolumeService.SetMute(true);   // 测试期间不出声
+
+            int target = before.Value >= 50 ? 30 : 70;
+            bool written = Core.Windows.VolumeService.Set(target);
+            Check($"音量能写入 {target}%", written);
+            if (written)
+            {
+                int after = Core.Windows.VolumeService.Get() ?? -1;
+                /* 允许 ±1：声卡会把 0.30 量化成最接近的一档，
+                 * 0~100 的整数百分比回读通常精确，少数驱动有 1% 偏差。 */
+                Check($"回读音量 ≈ {target}%（实际 {after}%）", Math.Abs(after - target) <= 1,
+                    $"before={before}, after={after}");
+
+                int? stepped = Core.Windows.VolumeService.Step(5);
+                Check("音量 +5 有回读值", stepped != null, $"stepped={stepped}");
+                CheckEqual("Step 返回的就是当前值", stepped ?? -1,
+                    Core.Windows.VolumeService.Get() ?? -1);
+
+                // 再减回去，确认双向都通
+                int? back = Core.Windows.VolumeService.Step(-5);
+                Check("音量 -5 有回读值", back != null, $"back={back}");
+            }
+
+            if (muteBefore != null)
+            {
+                Core.Windows.VolumeService.SetMute(!muteBefore.Value);
+                Check("静音状态可切换", Core.Windows.VolumeService.GetMute() == !muteBefore.Value);
+            }
+        }
+        finally
+        {
+            Core.Windows.VolumeService.Set(before.Value);
+            if (muteBefore != null) Core.Windows.VolumeService.SetMute(muteBefore.Value);
+        }
+
+        CheckEqual("音量已还原", Core.Windows.VolumeService.Get() ?? -1, before.Value);
+
+        // ---------- ③ 动作表归位 ----------
+        var settings = DefaultSettings.Create();
+        var ctx = new Core.Actions.ActionContext
+        {
+            Settings = () => settings,
+            Clipboard = new Core.Actions.ClipboardService(),
+            Windows = new Core.Actions.WindowActions(),
+            WindowBindings = new WindowBindingService(),
+            Mouse = new Core.Actions.MouseService(),
+            Notify = _ => { },
+        };
+        var cat = Core.Actions.ActionCatalog.Create(ctx);
+
+        foreach (string id in new[] { "volumeUp", "volumeDown", "volumeMute" })
+        {
+            var it = cat.Items.FirstOrDefault(i => i.Id == id);
+            Check($"动作 {id} 在「系统功能」", it?.Category == "系统功能",
+                string.Join(",", cat.Items.Where(i => i.Category == "系统功能").Select(i => i.Id)));
+            Check($"动作 {id} 不需要参数", it?.NeedsArg != true);
+        }
+
+        // 音量动作不能再退回"模拟媒体键"：那是这次要修的根因
+        var up = cat.Items.FirstOrDefault(i => i.Id == "volumeUp");
+        var down = cat.Items.FirstOrDefault(i => i.Id == "volumeDown");
+        Check("音量动作走 Core Audio（描述里写的是系统音量）",
+            up?.Description.Contains("系统音量") == true &&
+            down?.Description.Contains("系统音量") == true,
+            $"up={up?.Description} / down={down?.Description}");
+    }
+
+    /// <summary>
+    /// 亮度：WMI 与 DDC/CI 两套量程换算。
+    ///
+    /// 不在这里做真实写入 —— 写亮度会让屏幕闪一下，而自检要跑一千多条断言，
+    /// 中间闪屏非常打扰。读取是只读的，只报一句当前通道。
+    /// </summary>
+    /// <summary>
+    /// 提示消息必须「新的立刻覆盖旧的」。
+    ///
+    /// 这条直接决定手感：连按十个键时，如果每条消息都排一次调度、
+    /// 界面线程忙完依次播一遍，用户看到的就是十几次闪烁加一条过时内容 ——
+    /// 也就是用户说的"提示太慢，跟不上按键"。
+    ///
+    /// 槽位只保留最后一条、调度只安排一次，中间的自动作废。
+    /// </summary>
+    private static void TestToastCoalescing()
+    {
+        var q = new UI.Windows.ToastQueue();
+
+        Check("第一条需要安排刷新", q.Post("第一条", "info"));
+        Check("第二条不必再安排（已有安排会来取最新值）", !q.Post("第二条", "info"));
+        Check("第三条同样不必", !q.Post("第三条", "feedback"));
+
+        var got = q.Take();
+        CheckEqual("取到的是最后一条", got?.Text, "第三条");
+        CheckEqual("样式跟着最后一条走", got?.Kind, "feedback");
+        Check("取完之后槽里是空的", q.Take() == null);
+
+        Check("取空后能重新开始新一轮", q.Post("第四条", "info"));
+        CheckEqual("新一轮取到第四条", q.Take()?.Text, "第四条");
+    }
+
+    /// <summary>
+    /// 亮度横条必须**永远在最上层**（用户报：按亮度键，横条被任务栏挡住）。
+    ///
+    /// 这个 bug 的本质不是"没提置顶"—— 旧实现每 200~320ms 就发一次
+    /// <c>SetWindowPos(HWND_TOPMOST)</c>，但那个参数只保证"在所有非 topmost
+    /// 窗口之上"；任务栏顶上来之后，连发一秒 Z 序纹丝不动。
+    /// 真正能上去的是 <c>HWND_TOP</c>（见 OsdWindow.RaiseInsertAfterForTest）。
+    ///
+    /// 为什么这里只断言"用哪两个参数、什么顺序"，而不是真的把任务栏压上来再抢：
+    /// 试过三种造场景的办法，全都会**假通过** ——
+    ///   · 把真任务栏顶到最前：外壳会自己把它沉回去，几毫秒就不成立了；
+    ///   · 拿我们自己的 topmost 窗口当假想敌：普通 topmost 窗口和任务栏
+    ///     不在同一层，旧代码（只发 HWND_TOPMOST）也能抢回来；
+    ///   · 把横条摆到屏幕外：Z 序表现和真实位置不同。
+    /// 一条测试要能"改回旧代码就变红"才有意义，所以这里守 API 用法，
+    /// 行为验证交给端到端脚本 tools/test_osd_topmost.py（真任务栏，修前红、修后绿）。
+    ///
+    /// 变异验证：把两步砍成一步 HWND_TOPMOST → 本用例立刻红。
+    /// </summary>
+    private static void TestOsdAlwaysOnTop()
+    {
+        var steps = UI.Windows.OsdWindow.RaiseInsertAfterForTest;
+
+        Check("重提升分两步（先保样式、再顶到最前）", steps.Length == 2, $"步数={steps.Length}");
+        Check("第一步是 HWND_TOPMOST（保住 topmost 样式）",
+            steps.Length > 0 && steps[0] == NativeMethods.HWND_TOPMOST);
+        Check("最后一步是 HWND_TOP（抢到任务栏之上）",
+            steps.Length > 0 && steps[^1] == NativeMethods.HWND_TOP,
+            "HWND_TOPMOST 在已经 topmost 的窗口之间不改次序，顶不过任务栏");
+
+        // 顺带守住这两件事：重提升不能挪动/改变横条尺寸
+        Check("重提升带 NOMOVE|NOSIZE 以外的窗口标志不会被误加",
+            (NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE) != 0);
+    }
+
+    /// <summary>
+    /// 亮度横条必须能压在**开始菜单**之上（用户报：开始菜单一打开就把横条盖住）。
+    ///
+    /// 根因是窗口带（band），不是置顶参数：开始菜单/搜索在 band 6，
+    /// 任务栏和普通窗口都在 band 1，而 SetWindowPos 只能在 band 1 里调次序。
+    /// 唯一不需要 UIAccess 签名的出路是用 CreateWindowInBand 在创建时进 band 16。
+    ///
+    /// 这里守四件事：
+    ///   1. 常量关系对（16 > 6）—— 防止有人"顺手"把高带值改小；
+    ///   2. 真能创建（本机允许才通过，不允许就是回退，不算失败但要报出来）；
+    ///   3. 请求 band 6 必须被拒 —— 这条反过来证明"权限模型没变"，
+    ///      也证明测试用的 API 真的在起作用（不是随便传什么都成功）；
+    ///   4. 渲染出来的位图尺寸/透明度正确（四角透明、中心不透明）。
+    ///
+    /// 行为验证（真开开始菜单看像素）在 tools/test_osd_start_menu.py。
+    /// </summary>
+    private static void TestOsdAboveShellMenu()
+    {
+        Check("高带值高于开始菜单的 band（16 > 6）",
+            NativeMethods.ZBID_ABOVE_SHELL > NativeMethods.ZBID_IMMERSIVE_INACTIVEMOBODY,
+            $"{NativeMethods.ZBID_ABOVE_SHELL} vs {NativeMethods.ZBID_IMMERSIVE_INACTIVEMOBODY}");
+
+        Check("高带值不是 UIACCESS（那条路要签名，普通进程走不通）",
+            NativeMethods.ZBID_ABOVE_SHELL != NativeMethods.ZBID_UIACCESS);
+
+        // 真正建一个宿主，确认落在 band 16
+        var surface = Core.Windows.OsdBandSurface.TryCreate(
+            NativeMethods.ZBID_ABOVE_SHELL, out string createError);
+
+        Check("能以 band 16 创建横条宿主", surface != null, createError);
+        if (surface != null)
+        {
+            CheckEqual("宿主实际落在 band 16", surface.BandForTest, 16u);
+
+            // 点击穿透 + 不抢焦点 + 不进 Alt+Tab：缺一个就会影响用户正在做的事
+            int ex = NativeMethods.GetWindowLong(surface.Handle, NativeMethods.GWL_EXSTYLE);
+            Check("宿主带 WS_EX_LAYERED（UpdateLayeredWindow 需要）",
+                (ex & NativeMethods.WS_EX_LAYERED) != 0, $"ex=0x{ex:X8}");
+            Check("宿主带 WS_EX_TRANSPARENT（点击穿透）",
+                (ex & NativeMethods.WS_EX_TRANSPARENT) != 0, $"ex=0x{ex:X8}");
+            Check("宿主带 WS_EX_NOACTIVATE（不抢焦点）",
+                (ex & NativeMethods.WS_EX_NOACTIVATE) != 0, $"ex=0x{ex:X8}");
+            Check("宿主带 WS_EX_TOOLWINDOW（不进 Alt+Tab）",
+                (ex & NativeMethods.WS_EX_TOOLWINDOW) != 0, $"ex=0x{ex:X8}");
+
+            surface.Dispose();
+        }
+
+        /* 反向用例：band 6 是外壳的带，普通进程没有权限。
+         * 如果这条突然"通过"了，说明权限模型变了 —— 那我们的
+         * "16 是可选上限"的判断也就不可信了，必须重新量。 */
+        var denied = Core.Windows.OsdBandSurface.TryCreate(
+            NativeMethods.ZBID_IMMERSIVE_INACTIVEMOBODY, out string deniedError);
+        Check("请求 band 6 被拒绝（权限模型没变）", denied == null,
+            "竟然创建成功了，需要重新确认 band 允许范围");
+        Check("被拒时给出原因（便于日志排查）",
+            !string.IsNullOrWhiteSpace(deniedError), deniedError);
+        denied?.Dispose();
+
+        // 实际横条用的就是这条路
+        var osd = UI.Windows.OsdWindow.CreateDetached();
+        Check("横条默认走高带路径（不是回退到 WPF 窗口）",
+            osd.UsesBandSurfaceForTest, "回退到了 WPF 窗口，开始菜单会盖住它");
+        CheckEqual("横条宿主的 band", osd.BandForTest, 16u);
+
+        /* 渲染：200% 下卡片是 216×71 DIP → 432×142 像素；
+         * 四角必须透明（圆角+阴影留白），中心必须不透明（卡片）。
+         * 这条能挡住"忘了设 dpi"（位图尺寸对但内容只有一半大）
+         * 和"位图全透明"（窗口在，但什么都看不见）。 */
+        var bmp = osd.RenderForTest(60, 2.0);
+        CheckEqual("位图宽度 = 216×缩放", bmp.PixelWidth, 432);
+        CheckEqual("位图高度 = 71×缩放", bmp.PixelHeight, 142);
+
+        if (bmp.PixelWidth == 432 && bmp.PixelHeight == 142)
+        {
+            int stride = bmp.PixelWidth * 4;
+            var pixels = new byte[stride * bmp.PixelHeight];
+            bmp.CopyPixels(pixels, stride, 0);
+
+            byte AlphaAt(int x, int y) => pixels[y * stride + x * 4 + 3];
+
+            Check("位图左上角透明（阴影/圆角留白）", AlphaAt(2, 2) < 16,
+                $"alpha={AlphaAt(2, 2)}");
+            Check("位图中心不透明（卡片本体）", AlphaAt(216, 71) > 200,
+                $"alpha={AlphaAt(216, 71)}");
+            Check("位图右侧留白也透明", AlphaAt(429, 71) < 16,
+                $"alpha={AlphaAt(429, 71)}");
+        }
+
+        osd.CloseForTest();
+        DoEvents(60);
+    }
+
+    /// <summary>
+    /// Z 序里 <paramref name="a"/> 是否压在 <paramref name="b"/> 之上。
+    ///
+    /// 用 EnumWindows 的**相对位次**（谁的数字小谁在上面）：只要两个窗口都在
+    /// 列表里，它们之间相对次序是稳定的，别的窗口开关只会让两个数字一起平移。
+    /// （别写成"让一个窗口自己抢回来"那种需要窗口自己不动的判断 —— 之前用
+    /// GetTopWindow+GW_HWNDNEXT 走链，两个方向都返回 true，白测。）
+    /// </summary>
+    private static bool IsAboveInZOrder(IntPtr a, IntPtr b)
+    {
+        int ia = ZOrderIndex(a), ib = ZOrderIndex(b);
+        return ia >= 0 && ib >= 0 && ia < ib;
+    }
+
+    /// <summary>当前 Z 序里的位次（0 = 最上）。找不到返回 -1。</summary>
+    private static int ZOrderIndex(IntPtr target)
+    {
+        int index = -1;
+        int i = 0;
+        NativeMethods.EnumWindows((h, _) =>
+        {
+            if (h == target) index = i;
+            i++;
+            return true;
+        }, IntPtr.Zero);
+        return index;
+    }
+
+    /// <summary>
+    /// 亮度横条上的太阳图标：自绘，**几何照 Windows 11 原版**（Segoe Fluent Icons E706）。
+    ///
+    /// 这块改了三回，教训一句话：原版是「**空心圆环 + 8 根离环 2 DIP 的胶囊射线**」，
+    /// 不是「实心圆盘 + 贴着圆的线」。v4.5.24 把圆画成实心盘、射线内端插进圆里
+    /// （半径 − 0.1，靠圆盖住接缝），结果圆和线连成一整块黑饼 —— 用户原话
+    /// "黏连、不美观，比之前更差"。
+    ///
+    /// 这里守七件事：
+    ///   1. 结构：环是**描边**（Fill 为空）+ 8 根射线，单色、无光晕；
+    ///   2. **环线分离**：间隙恒等于原版的 2.0 DIP，五档亮度下不变（本次的核心）；
+    ///   3. 环尺寸恒定且等于原版（墨迹外径 8.0 / 内径 6.0），不随亮度变；
+    ///   4. 射线内端恒定、外端线性伸缩、单调（诉求①允许动的部分）；
+    ///   5. 满档墨迹 16 DIP（诉求②的放大；原版 12）；
+    ///   6. 旋转角 = 360°×进度，线性且确定（诉求③ + 两个宿主同帧）；
+    ///   7. 墨迹中心 20.0 DIP、垂直居中、不越槽。
+    /// </summary>
+    private static void TestOsdIconFollowsBrightness()
+    {
+        var app = System.Windows.Application.Current;
+        if (app == null)
+        {
+            Check("太阳图标随亮度联动（无 Application，跳过）", true);
+            return;
+        }
+
+        var card = new UI.Windows.OsdCard();
+
+        var white = System.Windows.Media.Color.FromRgb(0xFF, 0xFF, 0xFF);
+        var darkCard = System.Windows.Media.Color.FromRgb(0x2D, 0x2D, 0x2D);
+        var accent = System.Windows.Media.Color.FromRgb(0x4C, 0xC2, 0xFF);
+        card.SetPalette(darkCard, white, white, accent);
+
+        /* ---- 1. 结构：描边圆环 + 8 根射线，单色、无光晕 ---- */
+        CheckEqual("太阳由 8 根放射线组成", card.SunRayCountForTest,
+            Core.Windows.OsdPlacement.SunRayCount);
+        Check("8 根手绘放射线都在位", card.HasSunRaysForTest);
+        Check("图标里没有光晕/模糊元素", !card.HasSoftGlowForTest, "出现了 Effect");
+        Check("中心是描边圆环，不是实心圆盘（Fill 为空）",
+            card.SunRingIsStrokeOnlyForTest,
+            "Fill 不为空 → 又退回实心饼，圆和线必然黏连");
+
+        int[] steps = { 0, 25, 50, 75, 100 };
+        var ringOuter = new double[steps.Length];
+        var ringInner = new double[steps.Length];
+        var rayInner = new double[steps.Length];
+        var gap = new double[steps.Length];
+        var reach = new double[steps.Length];
+        var angle = new double[steps.Length];
+        var ink = new double[steps.Length];
+
+        for (int i = 0; i < steps.Length; i++)
+        {
+            card.SetPercent(steps[i]);
+            ringOuter[i] = card.SunRingOuterDipForTest;
+            ringInner[i] = card.SunRingInnerDipForTest;
+            rayInner[i] = card.SunRayInnerEdgeForTest;
+            gap[i] = card.SunGapForTest;
+            reach[i] = card.SunRayReachForTest;
+            angle[i] = card.SunSpinAngleForTest;
+            ink[i] = card.SunInkDipForTest;
+        }
+
+        /* ---- 2. 环线分离：间隙恒定 2.0 DIP（本次核心诉求）---- */
+        double gapDip = Core.Windows.OsdPlacement.SunGapDip;
+        Check($"原版间隙是射线内端 6.0 − 环外半径 4.0 = {gapDip:F1} DIP",
+            Math.Abs(gapDip - 2.0) < 1e-6, $"gap={gapDip:F3}");
+
+        for (int i = 0; i < steps.Length; i++)
+        {
+            Check($"{steps[i]}% 时环与射线之间仍留 {gapDip:F1} DIP 空隙（不黏连）",
+                Math.Abs(gap[i] - gapDip) < 1e-6, $"gap={gap[i]:F3}");
+        }
+
+        Check("任何亮度下间隙都不会闭合（最小 ≥ 1.5 DIP）",
+            gap.Min() >= 1.5, $"min={gap.Min():F3} DIP");
+        Check("间隙随亮度完全不变（射线只在外端伸缩）",
+            gap.Max() - gap.Min() < 1e-9, $"Δ={gap.Max() - gap.Min():F9}");
+
+        /* ---- 3. 圆环：尺寸恒定且等于原版 ---- */
+        double ringOuterExp = Core.Windows.OsdPlacement.SunRingOuterDip;
+        double ringInnerExp = Core.Windows.OsdPlacement.SunRingOuterDip
+                            - Core.Windows.OsdPlacement.SunRingStrokeDip * 2;
+        for (int i = 0; i < steps.Length; i++)
+        {
+            Check($"{steps[i]}% 时圆环墨迹外径恒为 {ringOuterExp:F1} DIP（原版比例，不随亮度缩放）",
+                Math.Abs(ringOuter[i] - ringOuterExp) < 1e-6, $"outer={ringOuter[i]:F3}");
+            Check($"{steps[i]}% 时圆环墨迹内径恒为 {ringInnerExp:F1} DIP",
+                Math.Abs(ringInner[i] - ringInnerExp) < 1e-6, $"inner={ringInner[i]:F3}");
+        }
+
+        Check($"圆环线宽 {Core.Windows.OsdPlacement.SunRingStrokeDip:F1} DIP（200% 下 2 px，实心不糊）",
+            Math.Abs(Core.Windows.OsdPlacement.SunRingStrokeDip - 1.0) < 1e-6);
+
+        /* ---- 4. 射线：内端恒定、外端线性伸缩、单调 ---- */
+        double rayInnerExp = Core.Windows.OsdPlacement.SunRayInnerDip;
+        for (int i = 0; i < steps.Length; i++)
+        {
+            Check($"{steps[i]}% 时射线内端恒定在 {rayInnerExp:F1} DIP",
+                Math.Abs(rayInner[i] - rayInnerExp) < 1e-6, $"inner={rayInner[i]:F3}");
+        }
+
+        double reachMin = Core.Windows.OsdPlacement.SunRayOuterMinDip;
+        double reachMax = Core.Windows.OsdPlacement.SunRayOuterMaxDip;
+        Check($"0% 时射线外端最短（{reachMin:F2} DIP，仍在外圈，不会缩回环里）",
+            Math.Abs(reach[0] - reachMin) < 1e-6, $"reach={reach[0]:F3}");
+        Check($"100% 时射线外端最长（{reachMax:F2} DIP，等于原版满档）",
+            Math.Abs(reach[^1] - reachMax) < 1e-6, $"reach={reach[^1]:F3}");
+        Check("0% 的外端也在环外面（射线不会捅进圆环）",
+            reach[0] > ringOuterExp / 2 + 1.0, $"reach={reach[0]:F2} 环半径={ringOuterExp / 2:F2}");
+
+        for (int i = 0; i < steps.Length; i++)
+        {
+            double s = steps[i] / 100.0;
+            double expect = reachMin + (reachMax - reachMin) * s;
+            Check($"{steps[i]}% 的射线外端落在线性上",
+                Math.Abs(reach[i] - expect) < 1e-6, $"{reach[i]:F6} vs {expect:F6}");
+        }
+
+        bool monotonic = true;
+        for (int i = 1; i < steps.Length; i++)
+            if (reach[i] <= reach[i - 1]) monotonic = false;
+        Check("0→100% 射线只变长不变短（不会中途回落）", monotonic);
+
+        /* ---- 5. 满档墨迹 = 16 DIP（原版 12 的 4/3 倍）---- */
+        Check($"100% 时墨迹 {ink[^1]:F1} DIP（原版 12，用户要求放大 1/3）",
+            Math.Abs(ink[^1] - 16.0) < 1e-6, $"ink={ink[^1]:F2}");
+        Check($"0% 时墨迹 {ink[0]:F1} DIP（收得克制，不靠缩水撑动感）",
+            ink[0] > 14.0, $"ink={ink[0]:F2}");
+        Check("满档墨迹不超出图标槽（右缘不进间距区，进度条起点不抖）",
+            ink[^1] <= Core.Windows.OsdPlacement.IconSlotDip + 1e-6,
+            $"ink={ink[^1]:F2} slot={Core.Windows.OsdPlacement.IconSlotDip}");
+
+        /* ---- 5. 旋转 = 360°×进度，线性且确定（诉求③）---- */
+        double twist = Core.Windows.OsdPlacement.SunTwistDeg;
+        for (int i = 0; i < steps.Length; i++)
+        {
+            double s = steps[i] / 100.0;
+            Check($"{steps[i]}% 时旋转 {twist * s:F0}°（= 360°×进度）",
+                Math.Abs(angle[i] - twist * s) < 1e-6, $"angle={angle[i]:F3}");
+        }
+
+        // 转速与亮度变化量成正比：±10% → ∓36°
+        card.SetPercent(50);
+        double a50 = card.SunSpinAngleForTest;
+        card.SetPercent(60);
+        Check("亮度 +10% 旋转 +36°（变化越多转得越多）",
+            Math.Abs(card.SunSpinAngleForTest - a50 - 36.0) < 1e-6,
+            $"Δangle={card.SunSpinAngleForTest - a50:F3}");
+        card.SetPercent(40);
+        Check("亮度 −10% 旋转 −36°（反向等量，来回对称）",
+            Math.Abs(card.SunSpinAngleForTest - a50 + 36.0) < 1e-6,
+            $"Δangle={card.SunSpinAngleForTest - a50:F3}");
+
+        /* 确定性：同一进度两次进卡，线长与角度必须分毫不差。
+         * band 16 的离屏位图和 WPF 窗口是**两个卡片实例**，
+         * 靠这份纯函数关系保证同一进度画出同一帧（位图缓存才不会错）。 */
+        card.SetPercent(63);
+        var first = (card.SunRayReachForTest, card.SunSpinAngleForTest);
+        card.SetPercent(20);
+        card.SetPercent(63);
+        var again = (card.SunRayReachForTest, card.SunSpinAngleForTest);
+        Check("同一进度画出同一帧（两个宿主不会长歪）",
+            Math.Abs(first.Item1 - again.Item1) < 1e-9
+            && Math.Abs(first.Item2 - again.Item2) < 1e-9,
+            $"{first} vs {again}");
+
+        /* ---- 6. 墨迹居中、版式不动 ---- */
+        card.SetPercent(100);       // 前面几步把卡片停在 63%，这里回到满档再量墨迹
+        var (inkL, inkT, inkW, inkH) = card.IconInkForTest();
+        double slotLeft = Core.Windows.OsdPlacement.IconLeftDip;
+        double slotW = Core.Windows.OsdPlacement.IconSlotDip;
+        Check($"100% 时墨迹铺满槽（左边缘 {slotLeft:F2} DIP）",
+            Math.Abs(inkL - slotLeft) < 1e-6 && Math.Abs(inkW - slotW) < 1e-6,
+            $"left={inkL:F2} w={inkW:F2}");
+        Check("图标墨迹中心恒定（20.0 DIP = 系统那条图标墨迹的中心）",
+            Math.Abs(inkL + inkW / 2 - 20.0) < 1e-6, $"{inkL + inkW / 2:F2}");
+        Check("图标在卡片里垂直居中（47 高的卡片，墨迹中心 23.5）",
+            Math.Abs(inkT + inkH / 2 - 47.0 / 2) < 1e-6,
+            $"center={inkT + inkH / 2:F2}");
+        Check("墨迹右缘不越过槽右边（进度条起点 42.0 不受亮度影响）",
+            inkL + inkW <= slotLeft + slotW + 1e-6, $"right={inkL + inkW:F2}");
+
+        // 单色：浅色主题下放射线与圆芯都跟随文字色变黑
+        var black = System.Windows.Media.Color.FromRgb(0x00, 0x00, 0x00);
+        card.SetPalette(darkCard, black, black, accent);
+        card.SetPercent(100);
+        var brush = card.IconBrushForTest as SolidColorBrush;
+        Check("浅色主题下太阳跟着文字变黑（单色、无色相）",
+            brush != null && brush.Color.R == 0 && brush.Color.G == 0 && brush.Color.B == 0,
+            brush == null ? "画刷类型不是纯色" : "颜色不是黑");
+    }
+
+    /// <summary>
+    /// 太阳图标的明暗变化要有补间，不能一帧跳到位。
+    ///
+    /// 两条宿主都得动起来，而且方式不一样：
+    ///   · WPF 窗口路径 —— 改属性 WPF 自己重绘，不需要额外动作；
+    ///   · band 16 路径 —— 显示的是位图**快照**，属性变了没人看，
+    ///     必须每帧重渲染再 UpdateLayeredWindow 贴一次。
+    ///     后者最容易在重构时被漏掉，所以专门用重贴计数守它。
+    /// </summary>
+    private static void TestOsdIconAnimates()
+    {
+        var app = System.Windows.Application.Current;
+        if (app == null)
+        {
+            Check("太阳图标补间（无 Application，跳过）", true);
+            return;
+        }
+
+        var osd = UI.Windows.OsdWindow.CreateDetached();
+        try
+        {
+            osd.PrepareForRender(10);
+            Check("离屏渲染时补间立即收尾（截图拿到的是 10% 终值）",
+                Math.Abs(osd.IconProgressForTest - 0.10) < 1e-6,
+                $"p={osd.IconProgressForTest:F3}");
+
+            int repaintsBefore = osd.IconRepaintsForTest;
+            osd.ShowForTest(100);
+
+            // 刚起步：还停在出发位置 —— 一帧到位的话这里就已经是 1.0 了
+            Check("补间从当前值起步（不是一帧跳到终点）",
+                osd.IconProgressForTest < 0.5, $"p={osd.IconProgressForTest:F3}");
+            Check("补间定时器已启动", osd.IconTimerRunningForTest);
+
+            bool sawMiddle = false;
+            bool reachedEnd = false;
+            bool angleTracks = true;      // 旋转角必须始终 = 360°×进度
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (clock.ElapsedMilliseconds < 800)
+            {
+                DoEvents(16);
+                double p = osd.IconProgressForTest;
+                if (p > 0.15 && p < 0.97) sawMiddle = true;
+                if (Math.Abs(p - 1.0) < 1e-6 && !osd.IconTimerRunningForTest)
+                {
+                    reachedEnd = true;
+                    break;
+                }
+                /* 边伸缩边旋转：每一帧的旋转角都由当帧进度算出。
+                 * 这条守住"转速与亮度变化速度联动"的实现方式 ——
+                 * 角度一旦和进度脱节（比如用了独立定时器），这里就红。 */
+                if (Math.Abs(osd.SunSpinAngleForTest
+                             - Core.Windows.OsdPlacement.SunTwistDeg * p) > 1e-6)
+                    angleTracks = false;
+            }
+
+            /* 采样可能因为机器卡一下而错过中间值（实测偶发）：
+             * 这时用"重绘次数"兜底判断——补间至少会画好几帧，一帧到位只会画一次。 */
+            int repaints = osd.IconRepaintsForTest - repaintsBefore;
+            Check("补间过程中取到过中间帧（是补间，不是瞬变）", sawMiddle || repaints >= 3,
+                $"sawMiddle={sawMiddle} repaints={repaints} p={osd.IconProgressForTest:F3}");
+            Check("补间最终停在 100%", reachedEnd, $"p={osd.IconProgressForTest:F3}");
+            Check("补间中放射线边变长边旋转（角度始终 = 360°×进度）", angleTracks,
+                $"p={osd.IconProgressForTest:F3} angle={osd.SunSpinAngleForTest:F2}");
+            Check("band 路径每帧都重贴了位图（不是只贴一次）",
+                osd.IconRepaintsForTest - repaintsBefore >= 3,
+                $"重贴 {osd.IconRepaintsForTest - repaintsBefore} 次");
+
+            // 反向：往回降同样要有过渡
+            osd.ShowForTest(10);
+            Check("往回降也从当前值起步", osd.IconProgressForTest > 0.5,
+                $"p={osd.IconProgressForTest:F3}");
+
+            DoEvents(400);
+            Check("往回降最终停在 10%",
+                Math.Abs(osd.IconProgressForTest - 0.10) < 1e-6,
+                $"p={osd.IconProgressForTest:F3}");
+
+            /* 连按：长按亮度键时 Apply 每几十毫秒就来一次。
+             * 每次都必须从"当前已经画到的位置"接着走（否则会跳），
+             * 而且**只能有一个定时器在跑** —— 叠加起来会互相打架、
+             * 停不下来，最后卡在某个中间值。 */
+            osd.ShowForTest(20);
+            DoEvents(40);
+            osd.ShowForTest(40);
+            DoEvents(40);
+            osd.ShowForTest(60);
+
+            bool converged = false;
+            var clock2 = System.Diagnostics.Stopwatch.StartNew();
+            while (clock2.ElapsedMilliseconds < 900)
+            {
+                DoEvents(16);
+                if (Math.Abs(osd.IconProgressForTest - 0.60) < 1e-6
+                    && !osd.IconTimerRunningForTest)
+                {
+                    converged = true;
+                    break;
+                }
+            }
+            Check("连按时最终追到最后一档（60%）", converged,
+                $"p={osd.IconProgressForTest:F3} running={osd.IconTimerRunningForTest}");
+        }
+        finally
+        {
+            osd.CloseForTest();
+            DoEvents(80);
+        }
+    }
+
+    /// <summary>
+    /// 横条在**任意一台电脑**上都要长得一样：分辨率、缩放都换了，观感不能变。
+    ///
+    /// 这里穷举常见"分辨率 × 缩放"组合，直接跑纯函数
+    /// <see cref="Core.Windows.OsdPlacement.Compute"/>（不碰窗口），断言四件事：
+    ///   1. **尺寸**按目标显示器缩放换算：物理像素 = DIP × 缩放；
+    ///   2. **位置**是工作区的相对关系：水平居中 + 下沿离工作区底 14 DIP；
+    ///   3. 卡片永远是 4:1，不会因为缩放被拉变形；
+    ///   4. 永远落在工作区内（含负坐标的副屏）。
+    ///
+    /// ⚠ 注意：卡片**不随分辨率变大**，只随缩放变大 —— 这正是系统音量条的
+    /// 行为（它固定 192×48 DIP）。按屏幕百分比做会让 4K 上大得离谱、
+    /// 1366×768 上小到看不清，反而和系统对不上。
+    /// </summary>
+    private static void TestOsdScalesAcrossDisplays()
+    {
+        // 工作区一栏是**物理像素**（缩放不改变物理像素，只改变 1 DIP 等于几像素）
+        var cases = new (string Name, int Left, int Top, int W, int H, double Scale)[]
+        {
+            ("1366×768 @100%",    0,     0, 1366, 728,  1.00),
+            ("1920×1080 @100%",   0,     0, 1920, 1040, 1.00),
+            ("1920×1080 @125%",   0,     0, 1920, 1040, 1.25),
+            ("2560×1440 @150%",   0,     0, 2560, 1400, 1.50),
+            ("2880×1800 @200%",   0,     0, 2880, 1760, 2.00),
+            ("3840×2160 @200%",   0,     0, 3840, 2120, 2.00),
+            ("3840×2160 @150%",   0,     0, 3840, 2120, 1.50),
+            ("副屏 −2560 起 @150%", -2560, -200, 2560, 1400, 1.50),
+        };
+
+        foreach (var c in cases)
+        {
+            int right = c.Left + c.W;
+            int bottom = c.Top + c.H;
+            var r = Core.Windows.OsdPlacement.Compute(c.Left, c.Top, right, bottom, c.Scale);
+
+            double s = c.Scale;
+            int expWinW = (int)Math.Round(216 * s);
+            int expWinH = (int)Math.Round(71 * s);
+
+            Check($"{c.Name}：窗口宽按缩放换算", Math.Abs(r.Width - expWinW) <= 1,
+                $"{r.Width} vs {expWinW}");
+            Check($"{c.Name}：窗口高按缩放换算", Math.Abs(r.Height - expWinH) <= 1,
+                $"{r.Height} vs {expWinH}");
+
+            var (cw, ch) = Core.Windows.OsdPlacement.CardSizeForTest(r);
+            Check($"{c.Name}：卡片宽 = 192 × 缩放",
+                Math.Abs(cw - 192 * s) <= 1, $"{cw} vs {192 * s}");
+            Check($"{c.Name}：卡片高 = 47 × 缩放",
+                Math.Abs(ch - 47 * s) <= 1, $"{ch} vs {47 * s}");
+
+            Check($"{c.Name}：卡片长宽比仍是 192:47（与系统一致）",
+                Math.Abs((double)cw / ch - 192.0 / 47.0) < 0.06, $"{cw}x{ch}");
+
+            // 水平居中（相对工作区，不是相对 (0,0)）
+            double cx = r.X + r.Width / 2.0;
+            Check($"{c.Name}：水平居中", Math.Abs(cx - (c.Left + c.W / 2.0)) <= 1.0,
+                $"cx={cx} 期望={(c.Left + c.W / 2.0)}");
+
+            // 卡片下沿离工作区底边 = 14 DIP（换算成像素）
+            int cardBottom = r.Y + (int)Math.Round(59 * s);   // 12 阴影 + 47 卡片
+            int gapPx = (int)Math.Round(14 * s);
+            Check($"{c.Name}：贴底 14 DIP", Math.Abs((bottom - cardBottom) - gapPx) <= 1,
+                $"实际底距={bottom - cardBottom} 期望={gapPx}");
+
+            // 不出工作区
+            Check($"{c.Name}：完整落在工作区内",
+                r.X >= c.Left && r.Y >= c.Top && r.Right <= right && r.Bottom <= bottom,
+                $"({r.X},{r.Y})-({r.Right},{r.Bottom}) 工作区=({c.Left},{c.Top})-({right},{bottom})");
+        }
+
+        /* 同一块屏换个缩放：物理像素尺寸必须跟着变，
+         * 而"折回 DIP"必须还是 192×47 —— 这就是跨机器一致的判据。 */
+        var at100 = Core.Windows.OsdPlacement.Compute(0, 0, 1920, 1040, 1.00);
+        var at200 = Core.Windows.OsdPlacement.Compute(0, 0, 3840, 2120, 2.00);
+        var (w100, h100) = Core.Windows.OsdPlacement.CardSizeForTest(at100);
+        var (w200, h200) = Core.Windows.OsdPlacement.CardSizeForTest(at200);
+        CheckEqual("100% 下卡片 192×47 像素", $"{w100}x{h100}", "192x47");
+        CheckEqual("200% 下卡片 384×94 像素（与系统实测一致）", $"{w200}x{h200}", "384x94");
+        Check("200% 下卡片高度是 100% 的两倍（94 = 47×2）",
+            w200 == w100 * 2 && h200 == 94, $"{w200}x{h200}");
+
+        /* 缩放值非法时要当 1.0 用，不能把横条算成 0 像素 */
+        var bad = Core.Windows.OsdPlacement.Compute(0, 0, 1920, 1040, 0);
+        Check("缩放为 0 时按 1.0 处理（不会算出空窗口）",
+            bad.Width > 0 && bad.Height > 0, $"{bad.Width}x{bad.Height}");
+
+        /* 极小屏保护：320×240 的屏上别让横条横跨大半个屏幕 */
+        var tiny = Core.Windows.OsdPlacement.Compute(0, 0, 320, 240, 1.0);
+        Check("极小屏上横条被压到工作区的 80% 以内",
+            tiny.Width <= 320 * 0.8 + 1, $"{tiny.Width}");
+
+        /* 工作区无效（离屏 / 还没拿到显示器）时返回空矩形，调用方跳过定位 */
+        var none = Core.Windows.OsdPlacement.Compute(0, 0, 0, 0, 1.0);
+        Check("工作区为空时返回空矩形", none.Width == 0 && none.Height == 0,
+            $"{none.Width}x{none.Height}");
+    }
+
+    /// <summary>
+    /// OSD（音量/亮度横条）与「输入文本」方式。
+    ///
+    /// 这两条对应两个真实问题：
+    ///   · 音量能调但不弹系统横条 —— 因为系统横条是 explorer 处理
+    ///     WM_APPCOMMAND 时画的，跟音频 API 无关；
+    ///   · 密码框打不进字 —— Unicode 注入没有扫描码，被安全输入框过滤掉。
+    /// </summary>
+    private static void TestOsdAndTextInput()
+    {
+        // ---------- OSD（自绘横条） ----------
+        CheckEqual("进度条 0% 不显示", UI.Windows.OsdWindow.ScaleForTest(0), 0.0);
+        CheckEqual("进度条 100% 满格", UI.Windows.OsdWindow.ScaleForTest(100), 1.0);
+        CheckEqual("进度条 65%", UI.Windows.OsdWindow.ScaleForTest(65), 0.65);
+        CheckEqual("进度条越界会被夹住（上）", UI.Windows.OsdWindow.ScaleForTest(180), 1.0);
+        CheckEqual("进度条越界会被夹住（下）", UI.Windows.OsdWindow.ScaleForTest(-20), 0.0);
+
+        /* 位置与尺寸：全部对齐系统横条（192×47、贴工作区底边 14 DIP）。
+         * 数字来自对系统横条的全屏截图测量，见 OsdWindow 的注释。 */
+        double ow = UI.Windows.OsdWindow.DesignWidth;
+        double oh = UI.Windows.OsdWindow.DesignHeight;
+        var wa = new System.Windows.Rect(0, 0, 1920, 1040);
+        var (osdLeft, osdTop) = UI.Windows.OsdWindow.PositionForTest(wa);
+        CheckEqual("横条水平居中", osdLeft, (1920 - (ow + 24)) / 2.0);
+        Check("横条在屏幕下半部分（不是正中）", osdTop > 1040 * 0.85, $"top={osdTop}");
+
+        /* 卡片下沿离工作区底边必须和系统一样是 14 DIP：
+         * 窗口比卡片大一圈（留给阴影），所以窗口底边不是卡片底边。 */
+        double cardBottom = osdTop + 12 + oh;
+        CheckEqual("卡片下沿贴底 14 DIP（相对工作区底边）",
+            Math.Round(1040 - cardBottom, 3), UI.Windows.OsdWindow.CardBottomGapForTest);
+
+        /* 系统音量条出现时，亮度条要再往上让一格：卡片下沿变成 14+64 DIP。 */
+        var lifted = Core.Windows.OsdPlacement.Compute(
+            0, 0, 1920, 1040, 1.0, Core.Windows.OsdPlacement.VolumeOsdLiftDip);
+        CheckEqual("音量条占位时亮度条上移 64 DIP",
+            Math.Round(osdTop - lifted.Y, 3), Core.Windows.OsdPlacement.VolumeOsdLiftDip);
+        CheckEqual("音量条占位时卡片下沿 78 DIP",
+            Math.Round(1040 - (lifted.Y + 12 + oh), 3),
+            UI.Windows.OsdWindow.CardBottomGapForTest + Core.Windows.OsdPlacement.VolumeOsdLiftDip);
+
+        /* 任务栏固定时 rcWork 已经扣掉了它（这里模拟 48 DIP 的任务栏）：
+         * 卡片同样只离**工作区**底边 14 DIP，不需要再额外让开一次。
+         * v4.5.5 之前会再减一个任务栏高度，结果比系统横条高整整一格。 */
+        var waWithBar = new System.Windows.Rect(0, 0, 1920, 1040 - 48);
+        var (_, topWithBar) = UI.Windows.OsdWindow.PositionForTest(waWithBar);
+        CheckEqual("有任务栏时也只让 14 DIP（不再重复扣任务栏）",
+            Math.Round(waWithBar.Bottom - (topWithBar + 12 + oh), 3),
+            UI.Windows.OsdWindow.CardBottomGapForTest);
+        Check("横条不会因为任务栏再抬高 48 DIP",
+            Math.Abs(topWithBar - (osdTop - 48)) < 0.001,
+            $"{topWithBar} vs {osdTop - 48}");
+
+        CheckEqual("卡片宽度与系统一致（192）", ow, 192.0);
+        CheckEqual("卡片高度与系统一致（47）", oh, 47.0);
+        Check("横条长宽比与系统一致（192 : 47 ≈ 4.085）",
+            Math.Abs(ow / oh - 192.0 / 47.0) < 0.01, $"{ow / oh:F3}");
+
+        /* 圆角也要一致。以前是 6 DIP，比系统"更方" —— 用户一眼就看出来了：
+         * 200% 缩放下差 2 DIP 只有 4 个像素，单看没感觉，并排就很明显。
+         * 定量依据（tools/measure_osd_radius.py，同一算法量两边、都从底边对齐）：
+         *   系统拟合 12.5 px；我们 6 DIP→9.75、8 DIP→13.5。
+         * 拟合值比真值恒定小约 2.4 px，反推系统 = 12.5+2.4 ≈ 15 px = 7.5 DIP；
+         * 按 7.5 复测，两边剖面逐行差 ≤ 0.1 px，拟合值同为 12.5。
+         * 所以断言 7.5，不能断 8（8 会圆过头 1 px，用户还是会看出来）。 */
+        CheckEqual("卡片圆角与系统一致（7.5 DIP）",
+            UI.Windows.OsdWindow.CardRadius, 7.5);
+        Check("圆角不超过卡片高度的一半（不会变成胶囊）",
+            UI.Windows.OsdWindow.CardRadius <= oh / 2,
+            $"{UI.Windows.OsdWindow.CardRadius} vs {oh / 2}");
+
+        /* 只断言常量不够：XAML 里还写着一个坐标值，万一有人改 XAML
+         * 而忘了 ctor 覆盖，实际渲染的就是 XAML 那个。这里查真家伙。 */
+        var osdRadius = UI.Windows.OsdWindow.CreateDetached();
+        CheckEqual("实际生效的圆角 == 常量（XAML 不会偷偷盖回去）",
+            Math.Round(osdRadius.CardRadiusForTest, 3),
+            UI.Windows.OsdWindow.CardRadius);
+        osdRadius.Close();
+        DoEvents(40);
+
+        /* 配色：两套都对齐系统（半透明材质 + 强调色进度条）。
+         * 横条跟的是 **Windows 系统主题**，不是本应用主题。 */
+        var darkPal = UI.Windows.OsdWindow.PaletteForTest(light: false);
+        var lightPal = UI.Windows.OsdWindow.PaletteForTest(light: true);
+
+        Check("夜间：卡片是深色", LuminanceOf(darkPal.Card) < 0.06,
+            $"{darkPal.Card} lum={LuminanceOf(darkPal.Card):F3}");
+        Check("夜间：图标/数字是白色（和系统一致）",
+            darkPal.Text.Equals("#FFFFFF", StringComparison.OrdinalIgnoreCase), darkPal.Text);
+        Check("日间：卡片是浅色", LuminanceOf(lightPal.Card) > 0.70,
+            $"{lightPal.Card} lum={LuminanceOf(lightPal.Card):F3}");
+        Check("日间：图标/数字是深色（和系统一致）",
+            LuminanceOf(lightPal.Text) < 0.10, $"{lightPal.Text}");
+
+        Check("夜间进度条是强调色的浅色档（蓝色系）", IsBlueish(darkPal.Fill), darkPal.Fill);
+        Check("日间进度条是强调色的深色档（蓝色系）", IsBlueish(lightPal.Fill), lightPal.Fill);
+        Check("日间/夜间是两个不同的蓝（不能共用一档）",
+            !darkPal.Fill.Equals(lightPal.Fill, StringComparison.OrdinalIgnoreCase),
+            $"dark={darkPal.Fill} light={lightPal.Fill}");
+
+        Check("夜间：文字与卡片对比 ≥ 4.5:1",
+            ContrastRatio(darkPal.Text, darkPal.Card) >= 4.5,
+            $"{ContrastRatio(darkPal.Text, darkPal.Card):F2}:1");
+        Check("日间：文字与卡片对比 ≥ 4.5:1",
+            ContrastRatio(lightPal.Text, lightPal.Card) >= 4.5,
+            $"{ContrastRatio(lightPal.Text, lightPal.Card):F2}:1");
+        Check("夜间：进度条与卡片对比 ≥ 3:1",
+            ContrastRatio(darkPal.Fill, darkPal.Card) >= 3.0,
+            $"{ContrastRatio(darkPal.Fill, darkPal.Card):F2}:1");
+        Check("日间：进度条与卡片对比 ≥ 3:1",
+            ContrastRatio(lightPal.Fill, lightPal.Card) >= 3.0,
+            $"{ContrastRatio(lightPal.Fill, lightPal.Card):F2}:1");
+
+        // 连续量动作：按住要一直执行，所以必须认得出来
+        Check("音量+ 属于连续量", HotkeyEngine.IsContinuous("volumeUp"));
+        Check("音量- 属于连续量", HotkeyEngine.IsContinuous("volumeDown"));
+        Check("亮度+ 属于连续量", HotkeyEngine.IsContinuous("brightnessUp"));
+        Check("亮度- 属于连续量", HotkeyEngine.IsContinuous("brightnessDown"));
+        Check("光标移动不属于连续量（那是连发不是累加）",
+            !HotkeyEngine.IsContinuous("moveLeft"));
+        Check("静音不属于连续量（切换语义，连按会来回抖）",
+            !HotkeyEngine.IsContinuous("volumeMute"));
+
+        // 节奏：起播延迟要比系统键盘短，步进要密
+        int repeatDelay = HotkeyEngine.RepeatDelayMs;
+        Check("按住起播延迟合理", repeatDelay is > 100 and < 600, $"{repeatDelay}ms");
+        Check("连续步进足够密（看起来是滑的）",
+            HotkeyEngine.RepeatIntervalMs <= 60, $"{HotkeyEngine.RepeatIntervalMs}ms");
+
+        /* 音量走**系统音量键**：这样 Windows 自己调音量并弹它自己的横条。
+         * 键码写错就变成"按了没反应"，而且不会报错，所以钉死。 */
+        CheckEqual("音量+ 用的是系统音量键", VK.VolumeUp, 0xAF);
+        CheckEqual("音量- 用的是系统音量键", VK.VolumeDown, 0xAE);
+        CheckEqual("静音用的是系统静音键", VK.VolumeMute, 0xAD);
+
+        // 音量每步是系统的 2%，比亮度（每步 1%）更疏，否则按住一秒就到底
+        Check("音量连发比亮度疏",
+            HotkeyEngine.RepeatIntervalFor("volumeUp")
+            > HotkeyEngine.RepeatIntervalFor("brightnessUp"),
+            $"音量 {HotkeyEngine.RepeatIntervalFor("volumeUp")}ms / "
+            + $"亮度 {HotkeyEngine.RepeatIntervalFor("brightnessUp")}ms");
+        Check("音量连发不至于一秒到底",
+            HotkeyEngine.RepeatIntervalFor("volumeUp") >= 60,
+            $"{HotkeyEngine.RepeatIntervalFor("volumeUp")}ms");
+
+        // ---------- 调节幅度（设置里可改） ----------
+        var def = DefaultSettings.Create().Global;
+        CheckEqual("音量幅度默认 5%", def.VolumeStep, 5);
+        CheckEqual("亮度幅度默认 10%", def.BrightnessStep, 10);
+
+        // 归一化把越界值夹回来：0 会让"调不动"，999 一下到底
+        var clampCase = DefaultSettings.Create();
+        clampCase.Global.VolumeStep = 0;
+        clampCase.Global.BrightnessStep = 999;
+        Core.Settings.SettingsStore.Normalize(clampCase);
+        CheckEqual("音量幅度下限夹到 1", clampCase.Global.VolumeStep, 1);
+        CheckEqual("亮度幅度上限夹到 50", clampCase.Global.BrightnessStep, 50);
+
+        /* 系统步进固定 2%，设定值不是整数倍时要靠累计补偿。
+         * 这组断言直接盯住"设 5 就真的是 5"，而不是每次差一点。 */
+        var (t1, r1) = ActionContext.PlanVolumeTaps(5, 2, 0);
+        CheckEqual("设 5%（系统 2%）第一次发 2 次键", t1, 2);
+        CheckEqual("并记下 1% 的欠账", r1, 1.0);
+
+        var (t2, r2) = ActionContext.PlanVolumeTaps(5, 2, r1);
+        CheckEqual("第二次补上欠账，发 3 次键", t2, 3);
+        CheckEqual("欠账清零", r2, 0.0);
+
+        // 连按十次总量必须正好 50%
+        double rem = 0, total = 0;
+        for (int i = 0; i < 10; i++)
+        {
+            var (taps, next) = ActionContext.PlanVolumeTaps(5, 2, rem);
+            total += taps * 2;
+            rem = next;
+        }
+        CheckEqual("连按十次正好 50%（不会漂移）", total, 50.0);
+
+        var (t3, r3) = ActionContext.PlanVolumeTaps(10, 2, 0);
+        CheckEqual("设 10% 时正好发 5 次", t3, 5);
+        CheckEqual("设 10% 无欠账", r3, 0.0);
+
+        var (t4, _) = ActionContext.PlanVolumeTaps(0, 2, 0);
+        CheckEqual("幅度为 0 也至少发一次（否则按了没反应）", t4, 1);
+
+        /* 亮度横条要跟着"白夜"（浅色 / 深色）走，而且文字不能和底色糊在一起。
+         * 这条真的把横条渲染成位图去量亮度，比只查画刷存在更实在。 */
+        TestOsdFollowsTheme();
+
+        // ---------- 输入文本方式 ----------        Check("纯 ASCII 走真实按键", InputSender.LooksLikePlainAscii("Abc123!@#"));
+        Check("带空格也算", InputSender.LooksLikePlainAscii("hello world"));
+        Check("中文不算纯 ASCII", !InputSender.LooksLikePlainAscii("你好"));
+        Check("emoji 不算纯 ASCII", !InputSender.LooksLikePlainAscii("a😀"));
+        Check("换行不算（会被当成回车提交表单）",
+            !InputSender.LooksLikePlainAscii("line1\nline2"));
+        Check("制表符不算", !InputSender.LooksLikePlainAscii("a\tb"));
+        Check("空串不算", !InputSender.LooksLikePlainAscii(""));
+
+        // 设置默认值：老配置里没有这个字段，反序列化后必须是 auto
+        CheckEqual("输入文本方式默认 auto", DefaultSettings.Create().Global.TextInputMode, "auto");
+
+        // 三种方式都不能抛异常（DryRun 下不会真的打字）
+        try
+        {
+            InputSender.Text("abc", InputSender.TextMode.Auto);
+            InputSender.Text("中文", InputSender.TextMode.Auto);
+            InputSender.Text("abc", InputSender.TextMode.Keys);
+            InputSender.Text("abc", InputSender.TextMode.Unicode);
+            Check("三种输入方式都能跑通（干跑）", true);
+        }
+        catch (Exception ex)
+        {
+            Check("三种输入方式都能跑通（干跑）", false, ex.Message);
+        }
+
+        /* ---------- 大写锁定下的 Shift 翻转 ----------
+         *
+         * 真实故障：用「输入文本」填密码框，偶尔报"大小写错误"。
+         * 根因是大写锁定开着时**字母键的 Shift 语义是反的**（Caps + A = a），
+         * 而注入计划只照布局给的 Shift 走，于是整串字母对调：
+         * 想要 "Abc"，打出来是 "aBC" —— 密码自然不对。
+         *
+         * 这里钉住判定规则本身（不发真实按键），四种组合都过一遍。 */
+        Check("大小写：字母受大写锁定影响",
+            InputSender.IsCapsSensitive('A') && InputSender.IsCapsSensitive('z'));
+        Check("大小写：数字与符号不受影响",
+            !InputSender.IsCapsSensitive('1') && !InputSender.IsCapsSensitive('!')
+            && !InputSender.IsCapsSensitive('@'));
+        Check("大小写（Caps 关）：'A' 要 Shift", InputSender.NeedsShift(true, true, false));
+        Check("大小写（Caps 开）：'A' 不要 Shift", !InputSender.NeedsShift(true, true, true));
+        Check("大小写（Caps 关）：'a' 不要 Shift", !InputSender.NeedsShift(false, true, false));
+        Check("大小写（Caps 开）：'a' 要 Shift", InputSender.NeedsShift(false, true, true));
+        Check("大小写（Caps 开）：'!' 仍要 Shift（符号不翻转）",
+            InputSender.NeedsShift(true, false, true));
+        Check("大小写（Caps 开）：'@' 仍要 Shift（Shift+2 也不翻转）",
+            InputSender.NeedsShift(true, false, true));
+        Check("大小写（Caps 开）：'1' 仍不要 Shift", !InputSender.NeedsShift(false, false, true));
+
+        var shiftOff = InputSender.ShiftPlanForTest("AbcZ1!", capsOn: false);
+        var shiftOn = InputSender.ShiftPlanForTest("AbcZ1!", capsOn: true);
+        Check("大小写：英文布局能算出按键计划", shiftOff != null && shiftOn != null);
+        if (shiftOff != null && shiftOn != null)
+        {
+            Check("Caps 关：大写字母要 Shift、小写不要（符号照旧）",
+                shiftOff[0] && !shiftOff[1] && !shiftOff[2] && shiftOff[3]
+                && !shiftOff[4] && shiftOff[5],
+                string.Join(",", shiftOff));
+            Check("Caps 开：字母的 Shift 全部翻转、符号与数字不动",
+                !shiftOn[0] && shiftOn[1] && shiftOn[2] && !shiftOn[3]
+                && !shiftOn[4] && shiftOn[5],
+                string.Join(",", shiftOn));
+        }
+
+        /* ---------- 注入的按键必须带扫描码 ----------
+         *
+         * 真实故障：RustDesk 的固定密码框里，14 位密码只落 11 位。
+         * 根因是 `SendInput` 只填了虚拟键、`wScan` 留 0 —— 而靠扫描码认键的
+         * 程序（远程桌面客户端是最典型的一类）拿到 wScan=0 会漏键：
+         * 实测丢掉的正好是"要 Shift 的那几个"（大写字母与符号）。
+         *
+         * 这里钉住的是**发出的 INPUT 本身**，不依赖任何目标程序：
+         * 扫描码非 0、且与键盘布局里这个物理键的扫描码一致。 */
+        Check("扫描码：Shift 键带扫描码 0x2A", InputSender.ScanForTest(VK.Shift) == 0x2A,
+            $"0x{InputSender.ScanForTest(VK.Shift):X2}");
+        Check("扫描码：字母 A 带扫描码 0x1E", InputSender.ScanForTest(0x41) == 0x1E,
+            $"0x{InputSender.ScanForTest(0x41):X2}");
+        Check("扫描码：字母 Z 带扫描码 0x2C", InputSender.ScanForTest(0x5A) == 0x2C,
+            $"0x{InputSender.ScanForTest(0x5A):X2}");
+        Check("扫描码：数字 1 带扫描码 0x02", InputSender.ScanForTest(0x31) == 0x02,
+            $"0x{InputSender.ScanForTest(0x31):X2}");
+        Check("扫描码：符号键（Shift+1 = '!' 用的 1 键）不为 0",
+            InputSender.ScanForTest(0x31) != 0 && InputSender.ScanForTest(0x32) != 0);
+
+        // 一整串密码里**每个**字符都要有扫描码，不能只有字母有
+        var scanMissed = new StringBuilder();
+        foreach (char ch in "Ab3!kL9@xY2#zQ")
+        {
+            short scan = InputSender.VkKeyScanForTest(ch);
+            if (scan == -1) { scanMissed.Append(ch).Append(":无映射 "); continue; }
+            if (InputSender.ScanForTest(scan & 0xFF) == 0) scanMissed.Append(ch).Append(' ');
+        }
+        Check("扫描码：密码里每个字符的键都带扫描码", scanMissed.Length == 0,
+            scanMissed.ToString());
+
+        // Unicode 模式用的是字符码，不能被"补扫描码"改掉（改了就打错字）
+        Check("Unicode 模式：wScan 仍是字符码", InputSender.UnicodeScanForTest('中') == '中'
+            && InputSender.UnicodeScanForTest('@') == '@');
+    }
+
+    /// <summary>
+    /// 亮度横条必须适配"白夜"（浅色 / 深色）模式，且文字与底色有足够对比。
+    ///
+    /// 真渲染成位图去量：只看画刷键存在是骗人的 —— 画刷定义对了，
+    /// XAML 里若还写死 <c>#F4F6FA</c>，浅色主题下就是"白字白底"。
+    /// </summary>
+    private static void TestOsdFollowsTheme()
+    {
+        var app = System.Windows.Application.Current;
+        if (app == null)
+        {
+            Check("亮度横条不随主题变（无 Application，跳过）", true);
+            return;
+        }
+
+        var saved = UI.Theme.ThemeManager.Current;
+
+        try
+        {
+            double lightCard = MeasureOsdLuminance(UI.Theme.ThemeManager.Mode.Light, out double lightRange);
+            double darkCard = MeasureOsdLuminance(UI.Theme.ThemeManager.Mode.Dark, out double darkRange);
+
+            /* 横条**不跟随应用主题**：这是实测的结论 ——
+             *
+             * 系统那条音量横条在浅色桌面上照样是深色卡片（截图确认）。
+             * 之前跟着主题走，结果是"白天浅底、夜里深底"，怎么调都和系统对不上；
+             * 现在两套主题都渲染成同一个深色卡片，差异只可能来自绘制 bug。 */
+            /* 横条跟的是 Windows 系统主题，不是本应用主题 ——
+             * 同一时刻切换应用主题，渲染结果必须完全不受影响。 */
+            Check("横条跟系统主题、不跟应用主题（两种应用主题下亮度差 < 0.05）",
+                Math.Abs(lightCard - darkCard) < 0.05,
+                $"app-light={lightCard:F2} app-dark={darkCard:F2}");
+            Check("画面里有明显的前景（进度条/文字，不是一片纯色）",
+                lightRange > 0.15 && darkRange > 0.15,
+                $"light={lightRange:F2} dark={darkRange:F2}");
+        }
+        catch (Exception ex)
+        {
+            Check("亮度横条渲染", false, ex.Message);
+        }
+        finally
+        {
+            UI.Theme.ThemeManager.Apply(saved);
+        }
+    }
+
+    /// <summary>颜色是不是"蓝色系"（蓝通道明显压过红/绿，且整体够亮）。</summary>
+    private static bool IsBlueish(string hex)
+    {
+        var (r, g, b) = ParseRgb(hex);
+        return b >= 0.55 && b - r >= 0.15 && b - g >= 0.05;
+    }
+
+    private static double RelativeLuminance(double c)
+        => c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+
+    private static double LuminanceOf(string hex)
+    {
+        var (r, g, b) = ParseRgb(hex);
+        return 0.2126 * RelativeLuminance(r)
+             + 0.7152 * RelativeLuminance(g)
+             + 0.0722 * RelativeLuminance(b);
+    }
+
+    /// <summary>WCAG 对比度：(亮+0.05)/(暗+0.05)，1~21。</summary>
+    private static double ContrastRatio(string fg, string bg)
+    {
+        double a = LuminanceOf(fg), b = LuminanceOf(bg);
+        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+    }
+
+    /// <summary>
+    /// 在某套主题下渲染一次横条，返回卡片区域的平均亮度（0~1）
+    /// 以及整张图里最亮与最暗的差值（用来判断"字能不能看清"）。
+    /// </summary>
+    private static double MeasureOsdLuminance(UI.Theme.ThemeManager.Mode mode, out double range)
+    {
+        UI.Theme.ThemeManager.Apply(mode);
+        DoEvents(40);
+
+        var osd = UI.Windows.OsdWindow.CreateDetached();
+        osd.ShowInTaskbar = false;
+        osd.WindowStartupLocation = System.Windows.WindowStartupLocation.Manual;
+        osd.Left = -32000;
+        osd.Top = -32000;
+        osd.Show();
+        osd.PrepareForRender(60);
+        DoEvents(120);
+        osd.UpdateLayout();
+
+        var root = (System.Windows.FrameworkElement)osd.Content;
+        int w = Math.Max(1, (int)Math.Round(root.ActualWidth));
+        int h = Math.Max(1, (int)Math.Round(root.ActualHeight));
+
+        var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            w, h, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+        bmp.Render(root);
+
+        int stride = w * 4;
+        var pixels = new byte[stride * h];
+        bmp.CopyPixels(pixels, stride, 0);
+
+        double sum = 0;
+        int count = 0;
+        double min = 1, max = 0;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                int i = y * stride + x * 4;
+                byte a = pixels[i + 3];
+                if (a < 200) continue;      // 跳过透明边角（圆角外的部分）
+
+                double lum = (0.2126 * pixels[i + 2] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i]) / 255.0;
+
+                // 卡片底色：避开图标、进度条、数字所在的中间带
+                bool inCard = y > h * 0.12 && y < h * 0.28;
+                if (inCard) { sum += lum; count++; }
+
+                if (lum < min) min = lum;
+                if (lum > max) max = lum;
+            }
+        }
+
+        osd.Close();
+        DoEvents(60);
+
+        range = max - min;
+        return count > 0 ? sum / count : -1;
+    }
+
+    /// <summary>
+    /// 回归测试：**目标已建立**时按亮度键，推进线程必须被拉起来。
+    ///
+    /// 4.4.0 为了让按键路径完全不碰硬件，把 AddTarget 拆成快 / 慢两条路；
+    /// 快路径只改了目标值，漏掉了 EnsurePump()。而 AppHost 启动时会在后台
+    /// 预热一次 IsSupported()，那一步就把目标建好了 —— 于是用户第一次按键
+    /// 就走快路径：日志里「目标 X%」一路涨，屏幕一动不动。
+    ///
+    /// 这里用干跑（DryRun）复现当时的先后顺序，钉住"快路径也要拉起线程"。
+    /// 没有这条断言，下次谁再"优化"一遍快路径还会踩回去。
+    /// </summary>
+    private static void TestBrightnessPumpStarts()
+    {
+        bool savedDry = Core.Windows.BrightnessService.DryRun;
+
+        try
+        {
+            Core.Windows.BrightnessService.DryRun = true;      // 不真的改屏幕亮度
+
+            // 模拟"启动预热已经把目标建好、但推进线程还没起"
+            Core.Windows.BrightnessService.PrimeTargetForTest(50);
+            CheckEqual("预热后目标已建立", Core.Windows.BrightnessService.TargetForTest, 50);
+
+            int? after = Core.Windows.BrightnessService.AddTarget(5);
+            CheckEqual("快路径下目标正确累加", after, 55);
+            Check("快路径也把推进线程拉起来了", Core.Windows.BrightnessService.PumpRunning);
+
+            Core.Windows.BrightnessService.AddTarget(-3);
+            Check("连续按键后推进线程仍存活", Core.Windows.BrightnessService.PumpRunning);
+            CheckEqual("连减后目标正确", Core.Windows.BrightnessService.TargetForTest, 52);
+        }
+        finally
+        {
+            Core.Windows.BrightnessService.DryRun = savedDry;
+            Core.Windows.BrightnessService.Reset();            // 清掉测试留下的状态
+        }
+    }
+
+    private static void TestBrightnessMath()
+    {
+        // 0~100 量程（大多数笔记本）
+        CheckEqual("0~100：60 → 60%", Core.Windows.BrightnessService.FromVcp(60, 100), 60);
+        // 0~255 量程（不少外接屏）
+        CheckEqual("0~255：128 → 50%", Core.Windows.BrightnessService.FromVcp(128, 255), 50);
+        // 0~1000 量程（少数专业屏）
+        CheckEqual("0~1000：250 → 25%", Core.Windows.BrightnessService.FromVcp(250, 1000), 25);
+        CheckEqual("max=0 无法换算", Core.Windows.BrightnessService.FromVcp(10, 0), -1);
+
+        CheckEqual("50% → 0~255 的 128", Core.Windows.BrightnessService.ToVcp(50, 255), 128u);
+        CheckEqual("100% → 满量程", Core.Windows.BrightnessService.ToVcp(100, 255), 255u);
+        CheckEqual("0% → 0", Core.Windows.BrightnessService.ToVcp(0, 255), 0u);
+        CheckEqual("超过 100 按满算", Core.Windows.BrightnessService.ToVcp(150, 255), 255u);
+        CheckEqual("负数按 0 算", Core.Windows.BrightnessService.ToVcp(-20, 255), 0u);
+
+        // 往返：百分比 → 原始值 → 百分比，误差不超过 1
+        bool roundTripOk = true;
+        foreach (uint max in new uint[] { 100, 255, 1000 })
+        {
+            foreach (int pct in new[] { 0, 10, 25, 50, 75, 100 })
+            {
+                int back = Core.Windows.BrightnessService.FromVcp(
+                    Core.Windows.BrightnessService.ToVcp(pct, max), max);
+                if (Math.Abs(back - pct) > 1) roundTripOk = false;
+            }
+        }
+        Check("亮度换算往返误差 ≤ 1%", roundTripOk);
+
+        /* ---------- 长按亮度的平滑推进 ----------
+         *
+         * 用户的原话是"避免生硬跳变，使过渡更平滑"。
+         * 上一版每一轮固定走 4%，在 DDC 屏上看起来就是"一格一格蹦"；
+         * 现在按剩余距离成比例走：远时步子大、近时退到 1%。 */
+        CheckEqual("差 1% 就走 1%", Core.Windows.BrightnessService.PlanStepForTest(1), 1);
+        CheckEqual("差 -1% 就走 -1%", Core.Windows.BrightnessService.PlanStepForTest(-1), -1);
+        CheckEqual("差 2% 只走 1%（最后几格要慢）",
+            Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(2)), 1);
+        Check("单步不超过剩余距离（不会冲过头）",
+            Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(3)) <= 3);
+        Check("差 40% 时步子变大（追得上）",
+            Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(40)) >= 4,
+            $"{Core.Windows.BrightnessService.PlanStepForTest(40)}");
+        Check("单步有上限（不跳大格）",
+            Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(100)) <= 6,
+            $"{Core.Windows.BrightnessService.PlanStepForTest(100)}");
+        Check("单步方向跟着目标走",
+            Core.Windows.BrightnessService.PlanStepForTest(-40) < 0);
+
+        bool monotonic = true, neverOvershoot = true;
+        int prevStep = 0;
+        for (int d = 1; d <= 100; d++)
+        {
+            int step = Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(d));
+            if (step < prevStep) monotonic = false;      // 差距变大时步子不能反而变小
+            if (step > d) neverOvershoot = false;
+            prevStep = step;
+        }
+        Check("步长随差距单调不减（不会忽大忽小）", monotonic);
+        Check("任何差距都不会一步冲过头", neverOvershoot);
+        Check("最后 8% 都是小步（收尾不突兀）",
+            Math.Abs(Core.Windows.BrightnessService.PlanStepForTest(8)) <= 2,
+            $"{Core.Windows.BrightnessService.PlanStepForTest(8)}");
+
+        /* ---------- 单键步进参数（绑定界面里可填） ---------- */
+        CheckEqual("参数为空 → 用设置里的幅度",
+            Core.Actions.ActionCatalog.StepOrForTest("", 10), 10);
+        CheckEqual("参数为空白 → 用设置里的幅度",
+            Core.Actions.ActionCatalog.StepOrForTest("   ", 10), 10);
+        CheckEqual("参数优先", Core.Actions.ActionCatalog.StepOrForTest("3", 10), 3);
+        CheckEqual("填 0 视为没填（否则按了不动）",
+            Core.Actions.ActionCatalog.StepOrForTest("0", 10), 10);
+        CheckEqual("非数字视为没填",
+            Core.Actions.ActionCatalog.StepOrForTest("abc", 10), 10);
+        CheckEqual("超上限夹到 100",
+            Core.Actions.ActionCatalog.StepOrForTest("999", 10), 100);
+
+        // 只读探测：这台机器走哪条通道（不支持也是合法结果，不能算失败）
+        var backend = Core.Windows.BrightnessService.Backend;        int? now = Core.Windows.BrightnessService.Get();
+        Check($"亮度通道：{Core.Windows.BrightnessService.BackendName}",
+            backend != Core.Windows.BrightnessBackend.Unknown,
+            $"backend={backend}, value={now}");
+        if (backend != Core.Windows.BrightnessBackend.Unsupported)
+            Check("支持的通道能读出亮度", now != null, $"value={now}");
+
+        /* 调不动时的提示必须能照着做。
+         * 早先只回一句"这台设备不支持"，用户没法判断是设置没开、
+         * 线材不通还是程序坏了 —— 等于没告诉。 */
+        string diag = Core.Windows.BrightnessService.Diagnose();
+        Check("调不动时给的是可操作说明（不是一句「不支持」）",
+            diag.Length >= 12, diag);
+
+        // 动作表
+        var settings = DefaultSettings.Create();
+        var ctx = new Core.Actions.ActionContext
+        {
+            Settings = () => settings,
+            Clipboard = new Core.Actions.ClipboardService(),
+            Windows = new Core.Actions.WindowActions(),
+            WindowBindings = new WindowBindingService(),
+            Mouse = new Core.Actions.MouseService(),
+            Notify = _ => { },
+        };
+        var cat = Core.Actions.ActionCatalog.Create(ctx);
+
+        foreach (string id in new[] { "brightnessUp", "brightnessDown" })
+        {
+            var it = cat.Items.FirstOrDefault(i => i.Id == id);
+            Check($"动作 {id} 在「系统功能」", it?.Category == "系统功能");
+            Check($"动作 {id} 标明需要显示器支持", it?.Description.Contains("DDC/CI") == true);
+            Check($"动作 {id} 说明里写了长按加速",
+                it?.Description.Contains("按住越久") == true);
+        }
+
+        /* ---------- 按住亮度时的加速 ----------
+         *
+         * 用户要求："一直长按，应该有一个逐渐的加速度，但不能加速太离谱"。
+         * 手感照搬隔壁鼠标那套 dynamic_speed（按住越走越快），
+         * 参数是：起步 1%、每步 +0.10、封顶 15 步 = 2.5 倍。
+         *
+         * 直接对着纯逻辑（BrightnessAccel）验，不碰硬件。 */
+        var accel = new Core.Actions.BrightnessAccel();
+        var steps = new List<int>();
+        for (int i = 0; i < 30; i++) steps.Add(accel.Next());
+
+        CheckEqual("连发第一步仍是 1%（起步还是细调）", steps[0], 1);
+        Check("每一步至少 1%（不会出现空步）", steps.All(s => s >= 1));
+        Check("前 3 步只走 4%（起步不冲）", steps.Take(3).Sum() <= 5,
+            $"{steps.Take(3).Sum()}%");
+        Check("前 15 步平均 ≤ 2%/步（加速是渐进的）", steps.Take(15).Sum() <= 30,
+            $"{steps.Take(15).Sum()}%");
+
+        int firstHalf = steps.Take(15).Sum();
+        int secondHalf = steps.Skip(15).Sum();
+        Check("后 15 步明显更快（≥ 1.3 倍）", secondHalf >= firstHalf * 1.3,
+            $"{firstHalf}% → {secondHalf}%");
+        Check("满速不超过 3%/步（不能加速太离谱）", steps.Skip(15).Max() <= 3,
+            $"max={steps.Skip(15).Max()}");
+        Check("30 步（约 1.4 秒）至少能走 60%（够得着）", steps.Sum() >= 60,
+            $"{steps.Sum()}%");
+        Check("30 步也不会一步到底（≤ 100%）", steps.Sum() <= 100,
+            $"{steps.Sum()}%");
+
+        accel.Reset();
+        CheckEqual("松开后再按，重新从 1% 起步", accel.Next(), 1);
+
+        // 接线：ActionContext 里确实挂了一台加速器，而且同样从头起步
+        ctx.ResetBrightnessAccelForTest();
+        CheckEqual("ActionContext 的加速器起步也是 1%", ctx.NextBrightnessAccelForTest(), 1);
+        Check("ActionContext 的加速器第二、三步仍是细调",
+            ctx.NextBrightnessAccelForTest() <= 2 && ctx.NextBrightnessAccelForTest() <= 2);
+
+        Check("引擎连发标记（arg=\"1\"）被认作连续",
+            Core.Actions.ActionCatalog.IsRepeatForTest("1"));
+        Check("普通参数（空 / 步进 3）不被当成连发",
+            !Core.Actions.ActionCatalog.IsRepeatForTest("")
+            && !Core.Actions.ActionCatalog.IsRepeatForTest(null)
+            && !Core.Actions.ActionCatalog.IsRepeatForTest("3"));
+    }
+}

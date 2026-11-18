@@ -7,12 +7,12 @@
 
 | 文件 | 大小 | 说明 |
 | --- | --- | --- |
-| `dist/KeyboardEnhance.exe` | 2.76 MB | 单文件、框架依赖 |
+| `dist/InputPlus.exe` | 2.76 MB | 单文件、框架依赖 |
 
 - **单文件**、框架依赖（需 .NET 10 桌面运行时）；**不用 ReadyToRun** ——
   实测启动时间无差异（718 ms vs 716 ms），但能省 2.06 MB
 - 目标平台：Windows 10 1809+ / Windows 11，x64，Per-Monitor V2 DPI
-- 源码：`src/CapsLockPlus/`（10 个目录）
+- 源码：`src/InputPlus/`（10 个目录）
 - 上游源码对照：`upstream/`（GPL-3.0，未修改）
 
 ## 二、v1.1 新增：Qbar 关键字标签
@@ -39,7 +39,7 @@
 ### 自检：105 项全部通过
 
 ```
-CapsLockPlus.exe --selftest    → exit 0
+InputPlus.exe --selftest    → exit 0
 ==== 通过 105 项，失败 0 项 ====
 ```
 
@@ -145,17 +145,17 @@ CapsLockPlus.exe --selftest    → exit 0
 
 ```powershell
 # 1. 自检（88 项）
-dist\CapsLockPlus.exe --selftest
-type %LOCALAPPDATA%\CapsLockPlus\selftest.log
+dist\InputPlus.exe --selftest
+type %LOCALAPPDATA%\InputPlus\selftest.log
 
 # 2. 性能
 powershell -ExecutionPolicy Bypass -File tools\bench.ps1
 
 # 3. 界面截图（离屏、可复现）
-dist\CapsLockPlus.exe --render docs\screenshots --noelevate
+dist\InputPlus.exe --render docs\screenshots --noelevate
 
 # 4. 实际使用
-dist\CapsLockPlus.exe            # 正常启动（会请求管理员权限）
+dist\InputPlus.exe            # 正常启动（会请求管理员权限）
 ```
 
 ## 六、已知限制

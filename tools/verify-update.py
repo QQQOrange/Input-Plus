@@ -17,8 +17,8 @@ import os
 import subprocess
 import sys
 
-ROOT = r"C:\Users\64381\Documents\deepseek-harness\default-workspace"
-DOTNET = os.path.join(ROOT, "_tools", "dotnet", "dotnet.exe")
+ROOT = os.environ.get("IP_WORKSPACE") or os.path.expanduser("~")
+DOTNET = os.environ.get("DOTNET_EXE") or os.path.join(ROOT, "_tools", "dotnet", "dotnet.exe")
 
 
 def main():

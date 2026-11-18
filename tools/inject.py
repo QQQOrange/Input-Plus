@@ -6,8 +6,8 @@
 import io
 import os
 
-WS = r"C:\Users\64381\Documents\deepseek-harness\default-workspace"
-CS = os.path.join(WS, "CapsLockPlus", "src", "CapsLockPlus", "Core", "Settings", "SettingsStore.cs")
+WS = os.environ.get("IP_WORKSPACE") or os.path.expanduser("~")
+CS = os.path.join(WS, "InputPlus", "src", "InputPlus", "Core", "Settings", "SettingsStore.cs")
 LINES = os.path.join(WS, "_tools", "qs_engine_lines.txt")
 
 eng = open(LINES, encoding="utf-8").read().rstrip("\n").split("\n")

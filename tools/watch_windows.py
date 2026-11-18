@@ -4,9 +4,9 @@
 用法：
     python tools/watch_windows.py out.txt 70        # 监视 70 秒，结果写 out.txt
     # 同时另开一个终端跑：
-    #   dist\\KeyboardEnhance.exe --render dist\\shots
+    #   dist\\InputPlus.exe --render dist\\shots
 
-判据：所有属于 KeyboardEnhance 的窗口坐标都应该是**负数**（屏幕外）。
+判据：所有属于 InputPlus 的窗口坐标都应该是**负数**（屏幕外）。
 只读，不改任何东西。
 """
 import ctypes

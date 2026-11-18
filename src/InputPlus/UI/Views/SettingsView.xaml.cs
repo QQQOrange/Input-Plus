@@ -1,0 +1,1410 @@
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using InputPlus.Core;
+using InputPlus.Core.Actions;
+using InputPlus.Core.Input;
+using InputPlus.Core.Localization;
+using InputPlus.UI.Windows;
+using InputPlus.Core.Settings;
+using InputPlus.UI.Theme;
+using Microsoft.Win32;
+
+namespace InputPlus.UI.Views;
+
+public partial class SettingsView : UserControl
+{
+    private AppHost? _host;
+    private bool _suppress;
+
+    public SettingsView() => InitializeComponent();
+
+    public void Initialize(AppHost host)
+    {
+        _host = host;
+        Refresh();
+    }
+
+    public void Refresh()
+    {
+        if (_host == null) return;
+        _suppress = true;
+        var g = _host.Settings.Global;
+        RefreshPermission();
+        RefreshUsage();
+
+        /* 设备枚举是 P/Invoke：Refresh 会在每次保存时被调用（用户打字时每个键都保存），
+         * 所以只在第一次进来时枚举，之后靠「刷新」按钮显式更新。 */
+        if (KeyboardList != null && KeyboardList.Items.Count == 0)
+        {
+            RefreshKeyboards();
+            RefreshDeviceTrackingHint();
+        }
+        RefreshAppLayerEditor();
+        RefreshSnippetEditor();
+        StartupBox.IsChecked = StartupManager.IsEnabled();
+        TrayBox.IsChecked = g.CloseToTray;
+        OpenOnStartBox.IsChecked = g.OpenWindowOnStartup;
+        ToastBox.IsChecked = g.ShowToast;
+        UpdateToastBox.IsChecked = g.ShowUpdateToast;
+        FeedbackBox.IsChecked = g.ShowActionFeedback;
+        SummonAnimBox.IsChecked = g.SummonAnimation;
+        SummonAnimSlider.Value = Core.Windows.WindowSummonAnimator.ClampDuration(g.SummonAnimationMs);
+        UpdateSummonAnimText((int)SummonAnimSlider.Value);
+        RepeatBox.IsChecked = g.RepeatWhenHeld;
+        if (TriggerStarSlider != null)
+        {
+            TriggerStarSlider.Value = g.TriggerStarScale;
+            TriggerStarText.Text = Loc.F("当前 {0:0.0} 倍（默认 1.5 倍，改完立即生效）", g.TriggerStarScale);
+        }
+
+        MouseSpeedSlider.Value = g.MouseSpeed;
+        MouseSpeedText.Text = Loc.F("{0}（Caps+LAlt+滚轮 可快速调整）", g.MouseSpeed);
+        /* 音量下限跟系统步进走：系统一步就是 2%，设 1% 也只能走 2%，
+         * 与其让用户设一个"永远达不到"的值，不如把下限抬到 2%。 */
+        int sysStep = Math.Max(1, Core.Windows.VolumeService.StepPercent());
+        VolumeStepSlider.Minimum = sysStep;
+        VolumeStepSlider.Value = Math.Max(g.VolumeStep, sysStep);
+        BrightnessStepSlider.Value = g.BrightnessStep;
+        UpdateVolumeStepText(g.VolumeStep);
+        UpdateBrightnessStepText(g.BrightnessStep);
+        TextInputBox.SelectedIndex = (g.TextInputMode ?? "auto").ToLowerInvariant() switch
+        {
+            "keys" => 1,
+            "unicode" => 2,
+            _ => 0,
+        };
+        ThemeBox.SelectedIndex = g.Theme switch
+        {
+            "dark" => 1,
+            "system" => 2,
+            _ => 0,
+        };
+        BindLanguageBox(g.Language);
+        DataPathText.Text = Loc.F("设置文件：{0}", AppPaths.SettingsFile)
+                          + "\n" + Loc.F("日志：{0}", CoreLog.LogPath);
+        RefreshStartupPwState();
+        _suppress = false;
+    }
+
+    private void Save()
+    {
+        _host?.SaveSettings();
+    }
+
+
+    // ---------------- 键盘设备 ----------------
+
+    /// <summary>
+    /// 只读展示：系统认到几只键盘。
+    ///
+    /// 存在的意义是把"为什么另一只键盘不生效"从猜测变成可核对的事实 ——
+    /// 目前改键对所有键盘一视同仁，所以这里只列设备，不做任何开关。
+    /// </summary>
+    private void RefreshKeyboards()
+    {
+        if (KeyboardList == null) return;
+
+        KeyboardList.Items.Clear();
+        var groups = KeyboardDevices.Group(KeyboardDevices.List());
+
+        KeyboardEmptyText.Visibility = groups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        foreach (var g in groups)
+        {
+            var row = new TextBlock
+            {
+                Text = g.Count > 1
+                    ? Loc.F("{0}　·　{1}　·　{2} 条系统条目", g.Name, g.Kind, g.Count)
+                    : Loc.F("{0}　·　{1}", g.Name, g.Kind),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 4),
+                FontSize = 12,
+                ToolTip = g.Sample,
+                Style = (Style)FindResource("Text.Tertiary"),
+            };
+            KeyboardList.Items.Add(row);
+        }
+    }
+
+    /// <summary>
+    /// 设备追踪不可用时给出明确提示。
+    ///
+    /// 不说的话，用户配了"只对某只键盘生效"却毫无反应 —— 和"这功能是坏的"没区别。
+    /// </summary>
+    private void RefreshDeviceTrackingHint()
+    {
+        if (DeviceTrackingHint == null || _host == null) return;
+
+        bool ok = _host.DeviceTrackingAvailable;
+        DeviceTrackingHint.Visibility = ok ? Visibility.Collapsed : Visibility.Visible;
+        if (!ok)
+            DeviceTrackingHint.Text = Loc.T("设备识别未启用：只对某只键盘生效的改键不会起作用（其它功能不受影响）。");
+    }
+
+    private void OnRefreshKeyboardsClick(object sender, RoutedEventArgs e)
+    {
+        RefreshKeyboards();
+        RefreshDeviceTrackingHint();
+        int n = KeyboardDevices.Group(KeyboardDevices.List()).Count;
+        _host?.Notify(n == 0
+            ? Loc.T("没有枚举到键盘设备")
+            : Loc.F("系统认到 {0} 个键盘", n));
+    }
+
+
+
+    // ---------------- 文本片段 ----------------
+
+    /// <summary>正在编辑的片段（null = 新增模式）。</summary>
+    private Snippet? _editingSnippet;
+
+    private void RefreshSnippetEditor()
+    {
+        if (SnippetList == null || _host == null) return;
+
+        SnippetList.Items.Clear();
+        var items = _host.Settings.Global.Snippets.ToList();
+
+        if (items.Count == 0)
+        {
+            SnippetList.Items.Add(new TextBlock
+            {
+                Text = Loc.T("还没有片段。上面填一个触发词（例如 ;mail）和内容，点「添加」。"),
+                Style = (Style)FindResource("Text.Tertiary"),
+                Margin = new Thickness(0, 4, 0, 4),
+            });
+            return;
+        }
+
+        foreach (var sn in items)
+        {
+            var row = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 6) };
+
+            /* 暂停开关：片段经常一堆，临时不想让它展开时不该逼用户删掉。
+             * 停用的仍然显示（灰一点），一眼看得出"有这条但没生效"。 */
+            var enable = new CheckBox
+            {
+                IsChecked = sn.Enabled,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = Loc.T("启用 / 停用这条片段"),
+            };
+            var captured = sn;
+            enable.Click += (_, _) =>
+            {
+                captured.Enabled = enable.IsChecked == true;
+                Save();
+                RefreshSnippetEditor();
+                _host?.Notify(captured.Enabled
+                    ? Loc.F("已启用片段 {0}", captured.Trigger)
+                    : Loc.F("已停用片段 {0}", captured.Trigger));
+            };
+            DockPanel.SetDock(enable, Dock.Left);
+            row.Children.Add(enable);
+
+            var del = new Button
+            {
+                Content = Loc.T("移除"),
+                Padding = new Thickness(10, 3, 10, 3),
+                Style = (Style)FindResource("Button.Base"),
+            };
+            del.Click += (_, _) =>
+            {
+                _host?.Settings.Global.Snippets.Remove(captured);
+                if (ReferenceEquals(_editingSnippet, captured)) ResetSnippetForm();
+                Save();
+                RefreshSnippetEditor();
+            };
+            DockPanel.SetDock(del, Dock.Right);
+            row.Children.Add(del);
+
+            string preview = (sn.Text ?? "").Replace("\r", " ").Replace("\n", " ");
+            if (preview.Length > 24) preview = preview[..24] + "…";
+
+            // 配了"只在某些程序"时把范围显示出来，否则用户看不出为什么在别处不展开
+            string scope = string.IsNullOrWhiteSpace(sn.Apps)
+                ? ""
+                : "　·　" + Loc.F("仅 {0}", sn.Apps.Trim());
+            string note = string.IsNullOrWhiteSpace(sn.Comment) ? "" : "　·　" + sn.Comment.Trim();
+
+            /* 点这一行 = 载入到上面的表单里编辑。
+             * 以前只能"重新输一遍同样触发词"来覆盖，用户根本不知道能改。 */
+            var body = new TextBlock
+            {
+                Text = $"{sn.Trigger} → {preview}{scope}{note}",
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("Text.Tertiary"),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = Loc.T("点这一行：载入到上面编辑"),
+                Opacity = sn.Enabled ? 1.0 : 0.5,
+            };
+            body.MouseLeftButtonUp += (_, _) => LoadSnippetIntoForm(captured);
+            row.Children.Add(body);
+
+            SnippetList.Items.Add(row);
+        }
+    }
+
+    /// <summary>把一条片段载入表单（进入编辑模式）。</summary>
+    private void LoadSnippetIntoForm(Snippet sn)
+    {
+        _editingSnippet = sn;
+        SnippetTriggerBox.Text = sn.Trigger;
+        SnippetTextBox.Text = sn.Text ?? "";
+        SnippetAppsBox.Text = sn.Apps ?? "";
+        SnippetCommentBox.Text = sn.Comment ?? "";
+        SnippetSaveButton.Content = Loc.T("保存修改");
+        SnippetCancelEditButton.Visibility = Visibility.Visible;
+        SnippetTriggerBox.Focus();
+        SnippetTriggerBox.CaretIndex = SnippetTriggerBox.Text.Length;
+        UpdateSnippetTriggerHint();
+    }
+
+    private void OnCancelSnippetEdit(object sender, RoutedEventArgs e) => ResetSnippetForm();
+
+    /// <summary>清空表单、退出编辑模式。</summary>
+    private void ResetSnippetForm()
+    {
+        _editingSnippet = null;
+        SnippetTriggerBox.Text = "";
+        SnippetTextBox.Text = "";
+        SnippetAppsBox.Text = "";
+        SnippetCommentBox.Text = "";
+        SnippetSaveButton.Content = Loc.T("添加");
+        SnippetCancelEditButton.Visibility = Visibility.Collapsed;
+        UpdateSnippetTriggerHint();
+    }
+
+    /// <summary>触发词输入的即时校验：别等到点「添加」才说哪里不对。</summary>
+    private void OnSnippetTriggerChanged(object sender, TextChangedEventArgs e) => UpdateSnippetTriggerHint();
+
+    private void UpdateSnippetTriggerHint()
+    {
+        if (SnippetTriggerHint == null) return;
+
+        string trigger = (SnippetTriggerBox.Text ?? "").Trim();
+        if (trigger.Length == 0)
+        {
+            SnippetTriggerHint.Text = Loc.T("触发词要以 ; / . 这类符号开头（例如 ;mail），不能含空格。");
+            return;
+        }
+        if (trigger.Any(char.IsWhiteSpace))
+        {
+            SnippetTriggerHint.Text = Loc.T("✗ 触发词里不能有空格。");
+            return;
+        }
+        if (SnippetMatcher.IsValidTrigger(trigger))
+        {
+            /* 提示"会不会被更长的触发词抢走"：这曾经是个坑 ——
+             * 配了 ;m 之后再配 ;mail，;mail 永远触发不了。 */
+            var others = _host?.Settings.Global.Snippets
+                .Where(s => s != _editingSnippet && s.Enabled && s.Trigger.Length > trigger.Length
+                            && s.Trigger.StartsWith(trigger, StringComparison.Ordinal))
+                .Select(s => s.Trigger).ToList() ?? new List<string>();
+
+            SnippetTriggerHint.Text = others.Count > 0
+                ? Loc.F("✓ 触发词可用。注意：它同时是 {0} 的前缀，实际会等你打完再判断（约 120ms）。",
+                        string.Join("、", others.Take(3)))
+                : Loc.T("✓ 触发词可用。");
+            return;
+        }
+
+        SnippetTriggerHint.Text = Loc.T("✗ 触发词必须以 ; / . 这类符号开头，不能以字母或数字开头。");
+    }
+
+    /// <summary>试算：不真的展开，只告诉用户会不会命中。</summary>
+    private void OnSnippetTestChanged(object sender, TextChangedEventArgs e)
+    {
+        if (SnippetTestHint == null || _host == null) return;
+
+        string buffer = (SnippetTestBox.Text ?? "").TrimStart();
+        if (buffer.Length == 0)
+        {
+            SnippetTestHint.Text = Loc.T("试算：在上面随便打一段（例如 ;mail），这里会说命中哪一条、为什么没命中。");
+            return;
+        }
+
+        string? process = _host.Engine.ForegroundProcess;
+        var list = _host.Settings.Global.Snippets;
+        var hit = SnippetMatcher.Match(list, buffer, process);
+
+        if (hit != null)
+        {
+            string preview = (hit.Text ?? "").Replace("\r", " ").Replace("\n", " ");
+            if (preview.Length > 40) preview = preview[..40] + "…";
+            SnippetTestHint.Text = Loc.F("✓ 会展开成：{0}", preview);
+            return;
+        }
+
+        // 没命中时把最常见的原因直接点出来，省得用户猜
+        var blockedScope = list.FirstOrDefault(s => s.Enabled
+            && SnippetMatcher.IsValidTrigger(s.Trigger)
+            && buffer.EndsWith(s.Trigger, StringComparison.Ordinal)
+            && !SnippetMatcher.AllowedIn(s, process));
+        if (blockedScope != null)
+        {
+            SnippetTestHint.Text = Loc.F(
+                "命中 {0}，但它限定只在 {1} 里展开，当前前台是「{2}」。",
+                blockedScope.Trigger, blockedScope.Apps,
+                string.IsNullOrWhiteSpace(process) ? Loc.T("（未知）") : process);
+            return;
+        }
+
+        var disabled = list.FirstOrDefault(s => !s.Enabled
+            && SnippetMatcher.IsValidTrigger(s.Trigger)
+            && buffer.EndsWith(s.Trigger, StringComparison.Ordinal));
+        if (disabled != null)
+        {
+            SnippetTestHint.Text = Loc.F("命中 {0}，但这条片段被停用了。", disabled.Trigger);
+            return;
+        }
+
+        SnippetTestHint.Text = Loc.T("没有命中任何片段（触发词必须落在词首、以符号开头）。");
+    }
+
+    private void OnSnippetAppsHint(object sender, TextChangedEventArgs e)
+    {
+        if (SnippetAppsHint == null) return;
+
+        string apps = (SnippetAppsBox.Text ?? "").Trim();
+        if (apps.Length == 0)
+        {
+            SnippetAppsHint.Text = Loc.T("当前：在所有程序里都会展开。");
+            return;
+        }
+
+        string current = _host?.Engine.ForegroundProcess ?? "";
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            SnippetAppsHint.Text = Loc.F("当前：只在 {0} 里展开（拿不到当前前台程序，无法预判）。", apps);
+            return;
+        }
+
+        bool hit = SnippetMatcher.AllowedIn(new Snippet { Apps = apps }, current);
+        SnippetAppsHint.Text = hit
+            ? Loc.F("当前：只在 {0} 里展开 —— 现在的前台「{1}」在列表里。", apps, current)
+            : Loc.F("当前：只在 {0} 里展开 —— 现在的前台「{1}」不在列表里，此处不会展开。", apps, current);
+    }
+
+    // ---- 片段的「只在哪些程序里展开」：两条录入途径 ----
+
+    /// <summary>把程序名追加到 Apps 框（去重，保留用户已经填的内容）。</summary>
+    private void AppendSnippetApp(string process)
+    {
+        if (SnippetAppsBox == null) return;
+
+        string merged = SnippetMatcher.MergeAppList(SnippetAppsBox.Text, process, out bool added);
+        if (!added)
+        {
+            _host?.Notify(Loc.F("{0} 已经在列表里了", SnippetMatcher.Normalize(process)));
+            return;
+        }
+
+        SnippetAppsBox.Text = merged;
+        SnippetAppsBox.CaretIndex = SnippetAppsBox.Text.Length;
+        OnSnippetAppsHint(SnippetAppsBox, null!);
+    }
+
+    /// <summary>入口一：从文件管理器里选一个 exe。</summary>
+    private void OnSnippetPickExeClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("选择程序"),
+            Filter = Loc.T("程序 (*.exe)|*.exe|所有文件|*.*"),
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog() != true) return;
+        AppendSnippetApp(System.IO.Path.GetFileName(dlg.FileName));
+    }
+
+    /// <summary>入口二：十字准星点选一个已打开的窗口，取它的程序名。</summary>
+    private void OnSnippetPickWindowClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var picker = new UI.Windows.WindowPickerWindow();
+        if (Window.GetWindow(this) is { } owner) picker.Owner = owner;
+        picker.ShowDialog();
+
+        var h = picker.PickedWindow;
+        if (h == IntPtr.Zero) return;
+
+        var info = Core.Windows.WindowService.Describe(h);
+        if (info == null || string.IsNullOrEmpty(info.ExePath))
+        {
+            _host.Notify(Loc.T("取不到这个窗口的程序路径，改用「选择程序…」试试"));
+            return;
+        }
+        AppendSnippetApp(System.IO.Path.GetFileName(info.ExePath));
+    }
+
+    /// <summary>
+    /// 填入一条现成的范例。
+    ///
+    /// 片段的规则（符号开头、必须在词首、程序范围）不好用一句话讲清，
+    /// 给一条能直接用的例子比写八行说明管用：用户改两个字就能当自己的用。
+    /// </summary>
+    private void OnSnippetExampleClick(object sender, RoutedEventArgs e)
+    {
+        SnippetTriggerBox.Text = ";mail";
+        SnippetTextBox.Text = "someone@example.com";
+        SnippetCommentBox.Text = Loc.T("示例：常用邮箱");
+        SnippetAppsBox.Text = "";
+        OnSnippetAppsHint(SnippetAppsBox, null!);
+        UpdateSnippetTriggerHint();
+        _host?.Notify(Loc.T("已填入示例：在任何程序里打 ;mail 就会变成邮箱地址"));
+        SnippetTriggerBox.Focus();
+        SnippetTriggerBox.CaretIndex = SnippetTriggerBox.Text.Length;
+    }
+
+    /// <summary>添加 / 保存修改。</summary>
+    private void OnAddSnippetClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        string trigger = (SnippetTriggerBox.Text ?? "").Trim();
+        string text = SnippetTextBox.Text ?? "";
+        string apps = (SnippetAppsBox.Text ?? "").Trim();
+        string comment = (SnippetCommentBox.Text ?? "").Trim();
+
+        if (!SnippetMatcher.IsValidTrigger(trigger))
+        {
+            _host.Notify(Loc.T("触发词要以 ; / . 这类符号开头，且不能含空格"));
+            SnippetTriggerBox.Focus();
+            return;
+        }
+        if (text.Length == 0)
+        {
+            _host.Notify(Loc.T("展开内容不能为空"));
+            SnippetTextBox.Focus();
+            return;
+        }
+
+        var list = _host.Settings.Global.Snippets;
+
+        if (_editingSnippet != null)
+        {
+            // 编辑模式：先查"改成的新触发词"有没有撞上别人的
+            var clash = list.FirstOrDefault(x => !ReferenceEquals(x, _editingSnippet) && x.Trigger == trigger);
+            if (clash != null)
+            {
+                _host.Notify(Loc.F("触发词 {0} 已经属于另一条片段，请换一个或取消编辑", trigger));
+                return;
+            }
+            _editingSnippet.Trigger = trigger;
+            _editingSnippet.Text = text;
+            _editingSnippet.Apps = apps;
+            _editingSnippet.Comment = comment;
+            Save();
+            ResetSnippetForm();
+            RefreshSnippetEditor();
+            _host.Notify(Loc.F("已保存片段 {0}", trigger));
+            return;
+        }
+
+        var existing = list.FirstOrDefault(x => x.Trigger == trigger);
+        if (existing != null)
+        {
+            /* 以前这里是静默覆盖：用户以为自己加了一条新片段，其实是把旧的改掉了。 */
+            bool go = AppDialog.Confirm(Window.GetWindow(this),
+                Loc.F("已经有触发词为 {0} 的片段了。\n\n要用现在的内容覆盖它吗？", trigger),
+                Loc.T("覆盖片段"), DialogKind.Question, okText: Loc.T("覆盖"));
+            if (!go) return;
+
+            existing.Text = text;
+            existing.Apps = apps;
+            existing.Comment = comment;
+            existing.Enabled = true;
+            Save();
+            ResetSnippetForm();
+            RefreshSnippetEditor();
+            _host.Notify(Loc.F("已覆盖片段 {0}", trigger));
+            return;
+        }
+
+        list.Add(new Snippet { Trigger = trigger, Text = text, Apps = apps, Comment = comment, Enabled = true });
+        Save();
+        ResetSnippetForm();
+        RefreshSnippetEditor();
+        _host.Notify(Loc.F("已添加片段 {0}", trigger));
+    }
+
+
+    /// <summary>可选的键：只列常用键，避免下拉框几百项没法找。</summary>
+    private static readonly string[] GestureKeys =
+    {
+        "capslock", "esc", "tab", "space", "enter", "backspace", "delete",
+        "insert", "home", "end", "f1", "f2", "f3", "f4", "f5", "f6",
+        "f7", "f8", "f9", "f10", "f11", "f12",
+    };
+
+    // ---------------- 按应用自动启用层 ----------------
+
+    /// <summary>刷新"层"下拉框与已有规则列表。</summary>
+    private void RefreshAppLayerEditor()
+    {
+        if (AppLayerLayerBox == null || _host == null) return;
+
+        var layers = _host.Settings.Layers.Where(l => l.Enabled).ToList();
+        AppLayerLayerBox.Items.Clear();
+        foreach (var l in layers)
+        {
+            /* 名字要走 LayerName.Display：层的名字是**配置里的数据**，
+             * 程序生成的默认名（"基础层" / "第 3 层"）要跟着界面语言走，
+             * 用户自己改过的名字才原样显示。
+             * 以前这里直接用 l.Name —— 英文界面下会看到 "Layer 1 · 基础层" 这种半中半英。 */
+            string name = LayerName.Display(l.Id, l.Name);
+            string text = Loc.F("第 {0} 层 · {1}", l.Id, name);
+            AppLayerLayerBox.Items.Add(new ComboBoxItem { Content = text, Tag = l.Id, ToolTip = text });
+        }
+        if (AppLayerLayerBox.Items.Count > 0) AppLayerLayerBox.SelectedIndex = 0;
+
+        AppLayerList.Items.Clear();
+        foreach (var rule in _host.Settings.Global.AppLayers.ToList())
+        {
+            var row = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 6) };
+
+            var del = new Button
+            {
+                Content = Loc.T("移除"),
+                Padding = new Thickness(10, 3, 10, 3),
+                Style = (Style)FindResource("Button.Base"),
+            };
+            var captured = rule;
+            del.Click += (_, _) =>
+            {
+                _host?.Settings.Global.AppLayers.Remove(captured);
+                Save();
+                RefreshAppLayerEditor();
+                _host?.RefreshAppLayer();
+            };
+            DockPanel.SetDock(del, Dock.Right);
+            row.Children.Add(del);
+
+            row.Children.Add(new TextBlock
+            {
+                Text = Loc.F("{0} → 第 {1} 层", rule.Process, rule.LayerId),
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("Text.Tertiary"),
+            });
+            AppLayerList.Items.Add(row);
+        }
+    }
+
+    private void OnAddAppLayerClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        string process = (AppLayerProcessBox.Text ?? "").Trim();
+        if (AppLayerLayerBox.SelectedItem is not ComboBoxItem item || item.Tag is not int layerId)
+            return;
+
+        string normalized = AppLayerRules.Normalize(process);
+        if (normalized.Length == 0)
+        {
+            _host.Notify(Loc.T("请先填进程名，例如 Code.exe"));
+            return;
+        }
+
+        var list = _host.Settings.Global.AppLayers;
+        var existing = list.FirstOrDefault(r => AppLayerRules.Normalize(r.Process) == normalized);
+        if (existing != null)
+        {
+            existing.LayerId = layerId;        // 同一个程序重复添加 = 改绑定
+        }
+        else
+        {
+            list.Add(new AppLayerRule { Process = normalized, LayerId = layerId });
+        }
+
+        AppLayerProcessBox.Text = "";
+        Save();
+        RefreshAppLayerEditor();
+        _host.RefreshAppLayer();
+        _host.Notify(Loc.F("已设置：{0} 使用第 {1} 层", normalized, layerId));
+    }
+
+    // ---------------- 使用统计 ----------------
+
+    private void OnUsageResetClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        UsageStats.Reset();
+        RefreshUsage();
+        _host.Notify(Loc.T("已清空使用统计"));
+    }
+
+    /// <summary>统计行：总数 + 今日 + 最常用动作。没有数据时明说，别显示 0 像个 bug。</summary>
+    private void RefreshUsage()
+    {
+        if (UsageText == null) return;
+
+        var (total, top, topCount, today) = UsageStats.Summary();
+        if (total <= 0)
+        {
+            UsageText.Text = Loc.T("还没有统计数据：执行动作后会自动累计。");
+            UsageResetButton.Visibility = Visibility.Collapsed;
+            UsageDetailButton.Visibility = Visibility.Collapsed;
+            UsageDetailPanel.Visibility = Visibility.Collapsed;
+            UsageDetailButton.Content = Loc.T("查看明细");
+            return;
+        }
+
+        string topName = string.IsNullOrEmpty(top) ? Loc.T("无") : (ActionCatalog.TitleOf(top) ?? top);
+        UsageText.Text = Loc.F("已执行 {0} 次动作 · 今日 {1} 次 · 最常用：{2}（{3} 次）",
+            total, today, topName, topCount);
+        UsageResetButton.Visibility = Visibility.Visible;
+        UsageDetailButton.Visibility = Visibility.Visible;
+
+        if (UsageDetailPanel.Visibility == Visibility.Visible) RefreshUsageDetail();
+    }
+
+    /// <summary>
+    /// 「查看明细」：展开/收起按动作排行与最近 7 天。
+    /// 只做就地展开，不开新窗口 —— 统计是"顺便看一眼"的东西，
+    /// 弹窗反而挡事。
+    /// </summary>
+    private void OnUsageDetailClick(object sender, RoutedEventArgs e)
+    {
+        bool open = UsageDetailPanel.Visibility != Visibility.Visible;
+        UsageDetailPanel.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        UsageDetailButton.Content = Loc.T(open ? "收起明细" : "查看明细");
+        if (open) RefreshUsageDetail();
+    }
+
+    /// <summary>填充明细：动作排行（最多 10 条）+ 最近 7 天逐日次数。</summary>
+    private void RefreshUsageDetail()
+    {
+        if (UsageRankList == null || UsageDayText == null) return;
+
+        var titleStyle = (Style)FindResource("Text.Secondary");
+        var countStyle = (Style)FindResource("Text.Tertiary");
+
+        UsageRankList.Items.Clear();
+        var ranking = UsageStats.ActionRanking(10);
+        if (ranking.Count == 0)
+        {
+            UsageRankList.Items.Add(new TextBlock
+            {
+                Text = Loc.T("还没有动作记录。"),
+                Style = countStyle,
+            });
+        }
+        else
+        {
+            foreach (var (action, count) in ranking)
+            {
+                var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var name = new TextBlock
+                {
+                    Text = ActionCatalog.TitleOf(action) ?? action,
+                    Style = titleStyle,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                var num = new TextBlock
+                {
+                    Text = Loc.F("{0} 次", count),
+                    Style = countStyle,
+                    Margin = new Thickness(10, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                Grid.SetColumn(num, 1);
+                row.Children.Add(name);
+                row.Children.Add(num);
+                UsageRankList.Items.Add(row);
+            }
+        }
+
+        /* 逐日一行："11-12 3 · 11-13 0 · …"，今天放最前面并标出来。 */
+        var parts = new List<string>();
+        var days = UsageStats.DailyCounts(7);
+        for (int i = days.Count - 1; i >= 0; i--)
+        {
+            var (day, count) = days[i];
+            string label = day.Length >= 10 ? day[5..] : day;      // 去掉年份，"11-12"
+            if (i == days.Count - 1) label = Loc.F("今天 {0}", label);
+            parts.Add(Loc.F("{0}：{1} 次", label, count));
+        }
+        UsageDayText.Text = parts.Count == 0 ? Loc.T("还没有记录。") : string.Join("　·　", parts);
+    }
+
+
+    private void OnStartupChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        bool enabled = StartupBox.IsChecked == true;
+        _host.Settings.Global.StartWithWindows = enabled;
+        Save();
+        /* 自启载体要跟着"是否管理员模式"走：
+         * 管理员模式用计划任务（登录静默提权，不弹 UAC），否则用注册表。 */
+        var mode = StartupManager.Sync(enabled, _host.Settings.Global.RunAsAdmin);
+        RefreshAdminState();      // 自启方式变了，权限提示要跟着变
+        _host.Notify(enabled
+            ? (mode == StartupMode.Task
+                ? Loc.T("已设置开机自启（管理员模式，不再弹 UAC）")
+                : Loc.T("已设置开机自启"))
+            : Loc.T("已取消开机自启"));
+    }
+
+    private void OnTrayChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.CloseToTray = TrayBox.IsChecked == true;
+        Save();
+    }
+
+    private void OnOpenOnStartChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.OpenWindowOnStartup = OpenOnStartBox.IsChecked == true;
+        Save();
+    }
+
+    private void OnToastChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.ShowToast = ToastBox.IsChecked == true;
+        Save();
+    }
+
+    private void OnUpdateToastChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.ShowUpdateToast = UpdateToastBox.IsChecked == true;
+        Save();
+    }
+
+    /// <summary>刷新权限显示。</summary>
+    private void RefreshPermission()
+    {
+        bool admin = Core.ElevationHelper.IsElevated;
+        AdminBadge.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+        AdminBadgeText.Text = admin ? Loc.T("管理员") : Loc.T("普通权限");
+        if (RunAsAdminBox != null) RunAsAdminBox.IsChecked = _host?.Settings.Global.RunAsAdmin ?? false;
+        if (RestartUnelevatedButton != null)
+            RestartUnelevatedButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+
+        PermissionText.Text = admin
+            ? Core.ElevationHelper.PermissionSummary()
+              + "\n" + Loc.T("⚠ 如果你发现热键没反应（按 Tab 只会切换焦点），先把「以管理员身份启动」关掉再重启 —— 部分机器上管理员权限会让键盘钩子收不到按键。")
+            : Core.ElevationHelper.PermissionSummary();
+        RefreshAdminState();
+    }
+
+    /// <summary>
+    /// 状态行：「设置成什么」和「现在实际是什么」分开写。
+    ///
+    /// 两者不一致时把「立即重启以生效」露出来 ——
+    /// 否则用户改完开关以为已经生效，实际上要等下次启动，
+    /// 中间会一直以为功能坏了（这个软件之前就吃过这个亏）。
+    /// </summary>
+    private void RefreshAdminState()
+    {
+        if (AdminStateText == null) return;
+
+        bool running = Core.ElevationHelper.IsElevated;
+        bool wanted = _host?.Settings.Global.RunAsAdmin ?? false;
+
+        /* 整行当成一条原文去翻 —— 中文用「　·　」分隔、英文该用「 · 」，
+         * 拆成多段拼接的话分隔符会跟着中文硬编码留在英文界面里。 */
+        string adminNow = running ? Loc.T("管理员权限") : Loc.T("普通权限");
+        string adminNext = wanted ? Loc.T("管理员") : Loc.T("普通");
+        AdminStateText.Text = Loc.F("当前：{0}运行　·　设置：下次启动以{1}权限运行", adminNow, adminNext);
+
+        /* 开机自启 + 管理员：只有用**注册表 Run 项**时才会每次登录弹 UAC。
+         * 改用计划任务（HighestAvailable）后，登录时由任务计划程序直接提权，
+         * 不再弹 —— 所以提示要看实际载体，不能只看两个开关。 */
+        if (wanted && _host?.Settings.Global.StartWithWindows == true)
+            AdminStateText.Text += StartupManager.CurrentMode() == StartupMode.Task
+                ? Loc.T("\n开机自启已改用计划任务：登录时静默提权，不会再弹 UAC。")
+                : Loc.T("\n开机自启时会弹一次 UAC 确认 —— 关掉「开机自动启动」就不会弹。");
+
+        RestartElevatedButton.Visibility = running == wanted ? Visibility.Collapsed : Visibility.Visible;
+        // 已经是管理员时不能再"提权重启"，按钮只用于"降回普通权限"
+        RestartElevatedButton.Content = wanted ? Loc.T("立即重启以生效") : Loc.T("立即重启（回到普通权限）");
+    }
+
+    /// <summary>
+    /// 「以管理员身份启动」开关。
+    ///
+    /// ⚠ 保存后需要**重启**才生效（启动时才决定是否提权）。
+    /// 并在开启时明确告知后果：取词功能会失效。
+    ///
+    /// 不再强制重启：以前保存完直接 `ExitApp(restart: true)`，
+    /// 用户可能正在做别的事，程序突然消失又弹 UAC 很吓人。
+    /// 现在只保存，然后问一句要不要现在重启。
+    /// </summary>
+    private void OnRunAsAdminChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        bool enable = RunAsAdminBox.IsChecked == true;
+
+        if (enable)
+        {
+            bool ok = AppDialog.Confirm(Window.GetWindow(this),
+                Loc.T("以管理员身份运行后，可以对着「以管理员身份运行」的程序按快捷键。\n\n") +
+                Loc.T("取词（选中文字 → 直接搜索）会自动改用普通权限代理执行，\n") +
+                Loc.T("管理员模式下通常仍可正常使用。\n") +
+                Loc.T("例外：目标程序本身也是管理员权限时，仍然取不到它的选区\n") +
+                Loc.T("（这是 Windows 的隔离规则，任何用户态程序都绕不过）。\n\n") +
+                Loc.T("代价：开机自启会改用计划任务（登录不再弹 UAC）；\n") +
+                Loc.T("把文件拖进本程序窗口会失效。\n\n") +
+                Loc.T("确定要开启吗？"),
+                Loc.T("开启管理员模式"), DialogKind.Warn, okText: Loc.T("开启"));
+            if (!ok)
+            {
+                _suppress = true;
+                RunAsAdminBox.IsChecked = false;
+                _suppress = false;
+                return;
+            }
+        }
+
+        _host.Settings.Global.RunAsAdmin = enable;
+        Save();
+
+        /* 提权方式变了，自启载体也要跟着换：
+         *   · 开管理员 → 改成计划任务（登录静默提权，不再每次弹 UAC）；
+         *   · 关管理员 → 改回注册表，并把遗留的计划任务删掉
+         *     （否则下次登录仍会被那个任务以管理员拉起，开关等于没关）。
+         * 此项失败不影响主流程：Sync 内部会退回 Run 键并记日志。 */
+        StartupManager.Sync(_host.Settings.Global.StartWithWindows, enable);
+
+        RefreshAdminState();
+
+        bool ask = AppDialog.Confirm(Window.GetWindow(this),
+            enable
+                ? Loc.T("已保存。下次启动会以管理员身份运行（会弹一次 UAC 确认）。\n\n现在就重启吗？")
+                : Loc.T("已保存。下次启动会以普通权限运行。\n\n现在就重启吗？"),
+            Loc.T("需要重启才生效"), DialogKind.Question, okText: Loc.T("现在重启"), cancelText: Loc.T("稍后"));
+        if (ask) RestartApp();
+    }
+
+    /// <summary>设置页里的「立即重启以生效」按钮。</summary>
+    private void OnRestartForElevation(object sender, RoutedEventArgs e) => RestartApp();
+
+    /// <summary>
+    /// 重启程序。
+    ///
+    /// 目标权限是管理员、当前不是时，先显式拉起提权实例再退出 ——
+    /// 否则普通权限重启一次还是普通权限，用户会以为开关没生效。
+    /// </summary>
+    private void RestartApp()
+    {
+        if (_host == null) return;
+        bool wanted = _host.Settings.Global.RunAsAdmin;
+        if (wanted && !Core.ElevationHelper.IsElevated)
+        {
+            if (Core.ElevationHelper.RelaunchElevated(Environment.GetCommandLineArgs().Skip(1).ToArray(), out string? err))
+            {
+                _host.ExitApp(restart: false);
+                return;
+            }
+            AppDialog.Warn(Window.GetWindow(this),
+                Loc.T("提权失败：") + (err ?? Loc.T("未知原因")) + Loc.T("\n\n（多半是在 UAC 对话框里点了「否」）"),
+                Loc.T("没能以管理员身份重启"));
+            return;
+        }
+
+        /* 当前是管理员、设置却要求普通权限：直接 Process.Start 仍会继承提升后的令牌。
+         * 必须让 explorer 代为启动，才是真正的降权重启。 */
+        if (!wanted && Core.ElevationHelper.IsElevated)
+        {
+            _host.RestartUnelevated();
+            return;
+        }
+
+        _host.ExitApp(restart: true);
+    }
+
+    /* ---- 启动密码（与备份密码完全独立的一套） ----------------------------
+     *
+     * 开启：先弹"设置新密码"（两遍确认），落库后才算开；
+     * 关闭：先验当前密码，证明了才让关 —— 否则路过的人顺手一拨就解开了；
+     * 修改：先验旧密码，再设新密码。
+     *
+     * 密码的存取全在 Core.Settings.StartupPassword（文件是真相），
+     * 这里只做流程；设置里的 Security 区段是镜像，供界面显示与随设置持久化。
+     */
+
+    /// <summary>刷新开关、状态行与「修改密码」按钮（真相以 startup.json 为准）。</summary>
+    private void RefreshStartupPwState()
+    {
+        if (_host == null) return;
+
+        StartupPassword.MirrorTo(_host.Settings.Security);
+        bool on = _host.Settings.Security.StartupPasswordEnabled;
+
+        _suppress = true;
+        StartupPwBox.IsChecked = on;
+        _suppress = false;
+
+        StartupPwStateText.Text = on
+            ? Loc.T("已开启：下次启动软件时先要输入密码。忘记密码可删除数据目录里的 startup.json 解除保护（其他设置不受影响）。")
+            : Loc.T("未开启：启动软件不需要密码。");
+
+        ChangeStartupPwButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnStartupPasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        bool enable = StartupPwBox.IsChecked == true;
+        var sec = _host.Settings.Security;
+
+        if (enable)
+        {
+            var dlg = new NewPasswordWindow(
+                Loc.T("设置启动密码"),
+                Loc.T("设好后，每次启动本软件都要先输入这个密码才能进入主界面。"));
+            dlg.ShowDialog();
+            if (dlg.Password == null)
+            {
+                RevertStartupPwBox(false);
+                return;
+            }
+
+            if (!StartupPassword.TrySet(dlg.Password, out string err))
+            {
+                AppDialog.Error(Window.GetWindow(this), err, Loc.T("设置启动密码"));
+                RevertStartupPwBox(false);
+                return;
+            }
+
+            StartupPassword.MirrorTo(sec);
+            Save();
+            RefreshStartupPwState();
+            _host.Notify(Loc.T("已设置启动密码，下次启动软件时生效"));
+        }
+        else
+        {
+            // 关保护要先证明是机主：路过的人不能顺手一拨就解开
+            var verify = new StartupPasswordWindow(
+                p => StartupPassword.Verify(p),
+                Loc.T("关闭启动密码"),
+                Loc.T("请输入当前的启动密码。验证通过后才能关闭保护。"),
+                Loc.T("关闭保护"), Loc.T("取消"));
+            verify.ShowDialog();
+            if (!verify.Passed)
+            {
+                RevertStartupPwBox(true);
+                return;
+            }
+
+            StartupPassword.Clear();
+            StartupPassword.MirrorTo(sec);
+            Save();
+            RefreshStartupPwState();
+            _host.Notify(Loc.T("已关闭启动密码"));
+        }
+    }
+
+    /// <summary>修改启动密码：验旧 → 设新。</summary>
+    private void OnChangeStartupPassword(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var verify = new StartupPasswordWindow(
+            p => StartupPassword.Verify(p),
+            Loc.T("修改启动密码"),
+            Loc.T("请输入当前的启动密码。"),
+            Loc.T("下一步"), Loc.T("取消"));
+        verify.ShowDialog();
+        if (!verify.Passed) return;
+
+        var dlg = new NewPasswordWindow(
+            Loc.T("修改启动密码"),
+            Loc.T("设个好记的新密码。下次启动就要用它了。"));
+        dlg.ShowDialog();
+        if (dlg.Password == null) return;
+
+        if (!StartupPassword.TrySet(dlg.Password, out string err))
+        {
+            AppDialog.Error(Window.GetWindow(this), err, Loc.T("修改启动密码"));
+            return;
+        }
+
+        StartupPassword.MirrorTo(_host.Settings.Security);
+        Save();
+        RefreshStartupPwState();
+        _host.Notify(Loc.T("已修改启动密码"));
+    }
+
+    /// <summary>把开关拨回真实状态（用户取消流程时用，避免界面撒谎）。</summary>
+    private void RevertStartupPwBox(bool on)
+    {
+        _suppress = true;
+        StartupPwBox.IsChecked = on;
+        _suppress = false;
+    }
+
+    private void OnFeedbackChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.ShowActionFeedback = FeedbackBox.IsChecked == true;
+        Save();
+        if (FeedbackBox.IsChecked == true)
+            _host.Notify(Loc.T("已开启按键反馈：按 Caps+S 试试，角落会显示「左移」"));
+    }
+
+    /// <summary>唤出窗口的缩放动画开关。关掉只影响"播不播"，切窗口的逻辑完全不变。</summary>
+    private void OnSummonAnimChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        bool on = SummonAnimBox.IsChecked == true;
+        _host.Settings.Global.SummonAnimation = on;
+        Save();
+        _host.Notify(on
+            ? Loc.T("已开启唤出动画：窗口切过去时会从 0.92 缩放到原尺寸")
+            : Loc.T("已关闭唤出动画（窗口切换不受影响）"));
+    }
+
+    private void OnSummonAnimDurationChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_host == null || _suppress) return;
+        // 夹取与播放共用同一个函数：界面上标出来的值就是真正生效的值。
+        int ms = Core.Windows.WindowSummonAnimator.ClampDuration((int)Math.Round(e.NewValue));
+        _host.Settings.Global.SummonAnimationMs = ms;
+        UpdateSummonAnimText(ms);
+        Save();
+    }
+
+    private void UpdateSummonAnimText(int ms)
+    {
+        if (SummonAnimText == null) return;
+        SummonAnimText.Text = Loc.F("当前 {0} 毫秒（60~400；关掉只是不做动画，窗口照常切换）", ms);
+    }
+
+    private void OnTriggerStarScaleChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_host == null || _suppress) return;
+
+        double v = Math.Round(e.NewValue, 1);
+        _host.Settings.Global.TriggerStarScale = v;
+
+        if (TriggerStarText != null)
+            TriggerStarText.Text = Loc.F("当前 {0:0.0} 倍（默认 1.5 倍，改完立即生效）", v);
+
+        Save();
+
+        /* 键盘页是缓存复用的，不主动刷新的话要等切页才看得到效果。 */
+        if (Window.GetWindow(this) is UI.Windows.MainWindow mw)
+            mw.RefreshCachedKeysPage();
+    }
+
+    private void OnRepeatChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Global.RepeatWhenHeld = RepeatBox.IsChecked == true;
+        Save();
+    }
+
+    /// <summary>
+    /// 音量一次调多少。
+    ///
+    /// 音量走系统音量键，而系统步进是固定的（通常 2%），所以设 5% 时
+    /// 实际是"这次 4%、下次 6%"交替 —— 长期平均正好 5%。
+    /// 这一点必须在界面上说清楚，否则用户会觉得"设了 5 却总是差 1"。
+    /// </summary>
+    private void OnVolumeStepChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_host == null || _suppress) return;
+        int v = (int)Math.Round(VolumeStepSlider.Value);
+        _host.Settings.Global.VolumeStep = v;
+        UpdateVolumeStepText(v);
+        Save();
+    }
+
+    private void OnBrightnessStepChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_host == null || _suppress) return;
+        int v = (int)Math.Round(BrightnessStepSlider.Value);
+        _host.Settings.Global.BrightnessStep = v;
+        UpdateBrightnessStepText(v);
+        Save();
+    }
+
+    private void UpdateVolumeStepText(int v)
+    {
+        if (VolumeStepText == null) return;
+        int sys = Core.Windows.VolumeService.StepPercent();
+        VolumeStepText.Text = (v % sys == 0
+            ? Loc.F("{0}%（按住时按系统 {1}% 细调）", v, sys)
+            : Loc.F("{0}%（系统步进 {1}%，按整数倍补偿，长期平均正好 {2}%）", v, sys, v))
+            + Loc.T(" · 单个键可在「按键映射 → 编辑绑定」里单独设步进");
+    }
+
+    private void UpdateBrightnessStepText(int v)
+    {
+        if (BrightnessStepText == null) return;
+        BrightnessStepText.Text = Loc.F("{0}%（按住时按 1% 细调）", v)
+            + Loc.T(" · 单个键可在「按键映射 → 编辑绑定」里单独设步进");
+    }
+
+    private void OnMouseSpeedChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        int v = (int)MouseSpeedSlider.Value;
+        _host.Settings.Global.MouseSpeed = v;
+        _host.Context.Mouse.Speed = v;
+        MouseSpeedText.Text = Loc.F("{0}（Caps+LAlt+滚轮 可快速调整）", v);
+        Save();
+    }
+
+    /// <summary>
+    /// 「输入文本」用哪种方式打字。
+    ///
+    /// 之所以做成设置项而不是每个绑定单独选：<c>typeText</c> 的参数就是文字本身，
+    /// 改成带模式的结构会破坏所有老配置。全局设置既能解决密码框，也不动存量数据。
+    /// </summary>
+    private void OnTextInputModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        if (TextInputBox.SelectedItem is ComboBoxItem { Tag: string tag })
+        {
+            _host.Settings.Global.TextInputMode = tag;
+            Save();
+        }
+    }
+
+    private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        if (ThemeBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            _host.Settings.Global.Theme = tag;
+            ThemeManager.Apply(ThemeManager.Parse(tag));
+            Save();
+            if (Window.GetWindow(this) is { } w)
+            {
+                bool dark = tag == "dark" || (tag == "system" && ThemeManager.IsDarkSystem);
+                WindowChrome.Apply(w, dark);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 出图用：滚到「外观」区。
+    ///
+    /// 界面语言这一行在页面下部、默认窗口高度下正好落在折叠线以下 ——
+    /// 不滚过去，截图回归就永远看不到"语言下拉里到底显示了什么"
+    /// （这个下拉曾经显示成 <c>LocLanguage { … }</c>，就是因为没人看见过它）。
+    /// </summary>
+    internal void ScrollToAppearanceForRender()
+    {
+        // 按"语言行在内容里的绝对纵坐标"直接定位，比 BringIntoView 可靠：
+        // BringIntoView 只保证"露出一部分"，可能把卡片标题顶出可视区。
+        if (RootScroll.Content is not System.Windows.FrameworkElement content) return;
+        RootScroll.UpdateLayout();
+        double y = LanguageBox.TransformToAncestor(content).Transform(default).Y;
+        RootScroll.ScrollToVerticalOffset(Math.Max(0, y - 130));
+        RootScroll.UpdateLayout();
+    }
+
+    /// <summary>
+    /// 出图用：展开「使用统计 → 查看明细」。
+    ///
+    /// 明细默认收起（大多数人只想看那一行汇总），不展开就永远没人截到它，
+    /// 里面"排行 + 近 7 天"的排版也就没人验过。
+    /// </summary>
+    internal void ShowUsageDetailForRender()
+    {
+        if (UsageDetailPanel == null) return;
+        UsageDetailPanel.Visibility = Visibility.Visible;
+        UsageDetailButton.Content = Loc.T("收起明细");
+        RefreshUsageDetail();
+        RootScroll.ScrollToTop();
+        RootScroll.UpdateLayout();
+    }
+
+    /// <summary>出图用：滚回顶部，别把滚动位置留给后面的诊断与下一张图。</summary>
+    internal void ResetRenderStateForRender()
+    {
+        RootScroll.ScrollToTop();
+        RootScroll.UpdateLayout();
+    }
+
+    /// <summary>
+    /// 把内置语言包填进下拉框。条目直接来自 <see cref="Loc.Available"/> ——
+    /// 往 Assets/Lang 丢一个新 json，这里就自动多一项，不用改代码。
+    /// </summary>
+    private void BindLanguageBox(string? current)
+    {
+        if (!ReferenceEquals(LanguageBox.ItemsSource, Loc.Available))
+            LanguageBox.ItemsSource = Loc.Available;
+
+        string code = Loc.Normalize(current);
+        LanguageBox.SelectedItem = Loc.Available.FirstOrDefault(l => l.Code == code)
+                                   ?? Loc.Available.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// 切界面语言：**不重启**。
+    ///   ① <see cref="Loc.Apply"/> 换字典并通知所有 {loc:T} 绑定 → XAML 自己重画；
+    ///   ② <c>Load()</c> 重跑一遍 —— 代码里 set 的文本（数字/步长/路径这些
+    ///      带单位的串）不会自己变，得重算；
+    ///   ③ 存盘，下次启动直接是这门语言。
+    /// </summary>
+    private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        if (LanguageBox.SelectedItem is not LocLanguage lang) return;
+        if (string.Equals(_host.Settings.Global.Language, lang.Code, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _host.Settings.Global.Language = lang.Code;
+        Save();
+
+        /* 顺序有讲究：
+         * 1) 先 Loc.Apply —— 换字典并把所有 {loc:T} 令牌作废，XAML 上的文字**自己**重画；
+         * 2) 再 Refresh —— 代码里拼出来的文本（Loc.T("设置文件：…")这类）刷新时才会重算；
+         * 3) 最后重建常驻界面 —— 托盘菜单、动作目录、提示气泡是长生命周期对象，
+         *    它们的文本在构造时就定死了，只能靠事件重建。
+         * Refresh() 内部自己管 _suppress，这里不要在外层再动它。 */
+        Loc.Apply(lang.Code);
+        Refresh();
+        _host.NotifyLocalizedSurfaces();
+    }
+
+    private void OnImportLegacy(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var dlg = new OpenFileDialog
+        {
+            Title = Loc.T("选择旧版 CapsLock+settings.ini"),
+            Filter = Loc.T("CapsLock+ 设置文件|*.ini|所有文件|*.*"),
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            var result = LegacyIniImporter.Import(dlg.FileName);
+
+            /* 导入 = 整份替换当前配置（按键 / 搜索 / 程序 / 网址 / 热字串）。
+             * 这个动作不可撤销，所以先在确认框里把"要导入多少、会覆盖什么"摆清楚 ——
+             * 以前是直接替换、然后弹一个"导入完成"，用户点错文件就再也回不去了。 */
+            int total = result.Keys + result.Search + result.Run + result.Web + result.HotStrings;
+            if (total == 0)
+            {
+                AppDialog.Info(Window.GetWindow(this),
+                    Loc.T("这个文件里没有可导入的设置（按键 / 搜索 / 程序 / 网址 / 热字串都是 0 项），当前配置没有改动。"),
+                    Loc.T("导入旧版设置"));
+                return;
+            }
+
+            string counts = Loc.F("即将导入：按键 {0} 项 / 搜索 {1} 条 / 程序 {2} 个 / 网址 {3} 个 / 文字替换 {4} 条。",
+                result.Keys, result.Search, result.Run, result.Web, result.HotStrings);
+            string warn = Loc.T("注意：导入会整份替换当前的按键、搜索、程序、网址与热字串（宏、层和触发键不受影响），且不能撤销。确定继续吗？");
+            if (!AppDialog.Confirm(Window.GetWindow(this), counts + warn, Loc.T("导入旧版设置"),
+                    okText: Loc.T("导入")))
+                return;
+
+            _host.Settings = result.Settings;
+            _host.SaveSettings();
+            _host.ReloadAll();
+            Refresh();
+            string msg = Loc.F("导入完成：\n· 按键 {0} 项\n· 搜索指令 {1} 条\n· 程序 {2} 个\n", result.Keys, result.Search, result.Run) +
+                         Loc.F("· 网址 {0} 个\n· 文字替换 {1} 条", result.Web, result.HotStrings);
+            if (result.Warnings.Count > 0)
+                msg += Loc.T("\n\n以下项目需要手动确认：\n") + string.Join("\n", result.Warnings.Take(8));
+            AppDialog.Info(Window.GetWindow(this), msg, Loc.T("导入旧版设置"), DialogKind.Success);
+        }
+        catch (Exception ex)
+        {
+            AppDialog.Error(Window.GetWindow(this), Loc.T("导入失败：") + ex.Message, Loc.T("导入旧版设置"));
+        }
+    }
+
+    /// <summary>
+    /// 「数据与维护 → 导入」：直接复用「同步与备份」页那套导入流程
+    /// （选文件 → 解密/密码 → 确认 → 应用 → 结果提示）。
+    ///
+    /// 为什么不在这里另写一套：导入涉及密码重试、分组提示、悬空宏检查，
+    /// 两份实现迟早会走偏。统一到一处，用户在哪个页面点都是同一个行为。
+    /// </summary>
+    private void OnImportClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        _host.ShowMainWindow("backup");
+        if (Windows.MainWindow.Instance?.GetPage("backup") is BackupView backup)
+            backup.BeginImport();
+    }
+
+    private void OnRestartUnelevatedClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        if (!Core.ElevationHelper.IsElevated)
+        {
+            _host.Notify(Loc.T("当前已经是普通权限"));
+            return;
+        }
+
+        if (!UI.Windows.AppDialog.Confirm(Window.GetWindow(this),
+                Loc.T("以普通权限重启？\n\n· 会关闭「以管理员身份启动」；\n· 有些机器的管理员模式下键盘钩子收不到按键（热键全失效），普通权限才正常；\n· 重启后正在跑的任务会中断。"),
+                Loc.T("以普通权限重启"), Windows.DialogKind.Question, okText: Loc.T("重启")))
+        {
+            return;
+        }
+
+        _host.RestartUnelevated();
+    }
+
+    private void OnOpenSettingsFile(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.DataDir);
+            Process.Start(new ProcessStartInfo(AppPaths.SettingsFile) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _host?.Notify(Loc.T("打开失败：") + ex.Message);
+        }
+    }
+
+    private void OnOpenLog(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            /* 日志在磁盘上是密文：先导出一份明文副本到临时目录再交给记事本，
+             * 不然用户看到的是一堆 CLP2:... 。 */
+            string text = Core.Security.SecureFile.ReadLog(CoreLog.LogPath);
+            string export = Path.Combine(Path.GetTempPath(),
+                $"InputPlus-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+            File.WriteAllText(export, text, System.Text.Encoding.UTF8);
+            Process.Start(new ProcessStartInfo(export) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _host?.Notify(Loc.T("打开日志失败：") + ex.Message);
+        }
+    }
+
+    private void OnReload(object sender, RoutedEventArgs e) => _host?.ReloadAll();
+
+    private void OnResetAll(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        if (!AppDialog.ConfirmDanger(Window.GetWindow(this),
+                Loc.T("把全部设置恢复成默认值？\n（按键映射、Qbar 条目、窗口绑定、外观都会被重置）\n\n") +
+                Loc.T("启动密码不受影响 —— 要关掉它请用上面的开关（需要验证当前密码）。"),
+                Loc.T("重置全部设置"), okText: Loc.T("恢复默认"))) return;
+        _host.Settings = DefaultSettings.Create();
+        _host.SaveSettings();
+        _host.ReloadAll();
+        Refresh();
+        _host.Notify(Loc.T("已恢复默认设置"));
+    }
+}

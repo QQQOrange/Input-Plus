@@ -15,8 +15,8 @@ ROOT = r"D:\Local AI\git\Quick search 源代码"
 ENG = os.path.join(ROOT, "ui", "data", "engines.json")
 SRC_ICONS = os.path.join(ROOT, "ui", "data", "icons")
 
-WS = r"C:\Users\64381\Documents\deepseek-harness\default-workspace"
-DIR = os.path.join(WS, "CapsLockPlus", "src", "CapsLockPlus", "Assets", "engine-icons")
+WS = os.environ.get("IP_WORKSPACE") or os.path.expanduser("~")
+DIR = os.path.join(WS, "InputPlus", "src", "InputPlus", "Assets", "engine-icons")
 CONVERTED = os.path.join(WS, "_tools", "all-icons-new")   # 已由 --svg2png 转好的 SVG 结果
 OUT = os.path.join(WS, "_tools", "qs_engine_lines.txt")
 

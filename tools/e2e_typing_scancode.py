@@ -99,8 +99,8 @@ def main():
     data = os.path.join(ROOT, f"out-e2e-scan-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_e2e_scan_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_e2e_scan_{stamp}"
 
     print(f"被测程序：{exe}")
     first = subprocess.Popen([exe, "--tray"], env=env)

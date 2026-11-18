@@ -13,8 +13,8 @@
 # 说明：测试实例走独立数据目录 + 独立互斥体后缀，不会碰正在运行的安装版。
 
 param(
-    [string]$Exe = "C:\Users\64381\Downloads\Compressed\Keyboard enhance源代码\src\CapsLockPlus\bin\Release\net10.0-windows\win-x64\KeyboardEnhance.exe",
-    [string]$Shot = "C:\Users\64381\WorkBuddy\2026-10-25-09-21-42\pwshots",
+    [string]$Exe = (Join-Path $PSScriptRoot "..\src\InputPlus\bin\Release\net10.0-windows\win-x64\InputPlus.exe"),
+    [string]$Shot = (Join-Path $env:TEMP "ip-e2e-shots"),
     [string]$Phase = "gate",
     [int]$ToggleX = 0,
     [int]$ToggleY = 0
@@ -22,7 +22,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $GateTitle = "启动密码"
-$MainTitle = "按键增强 Keyboard Enhance"
+$MainTitle = "Input Plus Input Plus"
 $Correct = "e2e-gate-2024"
 $Wrong = "wrong-pass-999"
 
@@ -30,11 +30,11 @@ New-Item -ItemType Directory -Force -Path $Shot | Out-Null
 $Data = Join-Path $Shot "pwtest-data"
 New-Item -ItemType Directory -Force -Path $Data | Out-Null
 
-$env:CAPSLOCKPLUS_DATA = $Data
-$env:CAPSLOCKPLUS_MUTEX_SUFFIX = "pwtest"
+$env:INPUTPLUS_DATA = $Data
+$env:INPUTPLUS_MUTEX_SUFFIX = "pwtest"
 
 # ---- 测试环境降噪：关掉托盘图标 ----
-# 托盘图标每次启动都会弹一个「按键增强 已启动」的气泡提示（NotifyIcon.
+# 托盘图标每次启动都会弹一个「Input Plus 已启动」的气泡提示（NotifyIcon.
 # ShowBalloonTip）。.NET 传的 1800ms 超时在现代 Windows 上会被忽略，
 # 实测逗留过半分钟，正好盖在设置页开关上，点开关全打它在身上。
 # ShowTrayIcon=false 是应用原生设置：没有托盘图标就不建、也就不弹气泡，
@@ -110,7 +110,7 @@ else {
 
 function Shot([string]$name) {
     $p = Join-Path $Shot "$name.png"
-    & "C:\Users\64381\.workbuddy\binaries\python\versions\3.13.12\python.exe" -c "from PIL import ImageGrab; ImageGrab.grab(all_screens=True).convert('RGB').save(r'$p')"
+    & $(if ($env:PYTHON) { $env:PYTHON } else { "python" }) -c "from PIL import ImageGrab; ImageGrab.grab(all_screens=True).convert('RGB').save(r'$p')"
     return $p
 }
 

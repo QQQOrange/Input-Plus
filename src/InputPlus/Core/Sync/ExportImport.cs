@@ -1,0 +1,571 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using InputPlus.Core;
+using InputPlus.Core.Settings;
+
+namespace InputPlus.Core.Sync;
+
+/// <summary>
+/// 一组可勾选的导出项。
+///
+/// <see cref="Keys"/> 是 <see cref="AppSettings"/> 上的属性名（PascalCase），
+/// 导入侧按同一张表裁剪，两边不会各写一套"这个键怎么读"的规则。
+/// </summary>
+public sealed record ExportGroup(
+    string Id,
+    string Name,
+    string Desc,
+    string[] Keys,
+    bool Private,
+    bool DefaultChecked)
+{
+    /* 表里存的是中文原文（身份用 Id，不靠名字），显示时翻一次 ——
+     * 界面上这张表有十来行名字 + 说明，逐个调用点包 Loc.T 只会把那份清单弄脏。 */
+    public string DisplayName => Localization.Loc.T(Name);
+
+    public string DisplayDesc => Localization.Loc.T(Desc);
+}
+
+/// <summary>
+/// 配置的按项导出 / 导入。
+///
+/// 与「备份」的分工（照搬 QuickSearch 的结论）：
+///   * **备份**：整份配置 + 加密，恢复时全量覆盖，走 WebDAV 同步；
+///   * **导出**：挑几项 + 合并式导入，用来在机器之间搬配置。
+///
+/// 导出有两种模式：
+///   * **加密导出（默认）**：用备份密码加密，**勾了哪组就导出那组的全部字段**，
+///     包括网盘密码、备份密码 —— 文件本身是密文，泄露风险由加密承担；
+///   * **明文导出**：为了"直接发给别人"这种场景，剔除凭据类字段。
+///
+/// 导入侧靠内容自动识别（<see cref="CryptoBox.LooksEncrypted"/>），
+/// 加密的和明文的都能读，用户不用记"这份是哪种"。
+/// </summary>
+public static class ExportImport
+{
+    public const string ExportKind = "clp-config";
+
+    /// <summary>导出文件的默认扩展名。加密与明文共用，导入时按内容判断。</summary>
+    public const string Extension = ".clpconf";
+
+    /// <summary>导入文件大小上限（超过直接拒绝，避免把内存吃光）。</summary>
+    public const long MaxBytes = 32L * 1024 * 1024;
+
+    /// <summary>
+    /// 可导出的组。
+    ///
+    /// ⚠ 一张表同时服务三处：勾选界面、导出时的键裁剪、导入时的合法性校验。
+    /// **加一组只改这里**，界面和后端自动跟上。
+    ///
+    /// private = true 的组涉及凭据 / 隐私，默认**不勾**，界面上标红。
+    /// </summary>
+    public static readonly ExportGroup[] Groups =
+    {
+        new("keys", "按键映射", "所有层的按键绑定（含自定义组合键与宏绑定、每只键盘/鼠标各自的方案）",
+            new[] { nameof(AppSettings.Keys), nameof(AppSettings.Layers), nameof(AppSettings.Profiles) },
+            Private: false, DefaultChecked: true),
+
+        /* Keys 必须把**组名承诺的东西**全列上：这一组叫"触发键与层"，
+         * 以前只写了 Triggers，导出的文件里没有 Layers —— 用户勾了却拿不到层。 */
+        new("triggers", "触发键与层", "触发键配置、10 个层的名称与启用状态",
+            new[] { nameof(AppSettings.Triggers), nameof(AppSettings.Layers) },
+            Private: false, DefaultChecked: true),
+
+        /* 1.0：手势与平滑滚动终于能**按项**搬了。
+         * 以前它们只能跟着"整份备份"走：想把调好的一套手势给另一台机器，
+         * 只能全量覆盖别人的配置，代价太大，于是很多人干脆在新机器上重新画一遍。 */
+        new("gestures", "鼠标手势", "全部笔画手势、角落与贴边滚轮手势，以及手势识别参数（起手键、判定阈值、轨迹提示）",
+            new[] { nameof(AppSettings.Gestures), nameof(AppSettings.GestureOptions) },
+            Private: false, DefaultChecked: true),
+
+        new("scroll", "平滑滚动", "平滑滚动的速度、动画时长、加速曲线，以及每只程序单独的例外规则",
+            new[] { nameof(AppSettings.Scroll), nameof(AppSettings.ScrollApps) },
+            Private: false, DefaultChecked: true),
+
+        new("macros", "宏", "录制好的宏与步骤（不含按键绑定）",
+            new[] { nameof(AppSettings.Macros) },
+            Private: false, DefaultChecked: true),
+
+        new("search", "搜索引擎", "Qbar 的搜索引擎表与图标标记",
+            new[] { nameof(AppSettings.Search) },
+            Private: false, DefaultChecked: true),
+
+        new("runWeb", "启动项与网址", "Qbar 的程序启动项、常用网址、热字串",
+            new[] { nameof(AppSettings.Run), nameof(AppSettings.Web), nameof(AppSettings.HotStrings) },
+            Private: false, DefaultChecked: true),
+
+
+        /* 文本片段存在 Global 里（和历史结构有关），所以这一组导出的是 Global。
+         * 描述里必须写清楚"顺带带走别的东西"，否则用户只勾这一组会意外改掉外观。 */
+        new("snippets", "别名替换", "别名、展开内容、备注、分组、限定程序，以及前缀符号等设置（因为存在 Global 里，同组还会带走外观与行为设置）",
+            new[] { nameof(AppSettings.Global), nameof(AppSettings.Hotstring) },
+            Private: false, DefaultChecked: true),
+
+        new("appearance", "外观与行为", "主题、Qbar 面板样式、鼠标速度、按键行为等",
+            new[] { nameof(AppSettings.Qbar), nameof(AppSettings.Global) },
+            Private: false, DefaultChecked: true),
+
+        new("usage", "使用统计", "每个动作用过多少次、每天的使用次数（换机器也能接着统计）",
+            Array.Empty<string>(), Private: false, DefaultChecked: true),
+
+        new("syncSettings", "同步与备份设置", "WebDAV 地址、用户名、备份保留策略；加密导出时含密码",
+            new[] { nameof(AppSettings.Sync) },
+            Private: true, DefaultChecked: false),
+    };
+
+    /// <summary>
+    /// **明文导出**时永远不写的字段（`属性.子属性`）。
+    ///
+    /// 只在明文模式下生效：明文文件的设计前提是"可以直接发给别人"，
+    /// 那么凭据就不能靠"用户别勾"来保证安全 —— 总有人会点「全选」。
+    ///
+    /// 加密导出**不走这张表**：文件是 AES-256-GCM 密文，
+    /// 勾了「同步与备份设置」就该把网盘密码一起带走，
+    /// 否则换台机器恢复完还得重新填一遍，等于没导出。
+    /// </summary>
+    public static readonly string[] NeverExport =
+    {
+        "Sync.WebDavPass",
+        "Sync.BackupPassword",
+
+        /* 启动密码整套都不出门：它是"本机上的一把锁"——
+         *   · 哈希跟着配置走的话，换台机器导入完会向用户要一个
+         *     他从没在本机设过的密码，直接把自己锁在门外；
+         *   · 而启动密码的真相（startup.json）本来就不随备份走，
+         *     设置里这份只是镜像，两边必须一致。
+         * 想在新机器上用启动密码，到那台机器的设置里再设一次。 */
+        "Security.StartupPasswordEnabled",
+        "Security.StartupPasswordSalt",
+        "Security.StartupPasswordHash",
+        "Security.StartupPasswordIterations",
+
+        /* GitHub 令牌**不再**在这张表里：用户明确要求"备份和导出都必须带令牌"，
+         * 否则换台机器导入后还得重新去 GitHub 建一个。
+         *
+         * 代价是明文导出会把它写进文件 —— 这是有意接受的，因为：
+         *   · 令牌只读公开仓库的更新信息，泄露的后果是"别人用你的配额"；
+         *   · 而备份密码泄露 = 别人能解开你所有云备份，所以那两个仍然摘掉；
+         *   · 界面上会明确标出"当前是明文导出，文件里含令牌"，
+         *     想安全就勾上加密（默认就是勾着的）。 */
+    };
+
+    /// <summary>
+    /// 数一数"有多少个按键指向本机不存在的宏"。
+    ///
+    /// 为什么需要它：分组是**按项**导出的，「按键映射」里存的是 `macro:&lt;id&gt;` 这样的引用，
+    /// 而宏定义在「宏」那一组。用户只勾前者时，导入后那些键按下去只会得到
+    /// "宏不存在，可能已被删除"。这不算导入失败，但必须**说出来**，
+    /// 否则用户会以为导入坏了。
+    /// </summary>
+    public static int CountDanglingMacroRefs(AppSettings s)
+    {
+        var ids = new HashSet<string>(
+            (s.Macros ?? new List<Core.Settings.Macro>()).Select(m => m.Id), StringComparer.Ordinal);
+        int n = 0;
+        foreach (var k in s.Keys ?? new List<KeyBinding>())
+        {
+            if (!k.IsBound) continue;
+            if (!k.Action.StartsWith("macro:", StringComparison.Ordinal)) continue;
+            if (!ids.Contains(k.Action["macro:".Length..])) n++;
+        }
+        return n;
+    }
+
+    /// <summary>把不该出门的字段从**明文**导出数据里摘掉。</summary>
+    internal static void Sanitize(JsonObject data)
+    {
+        foreach (string path in NeverExport)
+        {
+            int dot = path.IndexOf('.');
+            if (dot <= 0) continue;
+            string root = path[..dot], child = path[(dot + 1)..];
+            if (data[root] is JsonObject obj) obj.Remove(child);
+        }
+    }
+
+    public static ExportGroup? FindGroup(string id) =>
+        Groups.FirstOrDefault(g => g.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>给界面用的组清单。</summary>
+    public static IEnumerable<ExportGroup> Items() => Groups;
+
+    // ---------------- 导出 ----------------
+
+    private static readonly JsonSerializerOptions WriteOpts = new()
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>
+    /// 按勾选的组生成导出内容。返回 (文件文本, 写进去的设置项个数)。
+    /// </summary>
+    /// <param name="includeSecrets">
+    /// true = 勾了哪组就导出那组的**全部**字段（加密导出用）；
+    /// false = 剔除 <see cref="NeverExport"/> 里的凭据（明文导出用）。
+    /// </param>
+    public static (string Text, int KeyCount) Build(AppSettings settings,
+        IEnumerable<string> selectedGroups, bool includeSecrets = false)
+    {
+        var ids = selectedGroups.ToList();
+        var allow = AllowKeys(ids);
+
+        // 整份配置序列化成 JSON，再挑出允许的键 —— 这样加字段不用改两处
+        var all = JsonSerializer.SerializeToNode(settings, SettingsStore.JsonOptions)!.AsObject();
+        var data = new JsonObject();
+        foreach (string key in allow)
+        {
+            if (all.TryGetPropertyValue(key, out var v) && v != null)
+                data[key] = JsonNodeTool.DeepClone(v);
+        }
+
+        /* 「触发键与层」只承诺层名称/启用状态，不承诺按键映射。
+         * 单独勾它时把 Layers.Keys 从导出文件里摘掉，避免导入时把别人的键位
+         * 覆盖到本机（源文件仍保留 Keys 给「按键映射」组使用）。 */
+        if (ids.Contains("triggers", StringComparer.OrdinalIgnoreCase)
+            && !ids.Contains("keys", StringComparer.OrdinalIgnoreCase)
+            && data["Layers"] is JsonArray layerArray)
+        {
+            foreach (var layerNode in layerArray.OfType<JsonObject>())
+                layerNode.Remove("Keys");
+        }
+
+        /* 使用统计不在 AppSettings 里（单独一个 usage.json），单独挂到 data 下。 */
+        if (ids.Contains("usage", StringComparer.OrdinalIgnoreCase))
+            data["Usage"] = JsonNode.Parse(Core.UsageStats.ExportJson());
+
+        var file = new JsonObject
+        {
+            ["kind"] = ExportKind,
+            ["items"] = new JsonArray(ids.Select(i => (JsonNode)i!).ToArray()),
+            // 导出时刻（Unix 秒）。导入界面显示"这份配置什么时候导出的"，方便判断新旧。
+            ["at"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            ["app"] = Core.AppInfo.ProductName,
+            ["version"] = typeof(ExportImport).Assembly.GetName().Version?.ToString(3) ?? "",
+            ["data"] = data,
+        };
+
+        // 只有明文导出才脱敏：加密导出的安全性由加密本身保证，
+        // 摘掉密码会让"换台机器恢复"变成"还得重新填一遍"。
+        if (!includeSecrets) Sanitize(data);
+
+        return (file.ToJsonString(WriteOpts), data.Count);
+    }
+
+    /// <summary>
+    /// 这些组里有没有"隐私组"（含凭据）。
+    ///
+    /// 有就不能明文导出 —— 界面据此锁住加密开关，<see cref="WritePlain"/> 再兜一层。
+    /// 返回它们的显示名，方便直接拼进提示里。
+    /// </summary>
+    public static List<string> PrivateNames(IEnumerable<string> groups)
+    {
+        var names = new List<string>();
+        foreach (string id in groups)
+        {
+            var g = FindGroup(id);
+            if (g is { Private: true } && !names.Contains(g.Name)) names.Add(g.Name);
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// 把勾选的组写成一份**明文**文件。
+    ///
+    /// 勾了隐私组直接拒绝：那些组里有网盘密码、备份密码这类凭据，
+    /// 明文文件一旦被转发就等于把凭据送出去。界面上加密开关会被锁死，
+    /// 这里再兜一层是为了防止别的调用路径（导入侧、命令行）绕过去。
+    /// </summary>
+    public static int WritePlain(string path, AppSettings settings,
+        IEnumerable<string> selectedGroups)
+    {
+        var selected = selectedGroups.ToList();
+        var priv = PrivateNames(selected);
+        if (priv.Count > 0)
+            throw new InvalidOperationException(
+                Loc.F("勾选了隐私内容（{0}），只能用加密导出。", Loc.Join(priv)));
+
+        var (text, count) = Build(settings, selected);
+        File.WriteAllText(path, text, System.Text.Encoding.UTF8);
+        CoreLog.Info($"已导出明文配置：{path}（{count} 个设置项）");
+        return count;
+    }
+
+    /// <summary>
+    /// 把勾选的组写成一份**加密**文件：勾了哪组就是那组的全部字段。
+    /// 返回写进去的设置项个数。
+    /// </summary>
+    public static int WriteEncrypted(string path, AppSettings settings,
+        IEnumerable<string> selectedGroups, string password)
+    {
+        if (string.IsNullOrWhiteSpace(password))
+            throw new InvalidOperationException(
+                "加密导出需要密码 —— 先在「备份密码」里设一个，或改成明文导出");
+
+        var (text, count) = Build(settings, selectedGroups, includeSecrets: true);
+        File.WriteAllText(path, CryptoBox.Encrypt(text, password), System.Text.Encoding.UTF8);
+        CoreLog.Info($"已导出加密配置：{path}（{count} 个设置项）");
+        return count;
+    }
+
+    // ---------------- 导入 ----------------
+
+    /// <summary>
+    /// 读一份配置文件（导出文件或备份文件，加密或明文都行）。
+    ///
+    /// 三道闸，全部是"宁可拒绝也别冲掉用户配置"：
+    ///   1. **加密内容先解密**：口令不对就抛 <see cref="BackupPasswordException"/>，
+    ///      让界面去问密码 —— 不能把密文当坏 JSON 报个看不懂的错；
+    ///   2. 有 `kind` 就必须是 clp-config；
+    ///   3. `items` 必须是字符串数组，`data` 必须是非空对象。
+    ///
+    /// **备份文件也接受**：它解密出来就是一份完整的 AppSettings，只是没有
+    /// kind/items 这层包装。用户经常分不清 `.keyboardenhance`（备份）和
+    /// `.clpconf`（导出）—— "另一台电脑导入不了"多半就是拿错了文件。
+    /// 与其报一句"这不是导出文件"再让他去别的页面，不如按整份导入处理
+    /// （<paramref name="wasBackup"/> 会告诉界面，好把确认文案说清楚）。
+    /// </summary>
+    /// <param name="password">解密口令；null = 用当前设置里的备份密码（由调用方决定）。</param>
+    /// <returns>Groups = 认得的组；Data = 要应用的数据；WasBackup = 来自备份文件。</returns>
+    public static (List<string> Groups, JsonObject Data, bool WasBackup) Parse(
+        string text, string? password = null)
+    {
+        if (CryptoBox.LooksEncrypted(text))
+        {
+            try
+            {
+                text = CryptoBox.Decrypt(text, password ?? "");
+            }
+            catch (Exception e)
+            {
+                // 统一成"密码问题"，界面据此弹密码框重试
+                throw new BackupPasswordException(e.Message, e);
+            }
+        }
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(text);
+        }
+        catch (Exception e)
+        {
+            throw new InvalidOperationException(Loc.F("文件内容不是有效的 JSON：{0}", e.Message));
+        }
+        if (node is not JsonObject root)
+            throw new InvalidOperationException("文件内容不是一个 JSON 对象");
+
+        string? kind = root["kind"]?.GetValue<string>();
+
+        /* 没有 kind：可能是整份备份。看它像不像一份配置 —— 有 Layers / Keys / Sync
+         * 任一顶层字段就认，然后按"全部组"整份导入。 */
+        if (kind == null)
+        {
+            bool looksLikeBackup =
+                root.ContainsKey(nameof(AppSettings.Layers))
+                || root.ContainsKey(nameof(AppSettings.Keys))
+                || root.ContainsKey(nameof(AppSettings.Sync));
+
+            if (!looksLikeBackup)
+                throw new InvalidOperationException(
+                    "这个文件既不是导出配置、也不是备份（里面没有可识别的配置字段）。"
+                    + "请确认选的是 InputPlus 导出的 .clpconf 或备份的 .inputplus 文件。");
+
+            /* 整份备份走"全部组"：这是用户点"恢复备份"时的预期 ——
+             * 备份里有 8 组就恢复 8 组，包括同步设置与令牌。
+             * （导入前界面会弹确认框，明确告诉用户这是一次整份覆盖。） */
+            var allIds = Groups.Select(g => g.Id).ToList();
+            return (allIds, root, true);
+        }
+
+        if (!kind.Equals(ExportKind, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(Loc.F("不支持的文件类型：{0}", kind));
+
+        if (root["items"] is not JsonArray arr)
+            throw new InvalidOperationException("导出文件的 items 字段不对（应当是字符串数组）");
+
+        var ids = arr.Select(x => x?.GetValue<string>() ?? "")
+                     .Where(s => s.Length > 0)
+                     .ToList();
+
+        if (root["data"] is not JsonObject data || data.Count == 0)
+            throw new InvalidOperationException("这份导出里没有任何数据（导出时大概什么都没勾）");
+
+        // 只保留认得的组
+        var known = ids.Where(i => FindGroup(i) != null).ToList();
+        return (known, data, false);
+    }
+
+    /// <summary>从文件读一份导出（加密或明文；备份文件也认）。</summary>
+    public static (List<string> Groups, JsonObject Data, bool WasBackup) ReadPlain(
+        string path, string? password = null)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > MaxBytes)
+            throw new InvalidOperationException("文件超过 32MB，确认选对了吗");
+        return Parse(File.ReadAllText(path, System.Text.Encoding.UTF8), password);
+    }
+
+    /// <summary>
+    /// 把导入的数据合并进当前设置。
+    ///
+    /// ⚠ 必须**按勾选的组裁剪**，不能把整份 data 原样灌进去。
+    /// 否则一份 `{"kind":"clp-config","items":["appearance"],
+    /// "data":{"Sync":{...攻击者的网盘地址...}}}` 就能在用户只勾了"外观"的
+    /// 情况下，把同步目标换成别人的服务器，下次启动就把含网盘密码和备份密码的
+    /// 整份配置推上去 —— 而用户看到的只是一次正常的明文导入。
+    ///
+    /// 返回实际应用了哪些组。
+    /// </summary>
+    public static List<string> Apply(AppSettings settings, List<string> groups, JsonObject data)
+    {
+        /* 是不是"整份"导入（备份恢复 / 全选导出）。
+         *
+         * 整份导入 = 用户明确要覆盖全部配置，Global 里那些内容型的成员
+         * （片段 / 组合键 / 双击 / 叠加层 / 改键 / 令牌）当然要跟着过来。
+         * 只有**部分导入**（比如只勾了「外观与行为」）才保留本机的内容型配置，
+         * 否则朋友发来一份外观配置，你的片段和改键就没了。 */
+        bool fullRestore = groups.Count >= Groups.Length;
+
+        var allow = AllowKeys(groups);
+        var filtered = new JsonObject();
+        foreach (string key in allow)
+        {
+            if (data.TryGetPropertyValue(key, out var v) && v != null)
+                filtered[key] = JsonNodeTool.DeepClone(v);
+        }
+
+        // 走与读设置文件同一套反序列化：clamp、默认值补齐全部复用，两边行为一致
+        AppSettings? merged;
+        try
+        {
+            merged = JsonSerializer.Deserialize<AppSettings>(
+                filtered.ToJsonString(), SettingsStore.JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            /* 字段类型不对（手改过、别的工具重新序列化过）：
+             * 直接抛 JsonException 的话，导入对话框上会出现
+             * "The JSON value could not be converted to System.Collections.Generic.List…"
+             * 这种天书。转成人话，并保留原始信息在日志里。 */
+            CoreLog.Warn("导入配置时字段类型不对：" + ex.Message);
+            throw new InvalidOperationException(
+                "导入的数据格式不对（有字段的类型和预期不一致），这个文件可能被手工改过。", ex);
+        }
+        if (merged == null) throw new InvalidOperationException("导入的数据解析失败");
+
+        foreach (string key in allow)
+        {
+            /* 数据里没有这一项就**不要动本机的**。
+             *
+             * merged 是从 filtered 反序列化出来的：缺失的字段会变成默认值
+             * （Keys = 空列表、Qbar = 全套默认外观）。以前这里按 allow 逐个赋值，
+             * 于是"勾了某一组、但文件里恰好没有这个键"（老版本导出、手改过的、
+             * 别的工具生成的）会把本机对应的内容**清空成默认**。 */
+            if (!filtered.ContainsKey(key)) continue;
+
+            switch (key)
+            {
+                case nameof(AppSettings.Keys):
+                    settings.Keys = merged.Keys; break;
+                case nameof(AppSettings.Layers):
+                    /* 只导入触发键/层元数据时，不能把源文件的 Keys 代进本机，
+                     * 否则“只换层名”会静默清空或替换本地按键映射。 */
+                    if (groups.Contains("triggers", StringComparer.OrdinalIgnoreCase)
+                        && !groups.Contains("keys", StringComparer.OrdinalIgnoreCase))
+                    {
+                        var localLayers = settings.Layers.ToDictionary(l => l.Id);
+                        foreach (var incomingLayer in merged.Layers)
+                        {
+                            if (localLayers.TryGetValue(incomingLayer.Id, out var local))
+                                incomingLayer.Keys = local.Keys;
+                        }
+                    }
+                    settings.Layers = merged.Layers; break;
+                case nameof(AppSettings.Profiles):
+                    /* 设备方案跟着「按键映射」走。导到另一台机器时设备可能根本插不上，
+                     * 那些方案就静静躺着 —— 等同一只键盘插上自然生效，不用重配。 */
+                    settings.Profiles = merged.Profiles; break;
+                case nameof(AppSettings.Triggers):
+                    settings.Triggers = merged.Triggers; break;
+                /* 1.0：手势与滚动两组。整块替换 —— 这两组的内容是"一套配置"，
+                 * 逐条合并反而会留下两套互相排斥的设置（旧阈值 + 新手势）。 */
+                case nameof(AppSettings.Gestures):
+                    settings.Gestures = merged.Gestures; break;
+                case nameof(AppSettings.GestureOptions):
+                    settings.GestureOptions = merged.GestureOptions; break;
+                case nameof(AppSettings.Scroll):
+                    settings.Scroll = merged.Scroll; break;
+                case nameof(AppSettings.ScrollApps):
+                    settings.ScrollApps = merged.ScrollApps; break;
+                case nameof(AppSettings.Macros):
+                    settings.Macros = merged.Macros; break;
+                case nameof(AppSettings.Search):
+                    settings.Search = merged.Search; break;
+                case nameof(AppSettings.Run):
+                    settings.Run = merged.Run; break;
+                case nameof(AppSettings.Web):
+                    settings.Web = merged.Web; break;
+                case nameof(AppSettings.HotStrings):
+                    settings.HotStrings = merged.HotStrings; break;
+                case nameof(AppSettings.Hotstring):
+                    settings.Hotstring = merged.Hotstring; break;
+                case nameof(AppSettings.Qbar):
+                    settings.Qbar = merged.Qbar; break;
+                case nameof(AppSettings.Global):
+                    /* 「外观与行为」这一组承诺的是主题、面板样式、鼠标速度这类设置，
+                     * 不是"把整台机器的个性化内容换掉"。
+                     *
+                     * Global 里同时塞着文本片段、双击动作、按应用叠加层、
+                     * 基础改键和 GitHub 令牌 —— 部分导入时整块替换会**静默删掉**
+                     * 本机的这些内容（朋友发来一份"外观"配置，导完你的片段和改键全没了）。
+                     * 整份备份恢复则相反：那本来就是"覆盖全部"，必须原样带过来。 */
+                    var incoming = merged.Global;
+                    if (!fullRestore)
+                    {
+                        incoming.Snippets = settings.Global.Snippets;
+                        incoming.KeyGestures = settings.Global.KeyGestures;
+                        incoming.AppLayers = settings.Global.AppLayers;
+                        incoming.BaseRemaps = settings.Global.BaseRemaps;
+                        incoming.GitHubToken = settings.Global.GitHubToken;
+                    }
+                    settings.Global = incoming;
+                    break;
+                case nameof(AppSettings.Sync):
+                    settings.Sync = merged.Sync; break;
+            }
+        }
+
+        // 导入的数据可能缺项，归一化一遍保证结构完整。
+        // 但不要补基础层 Q/R：只勾部分分组导入时，文件里没有 Keys
+        // 并不代表用户想把这两个默认键加回来。
+        SettingsStore.Normalize(settings, includeBaseLayerDefaults: false);
+
+        /* 使用统计是独立文件，挂在 data["Usage"] 下；勾了这一组才恢复。 */
+        if (groups.Contains("usage", StringComparer.OrdinalIgnoreCase)
+            && data.TryGetPropertyValue("Usage", out var usageNode)
+            && usageNode != null)
+        {
+            Core.UsageStats.ImportJson(usageNode.ToJsonString());
+        }
+
+        CoreLog.Info($"已导入明文配置：组={string.Join(",", groups)}，键={filtered.Count}");
+        return groups;
+    }
+
+    /// <summary>把组 ID 展开成允许的设置项键名（去重）。</summary>
+    internal static List<string> AllowKeys(IEnumerable<string> groups)
+    {
+        var set = new List<string>();
+        foreach (string id in groups)
+        {
+            var g = FindGroup(id);
+            if (g == null) continue;
+            foreach (string k in g.Keys)
+            {
+                if (!set.Contains(k, StringComparer.OrdinalIgnoreCase)) set.Add(k);
+            }
+        }
+        return set;
+    }
+}

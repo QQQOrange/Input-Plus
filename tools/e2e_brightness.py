@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ddc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_EXE = os.path.join(ROOT, "src", "CapsLockPlus", "bin", "Debug",
-                            "net10.0-windows", "win-x64", "KeyboardEnhance.exe")
+_DEFAULT_EXE = os.path.join(ROOT, "src", "InputPlus", "bin", "Debug",
+                            "net10.0-windows", "win-x64", "InputPlus.exe")
 # 可以传一个 exe 路径做旧版本对照（python tools/e2e_brightness.py <exe>）
 EXE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else _DEFAULT_EXE
 
@@ -80,8 +80,8 @@ def main():
     data = os.path.join(ROOT, f"out-e2e-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_e2e_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_e2e_{stamp}"
 
     baseline = brightness()
     if baseline is None:

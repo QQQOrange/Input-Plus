@@ -1,4 +1,4 @@
-﻿# ---- .NET / 构建产物 ----
+# ---- .NET / 构建产物 ----
 bin/
 obj/
 [Dd]ebug/
@@ -22,7 +22,7 @@ dist/
 
 # ---- 单文件发布/更新残留 ----
 *.old-*.exe
-CapsLockPlus-*.exe
+InputPlus-*.exe
 
 # ---- 测试与覆盖率 ----
 [Tt]est[Rr]esult*/
@@ -61,7 +61,7 @@ logs/
 # ⚠️ icons/ 只忽略运行时生成的图标缓存，Core/Icons/ 是**源码**，必须跟踪
 #    （2026-10-25 误删过一次，靠反编译才找回来）。
 icons/
-!src/CapsLockPlus/Core/Icons/
+!src/InputPlus/Core/Icons/
 render/
 shots/
 
@@ -85,3 +85,14 @@ selftest-stderr.txt
 .rd*/
 .st5*/
 .render5*/
+.render-*/
+.selftest-p/
+
+
+# ---- 本地工作区：解密出来的配置/日志、渲染产物、临时脚本 ----
+# 这些东西里面有本机用户名、真实手势与书签，绝不能进仓库。
+ke-work/
+*tar.gz
+clp-settings.json
+.gesture-*/
+

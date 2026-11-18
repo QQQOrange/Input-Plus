@@ -189,8 +189,8 @@ def main():
             result["proc"] = subprocess.Popen(
                 [exe, "--osd", "50"],
                 env={**os.environ,
-                     "CAPSLOCKPLUS_DATA": os.path.abspath("tools/.rad-data"),
-                     "CAPSLOCKPLUS_MUTEX_SUFFIX": "_rad"})
+                     "INPUTPLUS_DATA": os.path.abspath("tools/.rad-data"),
+                     "INPUTPLUS_MUTEX_SUFFIX": "_rad"})
         root.after(700 if mode == "system" else 1100, capture)
 
     def capture():

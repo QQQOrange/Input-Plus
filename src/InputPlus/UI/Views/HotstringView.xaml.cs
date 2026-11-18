@@ -1,0 +1,1995 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using InputPlus.Core;
+using InputPlus.Core.Settings;
+
+namespace InputPlus.UI.Views;
+
+/// <summary>
+/// 「别名替换」页：三栏 —— 左分组、中列表、右编辑。
+///
+/// 数据源是 <see cref="GlobalOptions.Snippets"/>（真正参与展开的那一份）。
+/// 分组既可以从设置里的 <see cref="GlobalOptions.SnippetGroups"/> 手动新建，
+/// 也会自动收进别名身上已经用到的组名 —— 以前只能"先有别名才有组"，
+/// 用户没法先建一个空分组再往里放东西。
+/// </summary>
+public partial class HotstringView : UserControl
+{
+    private AppHost? _host;
+    private Snippet? _editing;
+    private bool _suppress;
+
+    /// <summary>刷新分组列表后要选中的组名（改名/新建后用它把选中状态带过去）。</summary>
+    private string? _selectGroupAfterRefresh;
+
+    /// <summary>自动对齐前缀只做一次，避免迁移后再次触发。</summary>
+    private bool _prefixAlignedOnce;
+
+    /// <summary>当前排序方式（0 触发词 / 1 最近使用 / 2 使用次数）。</summary>
+    private int _sortMode;
+
+    /// <summary>只显示从未使用过的别名。</summary>
+    private bool _unusedOnly;
+
+    /// <summary>列表里是否显示展开后的内容（眼睛按钮控制）。</summary>
+
+    /* ---------------- 拖拽状态 ---------------- */
+
+    /// <summary>按下左键时的位置（判断"是点击还是拖拽"）。</summary>
+    private Point _dragStartPoint;
+
+    /// <summary>按下左键时命中的别名（拖拽源）。</summary>
+    private Snippet? _dragSnippet;
+
+    /// <summary>当前高亮的分组行（拖拽经过时）。</summary>
+    private ListBoxItem? _dragHoverItem;
+
+    /// <summary>自定义顺序拖拽时的插入位置指示线。</summary>
+    private UI.InsertLineAdorner? _insertLine;
+
+    /// <summary>跟着鼠标走的拖拽小卡片。</summary>
+    private UI.DragChipAdorner? _dragAdorner;
+
+    /// <summary>分组行的 Group：null = 全部；"" = 未分组；其它 = 组名。</summary>
+    private sealed class GroupRow
+    {
+        public string? Group { get; init; }
+        public string Label { get; init; } = "";
+        public int Count { get; init; }
+        public bool IsReal => Group is { Length: > 0 };
+        public override string ToString() => Label;
+    }
+
+    public sealed class Row
+    {
+        public Snippet Snippet { get; init; } = new();
+        public string KeyLabel { get; init; } = "";
+
+        /// <summary>列表左侧小方块里的首字母。</summary>
+        public string Initial { get; init; } = "";
+
+        /// <summary>右侧显示的分组名（没分组就是空）。</summary>
+        public string GroupLabel { get; init; } = "";
+        public string Preview { get; init; } = "";
+
+        /// <summary>
+        /// 左侧小方块里显示的**当前前缀符号**（例如 `;`）。
+        ///
+        /// 它跟着设置里的「前缀符号」走：改前缀会刷新列表，这里自然一起变。
+        /// 前缀被清空（不需要前缀）时显示一个中点，避免出现空白方块。
+        /// </summary>
+        public string PrefixLabel { get; init; } = ";";
+
+        /// <summary>停用的别名整行压暗，一眼能看出来（不用点进去看勾选）。</summary>
+        public double Opacity => Snippet.Enabled ? 1.0 : 0.45;
+
+        /// <summary>列表右侧的"用过几次"；从没用过就留空，避免一列全是 0。</summary>
+        public string UsageLabel => Snippet.UseCount > 0 ? Snippet.UseCount.ToString() : "";
+
+        public override string ToString() => KeyLabel;
+    }
+
+    public HotstringView()
+    {
+        InitializeComponent();
+
+        /* 排序下拉：文字在构造时填，切语言重开页面即可（和其他页面一致）。 */
+        SortBox.Items.Add(Loc.T("按触发词"));
+        SortBox.Items.Add(Loc.T("按最近使用"));
+        SortBox.Items.Add(Loc.T("按使用次数"));
+        SortBox.Items.Add(Loc.T("自定义顺序"));
+        SortBox.SelectedIndex = 0;
+
+        /* 别名框要用输入法打中文，这里显式打开 IME（有些系统设置会把非编辑类窗口的
+         * IME 关掉，WPF 不会自己再打开），并盯着"组字"状态。
+         *
+         * 关键在组字期间**什么都不做**：拼音没提交时 TextChanged 已经在连着触发，
+         * 以前每个字母都会 RefreshList()（重设 ItemsSource）+ SaveSettings()，
+         * 输入法的组合串被反复打断 —— 用户看到的就是"只能打英文，汉字出不来"。 */
+        InputMethod.SetIsInputMethodEnabled(KeyBox, true);
+
+        TextCompositionManager.AddPreviewTextInputStartHandler(KeyBox, (_, _) => _composing = true);
+
+        TextCompositionManager.AddPreviewTextInputUpdateHandler(KeyBox, (_, args) =>
+        {
+            if ((args.TextComposition?.CompositionText?.Length ?? 0) == 0) _composing = false;
+        });
+
+        TextCompositionManager.AddPreviewTextInputHandler(KeyBox, (_, _) => _composing = false);
+
+        KeyBox.LostKeyboardFocus += (_, _) =>
+        {
+            if (!_composing) return;
+            _composing = false;
+            OnEditorChanged(KeyBox, new RoutedEventArgs());
+        };
+
+    }
+
+    /// <summary>别名框正在输入法组字（拼音还没提交成汉字）。</summary>
+    private bool _composing;
+
+    /// <summary>把剪贴板里的文字直接填进别名框：输入法在我们窗口里不工作时也能写中文。</summary>
+    private void OnPasteTriggerClick(object sender, RoutedEventArgs e)
+    {
+        string text = "";
+        try
+        {
+            if (Clipboard.ContainsText()) text = Clipboard.GetText()?.Trim() ?? "";
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "读取剪贴板");
+        }
+
+        if (text.Length == 0)
+        {
+            _host?.Notify(Loc.T("剪贴板里没有文字"));
+            return;
+        }
+
+        KeyBox.Text = text;
+        KeyBox.Focus();
+        KeyBox.CaretIndex = KeyBox.Text.Length;
+        OnEditorChanged(KeyBox, new RoutedEventArgs());
+    }
+
+    public void Initialize(AppHost host)
+    {
+        _host = host;
+        var opt = host.Settings.Hotstring;
+
+        _suppress = true;
+        try
+        {
+            RefreshPrefixCapsule();
+            SpaceBox.IsChecked = opt.ExpandOnSpace;
+            SwallowBox.IsChecked = opt.SwallowSpace;
+            ImeBackBox.IsChecked = opt.RestoreImeAfterExpand;
+            opt.ShowTextInList = false;      // 列表只显示备注，永远不显示替换内容
+        }
+        finally { _suppress = false; }
+
+        Refresh();
+    }
+
+    private List<Snippet> Entries => _host?.Settings.Global.Snippets ?? new List<Snippet>();
+
+    private List<string> CustomGroups => _host?.Settings.Global.SnippetGroups ?? new List<string>();
+
+    private string? CurrentGroup => (GroupList.SelectedItem as GroupRow)?.Group;
+
+    /// <summary>所有分组：手动建的 ∪ 别名里用到的，去重排序。</summary>
+    private List<string> AllGroups()
+        => _host == null ? new List<string>() : SnippetGroupOps.All(_host.Settings);
+
+    // ---------------- 刷新 ----------------
+
+    private void Refresh()
+    {
+        AlignStalePrefixOnce();
+        FocusPendingAlias();
+
+        if (_host == null) return;
+        RefreshPrefixCapsule();
+        RefreshGroups();
+        RefreshList();
+        SyncEditorToSelection();
+    }
+
+    /// <summary>
+    /// 胶囊上显示当前触发符号 + 它的中文名字（多前缀时加个 "+N"）。
+    /// 前缀为空 = 不需要前缀，显示一个中点，避免胶囊里出现空白。
+    /// </summary>
+    private void RefreshPrefixCapsule()
+    {
+        if (PrefixCapsule == null || _host == null) return;
+
+        var prefixes = _host.Settings.Hotstring.EffectivePrefixes;
+        string symbol = prefixes.Count > 0 ? prefixes[0] : "";
+        PrefixGlyphText.Text = symbol.Length > 0 ? symbol : "·";
+
+        string label = HotstringOptions.LabelOf(symbol);
+        string name = label.Length > 0
+            ? Loc.T(label)
+            : symbol.Length == 0 ? Loc.T("不需要前缀") : Loc.T("旧符号");
+        if (prefixes.Count > 1) name += " +" + (prefixes.Count - 1).ToString();
+        PrefixNameText.Text = name;
+        PrefixCapsule.ToolTip = prefixes.Count == 0
+            ? Loc.T("不需要前缀")
+            : Loc.F("当前触发符号：{0}。点开可以换成别的", string.Join(" ", prefixes));
+    }
+
+    /// <summary>点胶囊：把可选符号列出来，当前那个打勾。</summary>
+    private void OnPrefixCapsuleClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        BuildPrefixChoices();
+        PrefixPopup.IsOpen = true;
+    }
+
+    private void BuildPrefixChoices()
+    {
+        PrefixChoiceList.Children.Clear();
+        var prefixes = _host?.Settings.Hotstring.EffectivePrefixes ?? new List<string>();
+        string current = prefixes.Count > 0 ? prefixes[0] : "";
+
+        foreach (var (symbol, label) in HotstringOptions.SymbolChoices)
+        {
+            bool active = string.Equals(symbol, current, StringComparison.Ordinal);
+
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new TextBlock
+            {
+                Text = symbol,
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                Width = 22,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            row.Children.Add(new TextBlock
+            {
+                Text = Loc.T(label),
+                Style = (Style)FindResource("Text.Body"),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            if (active)
+            {
+                row.Children.Add(new TextBlock
+                {
+                    Text = "✓",
+                    Margin = new Thickness(12, 0, 0, 0),
+                    Foreground = (Brush)FindResource("Brush.Accent"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+
+            var item = new Button
+            {
+                Style = (Style)FindResource("Button.Ghost"),
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(0, 1, 0, 1),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Tag = symbol,
+                Content = row,
+                Focusable = false,
+            };
+            item.Click += OnPrefixChoiceClick;
+            PrefixChoiceList.Children.Add(item);
+        }
+    }
+
+    private void OnPrefixChoiceClick(object sender, RoutedEventArgs e)
+    {
+        PrefixPopup.IsOpen = false;
+        if (sender is Button { Tag: string symbol }) ApplyPrefixSymbol(symbol);
+    }
+
+    /// <summary>
+    /// 换触发符号：条目里的触发词要跟着搬（`;mail` → `:mail`），否则列表剥不掉旧前缀。
+    /// 新符号与当前一致时什么都不做。
+    /// </summary>
+    private void ApplyPrefixSymbol(string symbol)
+    {
+        if (_host == null || symbol.Length == 0) return;
+
+        var opt = _host.Settings.Hotstring;
+        var before = opt.EffectivePrefixes.ToList();
+        if (before.Count == 1 && string.Equals(before[0], symbol, StringComparison.Ordinal)) return;
+
+        opt.Prefixes = new List<string> { symbol };
+        opt.NormalizePrefixes();
+
+        int moved = SnippetPrefixOps.MigrateAll(_host.Settings, before, opt.EffectivePrefixes);
+        CoreLog.Info($"改触发符号：{string.Join("", before)} → {string.Join("", opt.EffectivePrefixes)}，迁移 {moved} 条");
+
+        _host.SaveSettings();
+        Refresh();
+        _host.Notify(Loc.F("触发符号已改为「{0}」", symbol));
+    }
+
+    private void RefreshGroups()
+    {
+        if (_host == null) return;
+
+        string? keepGroup = _selectGroupAfterRefresh ?? CurrentGroup;
+        _selectGroupAfterRefresh = null;
+        var all = Entries.ToList();
+        var groups = AllGroups();
+
+        var savedOrder = _host.Settings.Global.SnippetGroupOrder ?? new List<string>();
+
+        int CountOf(List<Snippet> all, string g)
+            => all.Count(x => string.Equals(x.Group?.Trim(), g, StringComparison.CurrentCultureIgnoreCase));
+
+        int OrderIndex(string g)
+        {
+            int i = savedOrder.FindIndex(o => string.Equals(o?.Trim(), g, StringComparison.CurrentCultureIgnoreCase));
+            return i < 0 ? int.MaxValue : i;
+        }
+
+        /* 分组只用"自定义顺序"：没拖过的组按名称排在后面，拖过的按保存的顺序。 */
+        var ordered = groups.OrderBy(OrderIndex).ThenBy(g => g, StringComparer.CurrentCulture);
+
+        var rows = new List<GroupRow> { new() { Group = null, Label = Loc.T("全部"), Count = all.Count } };
+        rows.AddRange(ordered.Select(g => new GroupRow
+        {
+            Group = g,
+            Label = g,
+            Count = CountOf(all, g),
+        }));
+        rows.Add(new GroupRow
+        {
+            Group = "",
+            Label = Loc.T("未分组"),
+            Count = all.Count(x => string.IsNullOrWhiteSpace(x.Group)),
+        });
+
+        _suppress = true;
+        try
+        {
+            GroupList.ItemsSource = rows;
+            GroupList.SelectedItem = rows.FirstOrDefault(g => g.Group == keepGroup) ?? rows[0];
+
+            /* 「全部 / 未分组」不是真分组，改名和删除对它们没有意义。 */
+            bool real = (GroupList.SelectedItem as GroupRow)?.IsReal == true;
+            RenameGroupButton.IsEnabled = real;
+            DeleteGroupButton.IsEnabled = real;
+        }
+        finally { _suppress = false; }
+    }
+
+    private void RefreshList()
+    {
+        if (_host == null) return;
+
+        var opt = _host.Settings.Hotstring;
+        string filter = FilterBox.Text?.Trim() ?? "";
+        string? group = CurrentGroup;
+        var all = Entries.ToList();
+
+        var filtered = all
+            .Where(x => group == null
+                        || (group.Length == 0
+                            ? string.IsNullOrWhiteSpace(x.Group)
+                            : string.Equals(x.Group?.Trim(), group, StringComparison.CurrentCultureIgnoreCase)))
+            .Where(x => string.IsNullOrWhiteSpace(filter)
+                        || (x.Trigger?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (x.Comment?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (x.Text?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false))
+            .Where(x => !_unusedOnly || x.UseCount <= 0);
+
+        var rows = SortSnippets(filtered, _sortMode)
+            .Select(x => new Row
+            {
+                Snippet = x,
+                KeyLabel = SnippetPrefixOps.StripAny(x.Trigger, opt.EffectivePrefixes),
+                Initial = InitialOf(SnippetPrefixOps.StripAny(x.Trigger, opt.EffectivePrefixes)),
+                GroupLabel = string.IsNullOrWhiteSpace(x.Group) ? "" : x.Group!.Trim(),
+                PrefixLabel = opt.EffectivePrefixes.Count == 0
+                    ? "·"
+                    : string.Join("", opt.EffectivePrefixes),
+                Preview = BuildPreview(x),
+            })
+            .ToList();
+
+        _suppress = true;
+        try
+        {
+            EntryList.ItemsSource = rows;
+            FilterCount.Text = Loc.F("共 {0} 条", rows.Count);
+            CleanupButton.Visibility = _unusedOnly && rows.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            /* 空状态要说清"为什么空"：是没建过，还是筛选没命中，还是这个分组空着。
+             * 统一一句"还没有别名"会让用户以为数据丢了。 */
+            EmptyHint.Text = rows.Count != 0 ? "" :
+                filter.Length > 0
+                    ? Loc.F("没有匹配「{0}」的别名。", filter)
+                    : (group is { Length: > 0 } g
+                        ? Loc.F("「{0}」这个分组还空着。可以把别名拖进来，或右键「移到分组」。", g)
+                        : Loc.T("还没有别名。点下面的「新增」建一条。"));
+            EntryList.SelectedItem = rows.FirstOrDefault(r => ReferenceEquals(r.Snippet, _editing));
+        }
+        finally { _suppress = false; }
+    }
+
+    private void SyncEditorToSelection()
+    {
+        int selected = EntryList.SelectedItems.Count;
+        MoveButton.IsEnabled = selected > 0;
+        DeleteButton.IsEnabled = selected > 0;
+        MoveButton.Content = selected > 1 ? Loc.F("移到分组 ({0})", selected) : Loc.T("移到分组");
+        DeleteButton.Content = selected > 1 ? Loc.F("删除 ({0})", selected) : Loc.T("删除");
+
+        if (EntryList.SelectedItem is Row row)
+        {
+            if (!ReferenceEquals(row.Snippet, _editing)) LoadEditor(row.Snippet);
+        }
+        else
+        {
+            MoveButton.IsEnabled = false;
+            _editing = null;
+            ShowEditor(false);
+        }
+    }
+
+    /// <summary>
+    /// 打开页面时自动对齐一次旧前缀。
+    ///
+    /// 场景：老版本改前缀只改设置、不改条目，于是配置里所有触发词都还带着旧符号
+    /// （;mail），而当前前缀已经是 / —— 列表按 / 去剥，剥不掉，每条前面都多出一个 ;。
+    ///
+    /// 只在**完全无歧义**时自动做：所有带符号前缀的条目用的都是同一个符号，
+    /// 且它和当前前缀不同。混合情况交给用户改前缀（改的时候会自动迁移）。
+    /// </summary>
+    private void AlignStalePrefixOnce()
+    {
+        if (_prefixAlignedOnce || _host == null) return;
+        _prefixAlignedOnce = true;
+
+        var prefixes = _host.Settings.Hotstring.EffectivePrefixes;
+
+        /* 配了多个前缀时不再自动"对齐"：用户可能就是想同时用 `;` 和 `、`，
+         * 猜错会把好好的条目全搬走。 */
+        if (prefixes.Count != 1) return;
+        string current = prefixes[0];
+
+        /* 新旧符号混着的时候 DetectStale 会返回 null —— 那种情况不猜，
+         * 交给用户改一次前缀（改前缀一定会整批迁移）。 */
+        char? stale = SnippetPrefixOps.DetectStale(Entries, current, out int count);
+        if (stale == null || count == 0) return;
+
+        int moved = SnippetPrefixOps.Migrate(_host.Settings, stale.Value.ToString(), current);
+        if (moved == 0) return;
+
+        CoreLog.Info($"别名前缀自动对齐：{stale} → {current}，共 {moved} 条");
+        _host.SaveSettings();
+        _host.Notify(Loc.F("已把 {0} 条别名的旧前缀统一成「{1}」", moved, current));
+    }
+
+    // ---------------- 小工具 ----------------
+
+    /// <summary>列表左侧那个圆形首字（已经剥掉前缀的显示名传进来）。</summary>
+    private static string InitialOf(string? name)
+    {
+        string s = name ?? "";
+        if (s.Length == 0) return "?";
+        char c = char.ToUpperInvariant(s[0]);
+        return char.IsLetterOrDigit(c) ? c.ToString() : s[..1];
+    }
+
+    private static string Shorten(string? s, int max)
+    {
+        s = (s ?? "").Replace("\r", "").Replace("\n", " ⏎ ");
+        return s.Length <= max ? s : s[..max] + "…";
+    }
+
+    private Window? Owner => Window.GetWindow(this);
+
+    private void ShowEditor(bool show)
+    {
+        EditorCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show) return;
+
+        _suppress = true;
+        try
+        {
+            KeyBox.Text = "";
+            ValueBox.Text = "";
+            CommentBox.Text = "";
+            AppsBox.Text = "";
+            GroupBox.Text = "";
+            EnabledBox.IsChecked = false;
+            StatusText.Text = "";
+        }
+        finally { _suppress = false; }
+    }
+
+    private void LoadEditor(Snippet entry)
+    {
+        _editing = entry;
+        ShowEditor(true);
+
+        _suppress = true;
+        try
+        {
+            KeyBox.Text = SnippetPrefixOps.StripAny(entry.Trigger, _host?.Settings.Hotstring.EffectivePrefixes);
+            EditTitle.Text = Loc.F("正在编辑：{0}", KeyBox.Text.Length == 0 ? Loc.T("（新别名）") : KeyBox.Text);
+            ValueBox.Text = entry.Text ?? "";
+            CommentBox.Text = entry.Comment ?? "";
+            AppsBox.Text = entry.Apps ?? "";
+            EnabledBox.IsChecked = entry.Enabled;
+            StatusText.Text = "";
+            StatusText.Foreground = (Brush)FindResource("Brush.TextTertiary");
+
+            GroupBox.Text = entry.Group ?? "";
+
+            /* 使用情况：帮用户判断这条还留着有没有意义。 */
+            UsageText.Text = entry.UseCount <= 0
+                ? Loc.T("还没用过")
+                : (entry.LastUsed is { } at
+                    ? Loc.F("用过 {0} 次 · 最近 {1:MM-dd HH:mm}", entry.UseCount, at)
+                    : Loc.F("用过 {0} 次", entry.UseCount));
+        }
+        finally { _suppress = false; }
+    }
+
+    // ---------------- 分组管理 ----------------
+
+    /// <summary>新建分组，返回组名；用户取消返回 null。</summary>
+    private string? AskNewGroup()
+    {
+        string? name = UI.Windows.TextPromptWindow.Ask(Owner,
+            Loc.T("新建分组"),
+            Loc.T("起一个名字，之后右键列表里的别名即可「移到分组」。"));
+
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        name = name.Trim();
+        if (!SnippetGroupOps.Add(_host!.Settings, name))
+        {
+            _host.Notify(Loc.F("分组「{0}」已经存在", name));
+            return name;
+        }
+
+        _host.SaveSettings();
+        RefreshGroups();
+        return name;
+    }
+
+    /* ---------------- 分组选择弹层 ---------------- */
+
+    private void OnPickGroupClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var items = new List<string> { "" };
+        items.AddRange(AllGroups().Where(g => g.Length > 0));
+
+        GroupPickerList.ItemsSource = items;
+        GroupPickerList.SelectedItem = items.FirstOrDefault(g =>
+            string.Equals(g, GroupBox.Text?.Trim() ?? "", StringComparison.CurrentCultureIgnoreCase));
+
+        GroupPicker.IsOpen = true;
+    }
+
+    private void OnGroupPickerPicked(object sender, MouseButtonEventArgs e)
+    {
+        if (GroupPickerList.SelectedItem is not string picked) return;
+
+        GroupPicker.IsOpen = false;
+        GroupBox.Text = picked;
+        GroupBox.CaretIndex = GroupBox.Text.Length;
+        SaveEditorFields();
+    }
+
+    /* ---------------- 拖拽：把别名拖到分组上 ---------------- */
+
+    private void OnEntryMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(EntryList);
+        _dragSnippet = null;
+
+        var item = ItemsControl.ContainerFromElement(EntryList, e.OriginalSource as DependencyObject) as ListBoxItem;
+        if (item?.DataContext is Row row) _dragSnippet = row.Snippet;
+    }
+
+    private void OnEntryMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragSnippet == null) return;
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+
+        Point now = e.GetPosition(EntryList);
+        if (Math.Abs(now.X - _dragStartPoint.X) < 8 && Math.Abs(now.Y - _dragStartPoint.Y) < 8) return;
+
+        var payload = new DataObject("clp/snippet", _dragSnippet);
+        var snippet = _dragSnippet;
+        _dragSnippet = null;
+
+        /* 拖拽卡片：
+         *   · 挂在**窗口**的装饰层上（挂在列表上会被列表边界裁掉，
+         *     鼠标一离开列表就"卡在边缘"，正是用户看到的卡顿感）；
+         *   · 位置由 60fps 的定时器从 Mouse.GetPosition 直接读取，
+         *     不再依赖 DragOver 事件 —— 那样只有在拖过目标控件时才会更新。
+         */
+        string label = SnippetPrefixOps.StripAny(snippet.Trigger, _host?.Settings.Hotstring.EffectivePrefixes);
+        if (string.IsNullOrEmpty(label))
+            label = Shorten(snippet.Comment, 24);
+
+        /* 装饰层挂在**页面自己**身上：Window 本身没有 AdornerLayer，
+         * GetAdornerLayer(window) 返回 null —— 之前卡片压根没画出来就是这个原因。
+         *
+         * 位置更新用 GiveFeedback：DoDragDrop 期间是 OLE 自己的消息循环，
+         * WPF 的 DispatcherTimer 不会走，只有 GiveFeedback 会被持续触发。
+         * （这也就是用户看到的"卡片不动 / 到边界卡住"。） */
+        _dragAdorner = UI.DragChipAdorner.Show(this, label, UI.DragChipAdorner.CursorIn(this));
+
+        GiveFeedbackEventHandler follow = (_, args) =>
+        {
+            if (_dragAdorner != null)
+                _dragAdorner.MoveTo(UI.DragChipAdorner.CursorIn(this));
+        };
+
+        EntryList.GiveFeedback += follow;
+        try
+        {
+            DragDrop.DoDragDrop(EntryList, payload, DragDropEffects.Move);
+        }
+        finally
+        {
+            EntryList.GiveFeedback -= follow;
+            _dragAdorner?.Remove();
+            _dragAdorner = null;
+            RemoveInsertLine();
+            ClearDragHover();
+            Mouse.UpdateCursor();
+        }
+    }
+
+    /* ---- 分组拖拽排序 ---- */
+
+    private Point _groupDragStart;
+    private string? _dragGroupName;
+    private UI.DragChipAdorner? _groupDragChip;
+    private UI.InsertLineAdorner? _groupInsertLine;
+
+    private void OnGroupMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _groupDragStart = e.GetPosition(GroupList);
+
+        /* 关键：用 e.OriginalSource 往上找 ListBoxItem。
+         * InputHitTest 在这种带 ScrollViewer 的 ListBox 上经常只返回 ScrollViewer，
+         * 于是永远拿不到行、拖拽从一开始就没启动过。别名列表就是这么写的，一直好用。 */
+        var item = ItemsControl.ContainerFromElement(GroupList, e.OriginalSource as DependencyObject) as ListBoxItem;
+        _dragGroupName = (item?.DataContext as GroupRow) is { IsReal: true } row ? row.Group : null;
+    }
+
+    /// <summary>
+    /// 分组拖拽：与别名列表用同一套 DragDrop 流程（那边已验证可用）。
+    /// 之前自己算鼠标捕获/Thumb 都不稳，改成标准拖放最可靠。
+    /// </summary>
+    private void OnGroupMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragGroupName == null || e.LeftButton != MouseButtonState.Pressed) return;
+
+        var now = e.GetPosition(GroupList);
+        if (Math.Abs(now.X - _groupDragStart.X) < 8 && Math.Abs(now.Y - _groupDragStart.Y) < 8) return;
+
+        string dragged = _dragGroupName;
+        _dragGroupName = null;
+
+        /* 拖动时让分组名"贴着鼠标"：用和别名列表同一个拖拽卡片。
+         * DoDragDrop 期间是 OLE 的消息循环，只有 GiveFeedback 会被持续触发，
+         * 所以卡片位置在 GiveFeedback 里更新。 */
+        _groupDragChip = UI.DragChipAdorner.Show(this, dragged, UI.DragChipAdorner.CursorIn(this));
+
+        GiveFeedbackEventHandler follow = (_, _) =>
+        {
+            _groupDragChip?.MoveTo(UI.DragChipAdorner.CursorIn(this));
+        };
+
+        GroupList.GiveFeedback += follow;
+        try
+        {
+            var data = new DataObject("clp/group", dragged);
+            DragDrop.DoDragDrop(GroupList, data, DragDropEffects.Move);
+        }
+        finally
+        {
+            GroupList.GiveFeedback -= follow;
+            _groupDragChip?.Remove();
+            _groupDragChip = null;
+            RemoveGroupInsertLine();
+            ClearDragHover();
+        }
+    }
+
+    private void RemoveGroupInsertLine()
+    {
+        _groupInsertLine?.Remove();
+        _groupInsertLine = null;
+    }
+
+    private void OnGroupDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("clp/snippet") && !e.Data.GetDataPresent("clp/group"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        var hoverItem = ItemsControl.ContainerFromElement(GroupList, e.OriginalSource as DependencyObject) as ListBoxItem;
+        var target = hoverItem?.DataContext as GroupRow ?? FindGroupRowAt(e.GetPosition(GroupList));
+        if (target is not { IsReal: true } && target is not { Group: "" })
+        {
+            /* 「全部」只是个视图，不接受放下。 */
+            ClearDragHover();
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        HighlightDragHover(target);
+
+        /* 插入指示线：落在目标行的上半 → 画在行的上沿（插到它前面）；
+         * 下半 → 画在下沿（插到它后面）。空白处 → 画在列表末尾。 */
+        _groupInsertLine ??= UI.InsertLineAdorner.Show(GroupList);
+        if (_groupInsertLine != null)
+        {
+            double y;
+            if (target == null)
+            {
+                y = GroupList.ActualHeight;
+            }
+            else if (GroupList.ItemContainerGenerator.ContainerFromItem(target) is ListBoxItem container)
+            {
+                double top = container.TranslatePoint(new Point(0, 0), GroupList).Y;
+                y = e.GetPosition(GroupList).Y > top + container.ActualHeight / 2
+                    ? top + container.ActualHeight
+                    : top;
+            }
+            else
+            {
+                y = GroupList.ActualHeight;
+            }
+
+            _groupInsertLine.MoveTo(y);
+        }
+
+        e.Handled = true;
+    }
+
+    private void OnGroupDragLeave(object sender, DragEventArgs e)
+    {
+        ClearDragHover();
+        RemoveGroupInsertLine();
+    }
+
+    private void OnGroupDrop(object sender, DragEventArgs e)
+    {
+        ClearDragHover();
+
+        RemoveGroupInsertLine();
+
+        if (e.Data.GetData("clp/group") is string draggedGroup)
+        {
+            var dropItem = ItemsControl.ContainerFromElement(GroupList, e.OriginalSource as DependencyObject) as ListBoxItem;
+            var dropRow = dropItem?.DataContext as GroupRow;
+            if (dropRow is not { IsReal: true } || _host == null) return;
+
+            var names = (GroupList.ItemsSource as List<GroupRow> ?? new List<GroupRow>())
+                .Where(r => r.IsReal).Select(r => r.Group!).ToList();
+
+            /* 先移除被拖动的组，再计算目标锚点。否则拖到相邻组下半区时，
+             * before 会正好等于 draggedGroup，Reorder 会把它追加到列表末尾。 */
+            names.RemoveAll(g => string.Equals(g, draggedGroup, StringComparison.CurrentCultureIgnoreCase));
+
+            int to = names.FindIndex(g => string.Equals(g, dropRow.Group, StringComparison.CurrentCultureIgnoreCase));
+            if (to < 0) return;
+
+            /* 指针在目标行下半 → 插到它后面；上半 → 插到它前面。 */
+            bool after = dropItem != null && e.GetPosition(dropItem).Y > dropItem.ActualHeight / 2;
+            string? before = after
+                ? (to + 1 < names.Count ? names[to + 1] : null)
+                : names[to];
+            SnippetGroupOps.Reorder(_host.Settings, draggedGroup, before);
+            _host.SaveSettings();
+            _host.Notify(Loc.F("已调整「{0}」的位置", draggedGroup));
+
+            _selectGroupAfterRefresh = draggedGroup;
+            RefreshGroups();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Data.GetData("clp/snippet") is not Snippet snippet) return;
+
+        var target = FindGroupRowAt(e.GetPosition(GroupList));
+        if (target == null) return;
+
+        if (target.Group is null)
+        {
+            /* 全部：不当作分组，只提示一句。 */
+            _host?.Notify(Loc.T("「全部」只是查看全部别名，不能作为分组；要取消分组请拖到「未分组」"));
+            return;
+        }
+
+        MoveTo(snippet, target.Group);
+        FlashGroupRow(target);
+        e.Handled = true;
+    }
+
+    /// <summary>找出某个坐标下的分组行（没有就是 null）。</summary>
+    private GroupRow? FindGroupRowAt(Point point)
+    {
+        var hit = GroupList.InputHitTest(point) as DependencyObject;
+        var item = ItemsControl.ContainerFromElement(GroupList, hit) as ListBoxItem;
+        return item?.DataContext as GroupRow;
+    }
+
+    /// <summary>拖拽经过时把目标分组"抬起来"一点 + 加底色。</summary>
+    private void HighlightDragHover(GroupRow row)
+    {
+        if (GroupList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem item) return;
+        if (ReferenceEquals(item, _dragHoverItem)) return;
+
+        ClearDragHover();
+        _dragHoverItem = item;
+
+        item.Background = (Brush)FindResource("Brush.AccentSoft");
+        item.RenderTransformOrigin = new Point(0.5, 0.5);
+        var scale = new ScaleTransform(1, 1);
+        item.RenderTransform = scale;
+
+        var grow = new DoubleAnimation(1, 1.03, TimeSpan.FromMilliseconds(120))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+        };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+    }
+
+    private void ClearDragHover()
+    {
+        if (_dragHoverItem == null) return;
+
+        var item = _dragHoverItem;
+        _dragHoverItem = null;
+
+        var fade = new DoubleAnimation(1.03, 1, TimeSpan.FromMilliseconds(120))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+        };
+        if (item.RenderTransform is ScaleTransform scale)
+        {
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, fade);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, fade);
+        }
+
+        var brush = new SolidColorBrush(Colors.Transparent);
+        item.Background = brush;
+    }
+
+    /// <summary>放下之后给目标分组一个"闪一下"的反馈。</summary>
+    private void FlashGroupRow(GroupRow row)
+    {
+        if (GroupList.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem item) return;
+
+        var brush = new SolidColorBrush(((SolidColorBrush)FindResource("Brush.Accent")).Color)
+        {
+            Opacity = 0.55,
+        };
+        item.Background = brush;
+
+        var fade = new DoubleAnimation(0.55, 0, TimeSpan.FromMilliseconds(420))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+        };
+        fade.Completed += (_, _) => item.Background = Brushes.Transparent;
+        brush.BeginAnimation(SolidColorBrush.OpacityProperty, fade);
+    }
+
+    /// <summary>保存编辑区里的字段（供弹层选择后调用）。</summary>
+    private void SaveEditorFields()
+    {
+        if (_host == null || _editing == null) return;
+
+        _editing.Group = GroupBox.Text?.Trim() ?? "";
+        if (!string.IsNullOrWhiteSpace(_editing.Group))
+            SnippetGroupOps.Add(_host.Settings, _editing.Group);
+
+        _host.SaveSettings();
+        RefreshList();
+        RefreshGroups();
+    }
+
+    private void OnNewGroupClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        string? name = AskNewGroup();
+        if (name == null) return;
+
+        // 建完直接选中它，用户马上就能看到"空分组"
+        if (GroupList.ItemsSource is List<GroupRow> rows)
+        {
+            var target = rows.FirstOrDefault(g =>
+                string.Equals(g.Group, name, StringComparison.CurrentCultureIgnoreCase));
+            if (target != null) GroupList.SelectedItem = target;
+        }
+    }
+
+    /// <summary>
+    /// 分组右键菜单（Shift+F10 / 菜单键也走这里 —— 所以用 ContextMenuOpening，
+    /// 而不是只绑鼠标事件）。
+    /// </summary>
+    private void OnGroupContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (_host == null
+            || e.Source is not FrameworkElement source
+            || source.ContextMenu is not ContextMenu menu)
+        {
+                e.Handled = true;
+            return;
+        }
+
+        GroupRow? row = null;
+
+        /* 事件源就是被右键的那个列表项（键盘下是当前项）。 */
+        row = source.DataContext as GroupRow;
+
+        if (row is not { IsReal: true })
+        {
+            e.Handled = true;
+            return;
+        }
+
+        GroupList.SelectedItem = row;
+
+        menu.Items.Clear();
+
+        var up = new MenuItem { Header = Loc.T("上移") };
+        up.Click += (_, _) => MoveGroupBy(row.Group!, -1);
+        menu.Items.Add(up);
+
+        var down = new MenuItem { Header = Loc.T("下移") };
+        down.Click += (_, _) => MoveGroupBy(row.Group!, +1);
+        menu.Items.Add(down);
+
+        menu.Items.Add(new Separator());
+
+        var rename = new MenuItem { Header = Loc.T("重命名分组…") };
+        rename.Click += (_, _) => RenameGroup(row.Group!);
+        menu.Items.Add(rename);
+
+        var del = new MenuItem { Header = Loc.T("删除分组") };
+        del.Click += (_, _) => DeleteGroup(row.Group!, row.Count);
+        menu.Items.Add(del);
+
+        /* 菜单已经挂在控件上（XAML 里那个空 ContextMenu），
+         * WPF 会在本方法返回后自己打开 —— 这里不要再手动 IsOpen。 */
+    }
+
+    /// <summary>
+    /// 把分组上移/下移一格（右键菜单与 Alt+↑/↓ 都走这里）。
+    ///
+    /// 拖拽受鼠标环境影响（远程桌面、触摸板都可能拖不动），所以保留一条
+    /// **键盘/菜单**的通路，保证排序功能在任何情况下都可用。
+    /// </summary>
+    private void MoveGroupBy(string group, int delta)
+    {
+        if (_host == null) return;
+
+        var names = (GroupList.ItemsSource as List<GroupRow> ?? new List<GroupRow>())
+            .Where(r => r.IsReal)
+            .Select(r => r.Group!)
+            .ToList();
+
+        int i = names.FindIndex(g => string.Equals(g, group, StringComparison.CurrentCultureIgnoreCase));
+        int j = i + delta;
+        if (i < 0 || j < 0 || j >= names.Count) return;
+
+        /* Reorder 的语义是"插到 before 之前"：
+         *  上移 → 插到前一个之前；
+         *  下移 → 插到后一个的后面（即再下一个之前；没有下一个就放末尾）。 */
+        string? before = delta < 0
+            ? names[j]
+            : (j + 1 < names.Count ? names[j + 1] : null);
+
+        SnippetGroupOps.Reorder(_host.Settings, group, before);
+        _host.SaveSettings();
+
+        _selectGroupAfterRefresh = group;
+        RefreshGroups();
+    }
+
+    private void OnGroupMoveUp(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is GroupRow { IsReal: true } row)
+            MoveGroupBy(row.Group!, -1);
+    }
+
+    private void OnGroupMoveDown(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is GroupRow { IsReal: true } row)
+            MoveGroupBy(row.Group!, +1);
+    }
+
+    private void OnGroupListKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Up or Key.Down)) return;
+        if ((Keyboard.Modifiers & ModifierKeys.Alt) == 0) return;
+        if (GroupList.SelectedItem is not GroupRow { IsReal: true } row) return;
+
+        MoveGroupBy(row.Group!, e.Key == Key.Up ? -1 : +1);
+        e.Handled = true;
+    }
+
+    private void OnRenameGroupClick(object sender, RoutedEventArgs e)
+    {
+        if (GroupList.SelectedItem is GroupRow { IsReal: true } row) RenameGroup(row.Group!);
+    }
+
+    private void OnDeleteGroupClick(object sender, RoutedEventArgs e)
+    {
+        if (GroupList.SelectedItem is GroupRow { IsReal: true } row) DeleteGroup(row.Group!, row.Count);
+    }
+
+    private void RenameGroup(string oldName)
+    {
+        if (_host == null) return;
+
+        string? name = UI.Windows.TextPromptWindow.Ask(Owner,
+            Loc.T("重命名分组"),
+            Loc.T("改名之后，这个组里的别名会一起跟过去。"), oldName);
+
+        if (string.IsNullOrWhiteSpace(name)) return;
+        name = name.Trim();
+        if (string.Equals(name, oldName, StringComparison.Ordinal)) return;
+
+        if (SnippetGroupOps.Rename(_host.Settings, oldName, name) < 0)
+        {
+            _host.Notify(Loc.F("分组「{0}」已经存在", name));
+            return;
+        }
+
+        _host.SaveSettings();
+        _selectGroupAfterRefresh = name;
+        Refresh();
+        _host.Notify(Loc.F("分组已改名为「{0}」", name));
+    }
+
+    private void DeleteGroup(string name, int count)
+    {
+        if (_host == null) return;
+
+        string question = count > 0
+            ? Loc.F("删除分组「{0}」？\n\n这个分组里有 {1} 个别名，它们会回到「未分组」，不会被删除。", name, count)
+            : Loc.F("删除分组「{0}」？", name);
+
+        if (!UI.Windows.AppDialog.ConfirmDanger(Owner, question, Loc.T("删除分组"),
+                okText: Loc.T("删除"))) return;
+
+        SnippetGroupOps.Delete(_host.Settings, name);
+
+        _host.SaveSettings();
+        Refresh();
+        _host.Notify(Loc.F("已删除分组「{0}」", name));
+    }
+
+    private void MoveTo(Snippet snippet, string group)
+    {
+        if (_host == null) return;
+
+        SnippetGroupOps.Move(_host.Settings, snippet, group);
+
+        _host.SaveSettings();
+        Refresh();
+        _host.Notify(string.IsNullOrWhiteSpace(group)
+            ? Loc.T("已移到「未分组」")
+            : Loc.F("已移到「{0}」", group));
+    }
+
+    /// <summary>全局搜索跳过来时，选中指定的那条别名。</summary>
+    private void FocusPendingAlias()
+    {
+        string? trigger = _host?.TakePendingAlias();
+        if (string.IsNullOrEmpty(trigger)) return;
+
+        var snippet = Entries.FirstOrDefault(x =>
+            string.Equals((x.Trigger ?? "").Trim(), trigger, StringComparison.CurrentCultureIgnoreCase));
+        if (snippet == null) return;
+
+        _editing = snippet;
+        RefreshList();
+        LoadEditor(snippet);
+
+        if (EntryList.SelectedItem is Row row) EntryList.ScrollIntoView(row);
+    }
+
+    /// <summary>当前选中的别名（多选时是全部；没选中时退回编辑区那一条）。</summary>
+    private List<Snippet> SelectedSnippets()
+    {
+        var list = new List<Snippet>();
+        foreach (var item in EntryList.SelectedItems)
+            if (item is Row row) list.Add(row.Snippet);
+
+        if (list.Count == 0 && _editing != null) list.Add(_editing);
+        return list;
+    }
+
+    // ---------------- 事件 ----------------
+
+    private void OnOptionsChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        var opt = _host.Settings.Hotstring;
+
+        opt.ExpandOnSpace = SpaceBox.IsChecked == true;
+        opt.SwallowSpace = SwallowBox.IsChecked == true;
+        opt.RestoreImeAfterExpand = ImeBackBox.IsChecked == true;
+
+        _host.SaveSettings();
+        RefreshList();
+        if (_editing != null) LoadEditor(_editing);
+    }
+
+    /// <summary>搜索框：Esc 清空（再按一次回到列表），Ctrl+F 全选关键词。</summary>
+    private void OnFilterKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            if (FilterBox.Text.Length > 0) FilterBox.Text = "";
+            else EntryList.Focus();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            FilterBox.SelectAll();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>排序：触发词（默认）/ 最近使用（新的在前）/ 使用次数（多的在前）。</summary>
+    private static IEnumerable<Snippet> SortSnippets(IEnumerable<Snippet> source, int mode) => mode switch
+    {
+        1 => source.OrderByDescending(x => x.LastUsed ?? DateTime.MinValue)
+                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
+        2 => source.OrderByDescending(x => x.UseCount)
+                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
+        3 => source.OrderBy(x => x.Order)
+                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
+        _ => source.OrderBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
+    };
+
+    private void OnSortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _sortMode = Math.Max(0, SortBox.SelectedIndex);
+        RefreshList();
+    }
+
+    private void OnUnusedOnlyChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _unusedOnly = UnusedOnlyBox.IsChecked == true;
+        RefreshList();
+    }
+
+    private void OnFilterChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        RefreshList();
+    }
+
+    private void OnGroupChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null) return;
+
+        if (GroupList.SelectedItem is GroupRow row)
+        {
+            RenameGroupButton.IsEnabled = row.IsReal;
+            DeleteGroupButton.IsEnabled = row.IsReal;
+        }
+
+        if (_suppress) return;
+        RefreshList();
+        SyncEditorToSelection();
+    }
+
+    /// <summary>页面级快捷键：Ctrl+F 搜索；列表有焦点时 Ctrl+A 全选。</summary>
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            FilterBox.Focus();
+            FilterBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control && EntryList.IsKeyboardFocusWithin)
+        {
+            EntryList.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
+    }
+
+    private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        if (EntryList.SelectedItem is Row row)
+        {
+            if (!ReferenceEquals(row.Snippet, _editing)) LoadEditor(row.Snippet);
+        }
+        else
+        {
+            _editing = null;
+            ShowEditor(false);
+        }
+    }
+
+    private void OnEditorChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress || _editing == null) return;
+
+        /* 输入法正在组字：这时候的 Text 是"拼音半成品"，落盘和刷新都没有意义，
+         * 而且会打断输入法的组合串（汉字永远提交不了）。等提交后再走一次。 */
+        if (_composing) return;
+
+        /* 编辑区可能指向一条"已经不在配置里"的条目：
+         * 同步恢复覆盖了配置、或者这条在别处被删掉了。
+         * 继续往里写只会改到一个游离对象，存进去也会在下一次刷新时消失 ——
+         * 用户感受就是"改了没反应"。这里先核对一次，找不到就收起编辑区。 */
+        if (!Entries.Any(x => ReferenceEquals(x, _editing)))
+        {
+            var again = Entries.FirstOrDefault(x =>
+                string.Equals(x.Trigger, _editing.Trigger, StringComparison.OrdinalIgnoreCase));
+
+            if (again == null)
+            {
+                _editing = null;
+                ShowEditor(false);
+                RefreshList();
+                return;
+            }
+
+            LoadEditor(again);
+        }
+
+        _editing.Trigger = SnippetPrefixOps.ApplyAny(KeyBox.Text, _host.Settings.Hotstring.EffectivePrefixes);
+        _editing.Text = ValueBox.Text ?? "";
+        _editing.Comment = CommentBox.Text ?? "";
+        _editing.Apps = AppsBox.Text?.Trim() ?? "";
+        _editing.Group = GroupBox.Text?.Trim() ?? "";
+        if (!string.IsNullOrWhiteSpace(_editing.Group))
+            SnippetGroupOps.Add(_host.Settings, _editing.Group);   // 手打的新组名立刻登记，侧栏马上出现
+        _editing.Enabled = EnabledBox.IsChecked == true;
+
+        _host.SaveSettings();
+
+        /* 只刷新列表，**不要**重建编辑区。
+         * 以前这里调 Refresh()：它会重建分组下拉的选项、再把文本赋回输入框，
+         * 于是用户在下拉框里打字打到一半就被清掉 —— 表现就是"分组改不了"。 */
+        RefreshList();
+        RefreshGroups();
+        EditTitle.Text = Loc.F("正在编辑：{0}",
+            SnippetPrefixOps.StripAny(_editing.Trigger, _host.Settings.Hotstring.EffectivePrefixes));
+
+        /* 触发词撞车：两条同触发词时只有其中一条会命中，用户很难自己发现。 */
+        bool duplicate = _editing.Trigger.Length > 0 && Entries.Any(x =>
+            !ReferenceEquals(x, _editing) &&
+            string.Equals((x.Trigger ?? "").Trim(), _editing.Trigger.Trim(), StringComparison.CurrentCultureIgnoreCase));
+
+        if (duplicate)
+        {
+            StatusText.Text = Loc.T("⚠ 这个触发词和另一条别名重复，只有其中一条会生效");
+            StatusText.Foreground = (Brush)FindResource("Brush.Warning");
+        }
+        else
+        {
+            StatusText.Text = Loc.T("已保存");
+            StatusText.Foreground = (Brush)FindResource("Brush.TextTertiary");
+        }
+    }
+
+    /// <summary>
+    /// 底部的「移到分组」按钮。
+    ///
+    /// 右键菜单在部分环境里不好按出来（用户反馈过），所以给一个**显式按钮**，
+    /// 走的是同一份分组列表，不会两处逻辑各写一遍。
+    /// </summary>
+    private void OnMoveClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var targets = SelectedSnippets();
+        if (targets.Count == 0) return;
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = MoveButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top,
+        };
+
+        FillMoveMenu(menu, targets);
+        menu.IsOpen = true;
+    }
+
+    /// <summary>把"移到分组"的菜单项填进给定菜单（右键与底部按钮共用）。</summary>
+    private void FillMoveMenu(ContextMenu menu, Snippet snippet)
+        => FillMoveMenu(menu, new List<Snippet> { snippet });
+
+    /// <summary>把"移到分组"的菜单项填进给定菜单；支持一次移动多条。</summary>
+    private void FillMoveMenu(ContextMenu menu, List<Snippet> snippets)
+    {
+        menu.Items.Clear();
+        if (snippets.Count == 0) return;
+
+        bool allSameGroup = snippets
+            .Select(x => (x.Group ?? "").Trim())
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .Count() == 1;
+        string current = allSameGroup ? (snippets[0].Group ?? "").Trim() : "\u0000";
+
+        var move = new MenuItem { Header = snippets.Count > 1
+            ? Loc.F("把这 {0} 条移到分组", snippets.Count)
+            : Loc.T("移到分组") };
+
+        foreach (string g in AllGroups())
+        {
+            string target = g;
+            var mi = new MenuItem
+            {
+                Header = target,
+                IsCheckable = true,
+                IsChecked = string.Equals(current, target, StringComparison.CurrentCultureIgnoreCase),
+            };
+            mi.Click += (_, _) => MoveMany(snippets, target);
+            move.Items.Add(mi);
+        }
+
+        if (move.Items.Count > 0) move.Items.Add(new Separator());
+
+        var ungrouped = new MenuItem
+        {
+            Header = Loc.T("未分组"),
+            IsCheckable = true,
+            IsChecked = current.Length == 0,
+        };
+        ungrouped.Click += (_, _) => MoveMany(snippets, "");
+        move.Items.Add(ungrouped);
+
+        var create = new MenuItem { Header = Loc.T("新建分组…") };
+        create.Click += (_, _) =>
+        {
+            string? name = AskNewGroup();
+            if (name != null) MoveMany(snippets, name);
+        };
+        move.Items.Add(create);
+
+        menu.Items.Add(move);
+    }
+
+    /* ---------------- 自定义顺序：列表内拖放重排 ---------------- */
+
+    private Row? FindRowAt(Point point)
+    {
+        var hit = EntryList.InputHitTest(point) as DependencyObject;
+        var item = ItemsControl.ContainerFromElement(EntryList, hit) as ListBoxItem;
+        return item?.DataContext as Row;
+    }
+
+    private void OnEntryListDragOver(object sender, DragEventArgs e)
+    {
+        /* 只有「自定义顺序」时才把"拖进列表"当作重排；
+         * 其他排序下拖动是"移到分组"，由左侧分组列表处理。 */
+        if (_sortMode != 3 || !e.Data.GetDataPresent("clp/snippet"))
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+
+        /* 指示线画在"将要插入的位置"：落在行上半 → 行上沿，下半 → 行下沿；
+         * 空白处 → 列表末尾。 */
+        _insertLine ??= UI.InsertLineAdorner.Show(EntryList);
+
+        if (_insertLine != null)
+        {
+            var target = FindRowAt(e.GetPosition(EntryList));
+            double y;
+
+            if (target == null)
+            {
+                y = EntryList.ActualHeight;
+            }
+            else if (EntryList.ItemContainerGenerator.ContainerFromItem(target) is ListBoxItem container)
+            {
+                var top = container.TranslatePoint(new Point(0, 0), EntryList).Y;
+                double half = container.ActualHeight / 2;
+                y = e.GetPosition(EntryList).Y > top + half
+                    ? top + container.ActualHeight
+                    : top;
+            }
+            else
+            {
+                y = EntryList.ActualHeight;
+            }
+
+            _insertLine.MoveTo(y);
+        }
+
+        e.Handled = true;
+    }
+
+    private void OnEntryListDrop(object sender, DragEventArgs e)
+    {
+        RemoveInsertLine();
+
+        if (_host == null || _sortMode != 3) return;
+        if (e.Data.GetData("clp/snippet") is not Snippet dragged) return;
+
+        var target = FindRowAt(e.GetPosition(EntryList));
+
+        /* 以"当前显示顺序"为基准重排，再按顺序重新编号。 */
+        var ordered = SortSnippets(_host.Settings.Global.Snippets, 3).ToList();
+        ordered.Remove(dragged);
+
+        int index = target == null ? ordered.Count : ordered.IndexOf(target.Snippet);
+        if (index < 0) index = ordered.Count;
+
+        /* 落在目标行的下半部分 → 插到它后面。 */
+        if (target != null &&
+            EntryList.ItemContainerGenerator.ContainerFromItem(target) is ListBoxItem container &&
+            e.GetPosition(container).Y > container.ActualHeight / 2)
+        {
+            index++;
+        }
+
+        ordered.Insert(Math.Clamp(index, 0, ordered.Count), dragged);
+
+        for (int i = 0; i < ordered.Count; i++) ordered[i].Order = i;
+
+        _host.SaveSettings();
+        Refresh();
+        e.Handled = true;
+    }
+
+    /// <summary>移除插入位置指示线（拖拽结束、离开列表时调）。</summary>
+    private void RemoveInsertLine()
+    {
+        _insertLine?.Remove();
+        _insertLine = null;
+    }
+
+    /// <summary>把一批别名移到同一个分组。</summary>
+    private void MoveMany(List<Snippet> snippets, string group)
+    {
+        if (_host == null || snippets.Count == 0) return;
+
+        if (snippets.Count == 1)
+        {
+            MoveTo(snippets[0], group);
+            return;
+        }
+
+        foreach (var snippet in snippets) SnippetGroupOps.Move(_host.Settings, snippet, group);
+
+        _host.SaveSettings();
+        Refresh();
+
+        _host.Notify(string.IsNullOrWhiteSpace(group)
+            ? Loc.F("已把 {0} 条别名移到「未分组」", snippets.Count)
+            : Loc.F("已把 {0} 条别名移到「{1}」", snippets.Count, group));
+    }
+
+
+    /// <summary>
+    /// 列表正文那一列：**只显示备注**。
+    ///
+    /// 替换内容永远不在这里出现（避免一眼就看到隐私文本）；没写备注就给一句
+    /// 可操作的提示，而不是留空。
+    /// </summary>
+    private static string BuildPreview(Snippet snippet)
+    {
+        string comment = (snippet.Comment ?? "").Trim();
+        return comment.Length > 0 ? Shorten(comment, 56) : Loc.T("（无备注）");
+    }
+
+    /* ---------------- 只在指定程序里展开：两种选择方式 ---------------- */
+
+    /// <summary>方式一：从文件管理器里挑 exe（可多选）。</summary>
+    private void OnPickAppFile(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("选择要限定的程序"),
+            Filter = Loc.T("程序") + " (*.exe)|*.exe|" + Loc.T("所有文件") + " (*.*)|*.*",
+            Multiselect = true,
+            CheckFileExists = true,
+        };
+
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+
+        /* 只取文件名：进程名匹配用的是 exe 名字，不是完整路径。 */
+        AppendApps(dialog.FileNames.Select(System.IO.Path.GetFileName).Where(n => !string.IsNullOrEmpty(n))!);
+    }
+
+    /// <summary>方式二：十字拾取 —— 在那个程序的窗口上点一下。</summary>
+    private void OnPickAppWindow(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new Windows.WindowPickerWindow { Owner = Window.GetWindow(this) };
+            picker.ShowDialog();
+
+            if (picker.PickedWindow == IntPtr.Zero) return;
+
+            var info = Core.Windows.WindowService.Describe(picker.PickedWindow);
+            string exe = (info?.ExeName ?? "").Trim();
+            if (exe.Length == 0)
+            {
+                _host?.Notify(Loc.T("没认出这个窗口属于哪个程序"));
+                return;
+            }
+
+            AppendApps(new[] { exe });
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("十字拾取程序失败", ex);
+            _host?.Notify(Loc.T("拾取失败：") + ex.Message);
+        }
+    }
+
+    /// <summary>把程序名追加进输入框（去重、统一用逗号分隔）。</summary>
+    private void AppendApps(IEnumerable<string> names)
+    {
+        var list = (AppsBox.Text ?? "")
+            .Split(new[] { ',', '，', ';', '；', '、' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        foreach (string name in names)
+        {
+            string n = (name ?? "").Trim();
+            if (n.Length == 0) continue;
+            if (list.Any(x => string.Equals(x, n, StringComparison.OrdinalIgnoreCase))) continue;
+            list.Add(n);
+        }
+
+        AppsBox.Text = string.Join(", ", list);
+        _host?.Notify(Loc.T("已加入限定程序"));
+    }
+
+    /// <summary>把文本放进剪贴板（失败给提示，不抛）。</summary>
+    private void CopyToClipboard(string? text, string doneMessage)
+    {
+        string value = text ?? "";
+        if (value.Length == 0)
+        {
+            _host?.Notify(Loc.T("这条别名的内容为空"));
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(value);
+            _host?.Notify(doneMessage);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("复制到剪贴板失败", ex);
+            _host?.Notify(Loc.T("复制失败：") + ex.Message);
+        }
+    }
+
+    /// <summary>复制一条别名（触发词自动加序号，避免撞车）。</summary>
+    private void DuplicateSnippet(Snippet source)
+    {
+        if (_host == null) return;
+
+        var prefixes = _host.Settings.Hotstring.EffectivePrefixes;
+        string baseName = SnippetPrefixOps.StripAny(source.Trigger, prefixes);
+        if (baseName.Length == 0) baseName = Loc.T("副本");
+
+        string candidate = baseName + "2";
+        int n = 2;
+        while (Entries.Any(x => string.Equals(SnippetPrefixOps.StripAny(x.Trigger, prefixes), candidate,
+                                               StringComparison.CurrentCultureIgnoreCase)))
+        {
+            n++;
+            candidate = baseName + n;
+        }
+
+        var copy = new Snippet
+        {
+            Trigger = SnippetPrefixOps.ApplyAny(candidate, prefixes),
+            Text = source.Text,
+            Comment = source.Comment,
+            Group = source.Group,
+            Apps = source.Apps,
+            Enabled = source.Enabled,
+        };
+
+        Entries.Add(copy);
+        _host.SaveSettings();
+        _editing = copy;
+        Refresh();
+        LoadEditor(copy);
+        KeyBox.Focus();
+        KeyBox.CaretIndex = KeyBox.Text.Length;
+        _host.Notify(Loc.F("已复制为「{0}」", candidate));
+    }
+
+    /// <summary>一键删除所有"从未展开过"的别名（先确认）。</summary>
+    private void OnCleanupClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var unused = _host.Settings.Global.Snippets.Where(x => x.UseCount <= 0).ToList();
+        if (unused.Count == 0)
+        {
+            _host.Notify(Loc.T("没有从未使用的别名"));
+            return;
+        }
+
+        if (!UI.Windows.AppDialog.Confirm(Owner,
+                Loc.F("删除 {0} 条从未使用过的别名？\n\n删除后不可撤销（可以在「同步与备份」里找回旧备份）。", unused.Count),
+                Loc.T("清理未使用"),
+                Windows.DialogKind.Warn,
+                okText: Loc.T("删除")))
+        {
+            return;
+        }
+
+        foreach (var snippet in unused) _host.Settings.Global.Snippets.Remove(snippet);
+        _editing = null;
+        _host.SaveSettings();
+        Refresh();
+
+        _host.Notify(Loc.F("已删除 {0} 条从未使用的别名", unused.Count));
+    }
+
+    /// <summary>导出"当前分组"的别名（全部视图 = 导出全部）。</summary>
+    private void OnExportGroupClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        string? group = CurrentGroup;
+        var list = group == null
+            ? _host.Settings.Global.Snippets.ToList()
+            : _host.Settings.Global.Snippets
+                .Where(x => string.Equals((x.Group ?? "").Trim(), group, StringComparison.CurrentCultureIgnoreCase))
+                .ToList();
+
+        if (list.Count == 0)
+        {
+            _host.Notify(Loc.T("这个分组里还没有别名"));
+            return;
+        }
+
+        string name = group == null
+            ? "input-plus-aliases.json"
+            : $"input-plus-aliases-{SanitizeFileName(group.Length == 0 ? Loc.T("未分组") : group)}.json";
+
+        ExportToFile(list, name);
+    }
+
+    /// <summary>把文件名里 Windows 不接受的字符换掉。</summary>
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var chars = name.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
+        string cleaned = new string(chars).Trim();
+        return cleaned.Length == 0 ? "aliases" : cleaned;
+    }
+
+    /// <summary>导出指定别名到文件（两个导出入口共用）。</summary>
+    private void ExportToFile(List<Snippet> snippets, string suggestedName)
+    {
+        if (_host == null || snippets.Count == 0) return;
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = Loc.T("导出别名"),
+            Filter = Loc.T("别名文件 (*.json)|*.json"),
+            FileName = suggestedName,
+            DefaultExt = ".json",
+        };
+
+        if (dlg.ShowDialog(Owner) != true) return;
+
+        try
+        {
+            System.IO.File.WriteAllText(dlg.FileName,
+                SnippetPortable.Export(snippets),
+                new System.Text.UTF8Encoding(false));
+
+            _host.Notify(Loc.F("已导出 {0} 条别名", snippets.Count));
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("导出别名失败", ex);
+            _host.Notify(Loc.T("导出失败：") + ex.Message);
+        }
+    }
+
+    /// <summary>别名体检：重复触发词 / 空内容 / 前缀不对 / 分组未登记。</summary>
+    /// <summary>
+    /// 「找回丢失的别名」：扫历史副本，把当前配置里没有的条目列出来让用户勾。
+    ///
+    /// 这个功能存在的理由见 <see cref="SnippetRecovery"/> 的注释：丢条目时界面
+    /// 不会有任何痕迹，只有磁盘上的旧副本还留着证据。
+    /// </summary>
+    private void OnRecoverClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var result = SnippetRecovery.Scan(_host.Settings);
+        if (result.Candidates.Count == 0)
+        {
+            string detail = result.FilesScanned == 0
+                ? Loc.T("还没有可用的历史副本：从下一次启动开始，程序每天会留一份设置快照。")
+                : Loc.F("看过了 {0} 份历史副本，没有发现当前缺失的别名。", result.FilesScanned);
+            UI.Windows.AppDialog.Success(Owner, detail, Loc.T("找回丢失的别名"));
+            return;
+        }
+
+        var picks = UI.Windows.SnippetRecoverWindow.Ask(Owner, result);
+        if (picks == null || picks.Count == 0) return;
+
+        int added = SnippetRecovery.Restore(_host.Settings, picks);
+        _host.SaveSettings();
+        Refresh();
+        _host.Notify(Loc.F("已恢复 {0} 条别名", added));
+    }
+
+    private void OnAuditClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var issues = SnippetAudit.Run(_host.Settings);
+
+        /* 没用过的条目不算"问题"，但对清理很有用 —— 附一句，并告诉用户去哪儿看。 */
+        int unused = _host.Settings.Global.Snippets.Count(x => x.UseCount <= 0);
+        string unusedHint = unused > 0
+            ? "\n\n" + Loc.F("另有 {0} 条别名还没用过，勾上右上角「从未使用」就能只看它们。", unused)
+            : "";
+
+        if (issues.Count == 0)
+        {
+            UI.Windows.AppDialog.Success(Owner,
+                Loc.T("没有发现问题：触发词不重复、内容都不为空、分组也都登记过了。") + unusedHint,
+                Loc.T("别名体检"));
+            return;
+        }
+
+        UI.Windows.AppDialog.Warn(Owner,
+            Loc.F("发现 {0} 个问题：", issues.Count) + "\n\n" + SnippetAudit.Describe(issues) + unusedHint,
+            Loc.T("别名体检"));
+
+        /* 能自动修的那几类，问一句就修 —— 否则用户看完列表还得自己一条条改。 */
+        int fixable = issues.Count(x => x.Title is "触发词重复" or "前缀不对" or "分组未登记");
+        if (fixable == 0) return;
+
+        if (!UI.Windows.AppDialog.Confirm(Owner,
+                Loc.F("其中 {0} 个可以自动修（前缀换成当前的、分组补登记、重复的加序号）。要修吗？", fixable),
+                Loc.T("自动修复"),
+                Windows.DialogKind.Question,
+                okText: Loc.T("修复")))
+        {
+            return;
+        }
+
+        var fixedResult = SnippetAudit.Fix(_host.Settings);
+        _host.SaveSettings();
+        Refresh();
+
+        _host.Notify(Loc.F("已修复 {0} 项：前缀 {1}、分组 {2}、触发词 {3}",
+            fixedResult.Total, fixedResult.PrefixFixed, fixedResult.GroupsRegistered, fixedResult.TriggersRenamed));
+    }
+
+    /// <summary>导出全部别名到一个 JSON 文件。</summary>
+    private void OnExportClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        ExportToFile(_host.Settings.Global.Snippets.ToList(), "input-plus-aliases.json");
+    }
+
+    /// <summary>从 JSON 文件导入别名（合并，不删除本地已有条目）。</summary>
+    private void OnImportClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("导入别名"),
+            Filter = Loc.T("别名文件 (*.json)|*.json|所有文件 (*.*)|*.*"),
+            CheckFileExists = true,
+        };
+
+        if (dlg.ShowDialog(Owner) != true) return;
+
+        List<SnippetPortable.Entry>? parsed;
+        try
+        {
+            parsed = SnippetPortable.Parse(System.IO.File.ReadAllText(dlg.FileName));
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("读取别名文件失败", ex);
+            _host.Notify(Loc.T("读取失败：") + ex.Message);
+            return;
+        }
+
+        if (parsed == null)
+        {
+            _host.Notify(Loc.T("这个文件不是有效的别名文件（需要 JSON）"));
+            return;
+        }
+
+        /* 有现存数据时才问"合并还是替换"；空表直接导入，少一次打扰。 */
+        bool replace = false;
+        int existing = _host.Settings.Global.Snippets.Count;
+        if (existing > 0)
+        {
+            bool confirmed = UI.Windows.AppDialog.Confirm(Owner,
+                Loc.F("导入会和现有 {0} 条别名合并。\n\n要改成「替换全部」吗？替换会先清空现有别名，且不可撤销。", existing),
+                Loc.T("导入别名"),
+                Windows.DialogKind.Question,
+                okText: Loc.T("替换全部"),
+                cancelText: Loc.T("合并导入"));
+
+            replace = confirmed;
+        }
+
+        var result = SnippetPortable.Import(parsed, _host.Settings.Global.Snippets, replace);
+        _host.SaveSettings();
+        _editing = null;
+        Refresh();
+
+        _host.Notify(replace
+            ? Loc.F("已替换为 {0} 条别名", result.Added)
+            : Loc.F("导入完成：新增 {0} 条，更新 {1} 条", result.Added, result.Updated));
+    }
+
+    private void OnAddClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var entry = new Snippet
+        {
+            Trigger = "",       // 前缀等用户输入完触发词再补（ApplyAny 会用默认前缀）
+            Text = "",
+            Comment = Loc.T("新别名"),
+            Group = CurrentGroup ?? "",
+            Enabled = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(entry.Group)) SnippetGroupOps.Add(_host.Settings, entry.Group);
+
+        Entries.Add(entry);
+        _host.SaveSettings();
+
+        _editing = entry;
+        Refresh();
+
+        /* ⚠ Refresh() 里的 SyncEditorToSelection 只在"选中的不是当前编辑项"时才 LoadEditor，
+         * 而这里 _editing 已经等于新条目 —— 于是编辑区永远不显示，
+         * 用户点了「新增」只看列表多一行、右边空空。必须显式打开一次。 */
+        LoadEditor(entry);
+
+        KeyBox.Focus();
+        KeyBox.CaretIndex = KeyBox.Text.Length;
+    }
+
+    private void OnDeleteClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var targets = SelectedSnippets();
+        if (targets.Count == 0) return;
+
+        if (targets.Count == 1)
+        {
+            DeleteSnippet(targets[0]);
+            return;
+        }
+
+        /* 多条一起删：必须确认。别名是用户攒出来的东西，误删很难恢复。 */
+        if (!UI.Windows.AppDialog.Confirm(Owner,
+                Loc.F("删除选中的 {0} 条别名？\n\n删除后不可撤销。", targets.Count),
+                Loc.T("删除别名"), Windows.DialogKind.Warn, okText: Loc.T("删除")))
+        {
+            return;
+        }
+
+        foreach (var snippet in targets) Entries.Remove(snippet);
+        _editing = null;
+        _host.SaveSettings();
+        Refresh();
+        _host.Notify(Loc.F("已删除 {0} 条别名", targets.Count));
+    }
+
+    private void DeleteSnippet(Snippet snippet)
+    {
+        if (_host == null) return;
+
+        Entries.Remove(snippet);
+        _host.SaveSettings();
+        if (ReferenceEquals(_editing, snippet)) _editing = null;
+        Refresh();
+    }
+
+    /// <summary>列表里别名的右键菜单：移到分组 / 删除（Shift+F10 同样可用）。</summary>
+    private void OnEntryContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (_host == null
+            || e.Source is not FrameworkElement source
+            || source.ContextMenu is not ContextMenu menu)
+        {
+                e.Handled = true;
+            return;
+        }
+
+        Row? row = null;
+
+        row = source.DataContext as Row;
+
+        if (row == null)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        EntryList.SelectedItem = row;
+
+        FillMoveMenu(menu, row.Snippet);
+
+        string name = SnippetPrefixOps.StripAny(row.Snippet.Trigger, _host.Settings.Hotstring.EffectivePrefixes);
+
+        var copyText = new MenuItem { Header = Loc.T("复制内容") };
+        copyText.Click += (_, _) => CopyToClipboard(row.Snippet.Text, Loc.T("内容已复制"));
+        menu.Items.Add(copyText);
+
+        var copyTrigger = new MenuItem { Header = Loc.T("复制触发词") };
+        copyTrigger.Click += (_, _) => CopyToClipboard(name, Loc.T("触发词已复制"));
+        menu.Items.Add(copyTrigger);
+
+        menu.Items.Add(new Separator());
+
+        var dup = new MenuItem { Header = Loc.T("复制一个副本") };
+        dup.Click += (_, _) => DuplicateSnippet(row.Snippet);
+        menu.Items.Add(dup);
+
+        menu.Items.Add(new Separator());
+
+        var del = new MenuItem { Header = Loc.T("删除这个别名") };
+        del.Click += (_, _) => DeleteSnippet(row.Snippet);
+        menu.Items.Add(del);
+
+    }
+}

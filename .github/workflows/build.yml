@@ -35,12 +35,12 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: 还原
-        run: dotnet restore src/CapsLockPlus/CapsLockPlus.csproj
+        run: dotnet restore src/InputPlus/InputPlus.csproj
 
       - name: 构建（${{ matrix.tfm }}）
         # net7 线是 Win7 专用；SDK 会提示"该框架不受支持"，那是预期的，不用当失败。
         run: >
-          dotnet build src/CapsLockPlus/CapsLockPlus.csproj
+          dotnet build src/InputPlus/InputPlus.csproj
           -c Release -f ${{ matrix.tfm }}
           -p:RuntimeIdentifier=win-x64 -v:minimal
 
@@ -63,7 +63,7 @@ jobs:
 
       - name: 发布单文件（win10-x64）
         run: >
-          dotnet publish src/CapsLockPlus/CapsLockPlus.csproj
+          dotnet publish src/InputPlus/InputPlus.csproj
           -c Release -f net10.0-windows -r win-x64
           --self-contained false
           -p:PublishSingleFile=true
@@ -72,11 +72,11 @@ jobs:
       - name: 运行 --selftest
         shell: pwsh
         run: |
-          $env:CAPSLOCKPLUS_DATA = Join-Path $env:RUNNER_TEMP 'ke-data'
-          New-Item -ItemType Directory -Path $env:CAPSLOCKPLUS_DATA -Force | Out-Null
-          & .\dist\ci\KeyboardEnhance.exe --selftest --noelevate
+          $env:INPUTPLUS_DATA = Join-Path $env:RUNNER_TEMP 'ke-data'
+          New-Item -ItemType Directory -Path $env:INPUTPLUS_DATA -Force | Out-Null
+          & .\dist\ci\InputPlus.exe --selftest --noelevate
           $code = $LASTEXITCODE
-          $log = Join-Path $env:CAPSLOCKPLUS_DATA 'selftest.log'
+          $log = Join-Path $env:INPUTPLUS_DATA 'selftest.log'
           if (Test-Path $log) {
             Get-Content $log -Tail 40 | Write-Host
             Copy-Item $log (Join-Path $env:RUNNER_TEMP 'selftest.log') -Force

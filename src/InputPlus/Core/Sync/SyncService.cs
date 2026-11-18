@@ -1,0 +1,1531 @@
+using System.Net.Http;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using InputPlus.Core.Settings;
+
+namespace InputPlus.Core.Sync;
+
+/// <summary>一次同步的结果，用于给用户提示。</summary>
+public sealed record SyncResult(bool Ok, string Message)
+{
+    public static SyncResult Fail(string msg) => new(false, msg);
+    public static SyncResult Done(string msg) => new(true, msg);
+}
+
+/// <summary>恢复方式。</summary>
+public enum RestoreMode
+{
+    /// <summary>整份替换：云端有什么本地就是什么。</summary>
+    Overwrite,
+
+    /// <summary>合并：按主键对齐，云端同项覆盖，本地独有保留。</summary>
+    Merge,
+}
+
+/// <summary>恢复结果。</summary>
+/// <summary>
+/// 一次恢复的结果。
+/// </summary>
+/// <param name="TokenAdopted">
+/// GitHub 令牌是不是从备份里带过来的。界面上用它决定要不要提醒
+/// "你的令牌被换了"—— 覆盖恢复可能来自别人的机器，这属于要让人知情的变化。
+/// </param>
+public sealed record RestoreOutcome(RestoreMode Mode, int Added, int Replaced, string Summary,
+    bool TokenAdopted = false);
+
+/// <summary>本地备份文件。</summary>
+public sealed record LocalBackup(string Path, string Name, DateTime Time, long Size, bool Encrypted)
+{
+    /// <summary>界面上的一句话：`10-21 22:30 · 116 KB · 已加密`</summary>
+    public string Caption =>
+        $"{Time:MM-dd HH:mm} · {Size / 1024.0:0.#} KB · {(Encrypted ? "已加密" : "明文")}";
+}
+
+/// <summary>
+/// 备份与 WebDAV 同步服务。
+///
+/// 备份的几条硬规矩：
+///   * **一律加密**：备份里装着网盘密码、宏、搜索记录，
+///     没有"先明文传上去以后再说"这种选项。没设备份密码就拒绝备份；
+///   * **落盘位置跟着软件走**：exe 同级新建 `InputPlus 备份/`，
+///     装到 Program Files 这类只读目录时自动回落到数据目录；
+///   * **不会无限堆**：默认只留最近 10 份，并且清掉 7 天前的；
+///   * **恢复前先自保**：覆盖恢复前先把当前配置另存一份，恢复错了能退回。
+/// </summary>
+public sealed class SyncService
+{
+    /// <summary>备份文件后缀。1.0 起改用自己的名字：InputPlus(2026-11-18 20-10-00).inputplus</summary>
+    public const string Extension = ".inputplus";
+
+    /// <summary>
+    /// 改名前后用过的后缀，仍然**能读能恢复**，但不再生成。
+    ///
+    /// 顺序无所谓，只影响找文件时的尝试次序：
+    ///   * .keyboardenhance —— KeyboardEnhance 时代（5.x）的备份；
+    ///   * .clpbak —— 更早的 CapsLock+ 时代。
+    /// </summary>
+    public static readonly string[] LegacyExtensions = { ".keyboardenhance", ".clpbak" };
+
+    /// <summary>最早一代的后缀（保留常量，老代码与自检还在引用）。</summary>
+    public const string LegacyExtension = ".clpbak";
+
+    /// <summary>exe 同级新建的备份文件夹名。</summary>
+    public const string BackupFolderName = "InputPlus Back";
+
+    /// <summary>
+    /// 改名前的备份文件夹名。
+    ///
+    /// 只在迁移时用：第一次用新版启动时，把这个目录里的备份搬到
+    /// <see cref="BackupFolderName"/> 下，用户不会"备份忽然不见了"。
+    /// </summary>
+    public const string LegacyBackupFolderName = "InputPlus 备份";
+
+    /// <summary>默认保留份数。</summary>
+    public const int DefaultKeep = 10;
+
+    /// <summary>默认清理多少天之前的备份（0 = 不按天数清）。</summary>
+    public const int DefaultCleanDays = 7;
+
+    /// <summary>同步互斥：同一时刻只允许一个云操作，避免上传下载互相踩。</summary>
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    private readonly Func<AppSettings> _settings;
+
+    /// <summary>
+    /// @param settings 取当前设置（活对象）
+    /// @param snapshotJson 在**界面线程**把设置序列化成 JSON（可选）。
+    ///        备份/指纹这类"要遍历整个对象图"的操作必须走它：
+    ///        后台线程直接序列化活对象，碰上用户正在增删绑定会抛"集合已修改"。
+    /// </summary>
+    public SyncService(Func<AppSettings> settings, Func<string>? snapshotJson = null)
+    {
+        _settings = settings;
+        _snapshotJson = snapshotJson;
+    }
+
+    private readonly Func<string>? _snapshotJson;
+
+    /// <summary>
+    /// 取一份安全的设置 JSON：优先用界面线程给的快照，没有就退化成直接序列化
+    /// （自检/命令行等单线程场景）。
+    /// </summary>
+    /// <param name="includeUsage">
+    /// 备份/导出要带上使用统计；配置指纹不能带 —— usage 每次按键都会变，
+    /// 带上它会让“配置没变化就跳过自动备份”彻底失效。
+    /// </param>
+    private string SnapshotJson(bool includeUsage = false)
+    {
+        string json = _snapshotJson != null
+            ? _snapshotJson()
+            : JsonSerializer.Serialize(_settings(), SettingsStore.JsonOptions);
+
+        if (!includeUsage) return json;
+
+        try
+        {
+            if (JsonNode.Parse(json) is not JsonObject node)
+                return json;
+
+            node["Usage"] = JsonNode.Parse(Core.UsageStats.ExportJson());
+            return node.ToJsonString(SettingsStore.JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("把使用统计并入备份失败：" + ex.Message);
+            return json;
+        }
+    }
+
+    // ---------------- 本地目录 ----------------
+
+    private static string? _backupDirCache;
+
+    /// <summary>
+    /// 本地备份目录：**软件所在目录**下的 `InputPlus 备份`。
+    ///
+    /// 为什么不放 %LocalAppData%：用户要的是"备份就在软件旁边"，
+    /// 拷走整个文件夹就带走了软件和全部备份，不用满硬盘找。
+    /// 但 Program Files 之类位置不可写，所以先探测一次，失败就回落。
+    /// </summary>
+    public static string BackupDir => _backupDirCache ??= ResolveBackupDir();
+
+    /// <summary>当前用的是不是回落目录（界面提示用）。</summary>
+    public static bool BackupDirIsFallback { get; private set; }
+
+    /// <summary>软件所在目录（界面上的「打开软件目录」用）。</summary>
+    public static string AppDir => AppPaths.AppDir;
+
+    /// <summary>用资源管理器打开一个目录（不存在就先建）。</summary>
+    public static void OpenFolder(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn($"打开目录失败（{path}）：{e.Message}");
+        }
+    }
+
+    private static string ResolveBackupDir()
+    {
+        /* 数据目录被重定向时（--selftest 的一次性目录 / INPUTPLUS_DATA / 测试脚本），
+         * 备份也必须跟着走。否则自检和测试脚本照样会：
+         *   · 往用户真实的「InputPlus Back」里写「测试用」备份；
+         *   · 按份数与日期清理旧备份，把用户的历史存档真删掉
+         *     （2026-11-17 实测：跑一次 --selftest 就删掉了 11-07 的备份）。
+         * 这里也**不做老备份迁移**：那一步是 File.Move，会把真实文件搬进临时目录。 */
+        if (AppPaths.DataDirIsRedirected)
+        {
+            string redirected = Path.Combine(AppPaths.DataDir, BackupFolderName);
+            try { Directory.CreateDirectory(redirected); }
+            catch (Exception ex) { CoreLog.Warn($"建临时备份目录失败（{redirected}）：{ex.Message}"); }
+            BackupDirIsFallback = false;
+            CoreLog.Info($"[备份] 数据目录已重定向，备份跟着放在 {redirected}");
+            return redirected;
+        }
+
+        string primary = Path.Combine(AppPaths.AppDir, BackupFolderName);
+        try
+        {
+            Directory.CreateDirectory(primary);
+            // 真写一个文件再删掉：只测 CreateDirectory 骗不过 UAC 虚拟化
+            string probe = Path.Combine(primary, ".writable");
+            File.WriteAllText(probe, "1");
+            File.Delete(probe);
+            BackupDirIsFallback = false;
+            MigrateLegacyBackups(primary);
+            return primary;
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn($"软件目录不可写，备份改放数据目录：{e.Message}");
+            BackupDirIsFallback = true;
+            string fallback = Path.Combine(AppPaths.DataDir, "backups");
+            Directory.CreateDirectory(fallback);
+            MigrateLegacyBackups(fallback);
+            return fallback;
+        }
+    }
+
+    /// <summary>
+    /// 把老位置的备份搬进新目录。
+    ///
+    /// 三个来源：
+    ///   * exe 同级的老文件夹 `InputPlus 备份`（v3.9.8 及以前）；
+    ///   * 数据目录下的 `backups`（更早版本，那时备份还放 %LocalAppData%）；
+    ///   * 上面两个目录的子目录不递归 —— 备份都是平铺的。
+    ///
+    /// **只搬、不删源文件之外的东西**：目标已有同名文件就跳过（保留新的），
+    /// 源目录空了才顺手删掉，不留一堆空文件夹。
+    /// </summary>
+    private static void MigrateLegacyBackups(string target)
+    {
+        try
+        {
+            string legacyApp = Path.Combine(AppPaths.AppDir, LegacyBackupFolderName);
+            string legacyData = Path.Combine(AppPaths.DataDir, "backups");
+
+            foreach (string src in new[] { legacyApp, legacyData })
+            {
+                if (!Directory.Exists(src)) continue;
+                if (Path.GetFullPath(src).TrimEnd('\\')
+                    .Equals(Path.GetFullPath(target).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) continue;
+
+                int moved = 0;
+                foreach (string file in Directory.EnumerateFiles(src))
+                {
+                    string name = Path.GetFileName(file);
+                    if (!IsBackupName(name)) continue;
+                    string dest = Path.Combine(target, name);
+                    if (File.Exists(dest)) continue;
+                    try { File.Move(file, dest); moved++; } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+                }
+
+                if (moved > 0)
+                    CoreLog.Info($"[备份] 从 {src} 搬了 {moved} 份备份到 {target}");
+
+                // 只删空目录，非空说明里面还有别的东西，留着
+                try
+                {
+                    if (!Directory.EnumerateFileSystemEntries(src).Any()) Directory.Delete(src);
+                }
+                catch (Exception ex) { CoreLog.Swallow(ex, "迁移时删除空备份目录"); }
+            }
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("[备份] 迁移老备份目录失败：" + e.Message);
+        }
+    }
+
+    /// <summary>
+    /// 取一个 WebDAV 客户端。
+    ///
+    /// **按配置缓存**，不要每次操作都 new 一个：WebDavClient 内部持有
+    /// HttpClient + HttpClientHandler，用完不 Dispose 就是泄漏（每个客户端
+    /// 一条连接池、一堆句柄），自动备份每小时一次、加上列目录 / 上传 / 删除，
+    /// 一次会话就能攒出几十个；而立刻 Dispose 又会踩 TIME_WAIT 耗尽端口。
+    /// 所以：配置没变就复用同一个；地址 / 账号 / 超时变了才换新的。
+    /// </summary>
+    private WebDavClient Client(int timeoutSeconds = 20)
+    {
+        var s = _settings().Sync;
+        string stamp = string.Join("\n",
+            s.WebDavUrl ?? "", s.WebDavUser ?? "", s.WebDavPass ?? "", timeoutSeconds.ToString());
+
+        lock (_clientGate)
+        {
+            if (_client != null && _clientStamp == stamp) return _client;
+
+            var old = _client;
+            _clientStamp = stamp;
+            _client = new WebDavClient(new WebDavOptions
+            {
+                /* 三个字段都可能是 null（手改过的配置 / 老版本迁移过来的），
+                 * 而 WebDavClient 内部直接拿它们拼 URI / 做凭据 ——
+                 * 传空串比传 null 安全：空串会让"没配置"这条路径明确失败，
+                 * 而不是在 HttpClient 里抛 NullReferenceException。 */
+                Url = s.WebDavUrl ?? "",
+                User = s.WebDavUser ?? "",
+                Pass = s.WebDavPass ?? "",
+                TimeoutSeconds = timeoutSeconds,
+            });
+
+            // 旧客户端的连接池一起释放（Handler 的生命周期由 HttpClient 管）
+            try { old?.Dispose(); } catch { }   /* 预期内：清理动作，失败无副作用 */
+            return _client;
+        }
+    }
+
+    private readonly object _clientGate = new();
+    private WebDavClient? _client;
+    private string _clientStamp = "";
+
+    /// <summary>退出 / 释放时把缓存的客户端一起收掉。</summary>
+    public void DisposeClient()
+    {
+        lock (_clientGate)
+        {
+            try { _client?.Dispose(); } catch { }   /* 预期内：清理动作，失败无副作用 */
+            _client = null;
+            _clientStamp = "";
+        }
+    }
+
+    /// <summary>云端是否配置可用。</summary>
+    public bool Configured
+    {
+        get
+        {
+            var s = _settings().Sync;
+            return !string.IsNullOrWhiteSpace(s.WebDavUrl);
+        }
+    }
+
+    /// <summary>
+    /// 这个进程能不能碰云端。
+    ///
+    /// 为什么必须有这道闸门（2026-11-18 实测事故）：
+    /// 自检、`--render`、部署演练、check-data-loss 都是**复制一份数据目录**再跑，
+    /// 而复制件里带着用户真实的 Sync 配置（网盘地址 + 备份密码 + 自动备份开关）。
+    /// 这些"测试实例"一启动就会跑「启动同步」和每小时的自动备份，把复制件里
+    /// 那份（可能很旧的）配置推上云端，顶掉 `keyboardenhance-latest`；
+    /// 用户下次开机时真正的实例看到"云端更新"，于是把陈旧配置拉回来覆盖本机 ——
+    /// 别名一条不剩、层里的绑定退回旧路径，都是这么发生的。
+    ///
+    /// 要在一个故意重定向的目录里测同步，把环境变量 `INPUTPLUS_SYNC` 设成 `1`。
+    /// </summary>
+    public static bool SyncAllowedHere(out string reason)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("INPUTPLUS_SYNC"), "1",
+                StringComparison.Ordinal))
+        {
+            reason = "";
+            return true;
+        }
+
+        if (AppPaths.DataDirIsRedirected)
+        {
+            reason = Loc.F("数据目录已重定向（{0}），本进程不碰云端", AppPaths.DataDir);
+            return false;
+        }
+
+        reason = "";
+        return true;
+    }
+
+    /// <summary>
+    /// 一份配置里"用户自己的东西"各有几件。
+    ///
+    /// 用途只有一个：自动覆盖本机配置之前，判断远端那份是不是比本机**更少**。
+    /// 少即意味着"这是旧副本 / 空壳"，这种时候绝不能拿它盖本机。
+    /// 解析失败返回全 0，调用方据此跳过判据（不阻塞用户主动触发的操作）。
+    /// </summary>
+    private static (int Aliases, int Keys, int Layers, int Macros) EntityCounts(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return (0, 0, 0, 0);
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            int aliases = 0, keys = 0, layers = 0, macros = 0;
+
+            if (root.TryGetProperty("Global", out var global)
+                && global.ValueKind == JsonValueKind.Object
+                && global.TryGetProperty("Snippets", out var snippets)
+                && snippets.ValueKind == JsonValueKind.Array)
+                aliases = snippets.GetArrayLength();
+
+            if (root.TryGetProperty("Layers", out var layerArr)
+                && layerArr.ValueKind == JsonValueKind.Array)
+            {
+                layers = layerArr.GetArrayLength();
+                foreach (var layer in layerArr.EnumerateArray())
+                {
+                    if (layer.ValueKind == JsonValueKind.Object
+                        && layer.TryGetProperty("Keys", out var ks)
+                        && ks.ValueKind == JsonValueKind.Array)
+                        keys += ks.GetArrayLength();
+                }
+            }
+
+            // 老结构（v3 之前）把按键平铺在根上，一并算进去
+            if (root.TryGetProperty("Keys", out var flat)
+                && flat.ValueKind == JsonValueKind.Array)
+                keys += flat.GetArrayLength();
+
+            if (root.TryGetProperty("Macros", out var macroArr)
+                && macroArr.ValueKind == JsonValueKind.Array)
+                macros = macroArr.GetArrayLength();
+
+            return (aliases, keys, layers, macros);
+        }
+        catch
+        {
+            return (0, 0, 0, 0);
+        }
+    }
+
+    /// <summary>
+    /// 自动覆盖本机之前的判据：远端那份能不能拿来盖。
+    ///
+    /// 只挡一种情况 —— 远端比本机**少**（别名/按键/宏任意一项变少）。
+    /// 这不是"小心一点"，而是这类事故的唯一特征：陈旧副本的别名是 0，
+    /// 层里的绑定也停在上一次上传时的样子。
+    /// </summary>
+    private async Task<(bool Ok, string Message)> SafeToOverwriteAsync(
+        WebDavClient client, CancellationToken ct)
+    {
+        string? remoteText;
+        try
+        {
+            (_, remoteText) = await DownloadLatestAsync(client, ct).ConfigureAwait(false);
+            if (remoteText == null)
+            {
+                var files = await ListBackupsAsync(ct).ConfigureAwait(false);
+                var newest = files.FirstOrDefault();
+                if (newest == null) return (true, "");     // 云端空，走上传分支
+                remoteText = await client.DownloadAsync(newest.Name, ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception e)
+        {
+            return (false, Loc.F("读不到云端备份（{0}），这次不改本机配置", e.Message));
+        }
+
+        if (string.IsNullOrWhiteSpace(remoteText))
+            return (false, "云端备份是空的，这次不改本机配置");
+
+        string remoteJson;
+        try
+        {
+            remoteJson = CryptoBox.Decrypt(remoteText, _settings().Sync.BackupPassword ?? "");
+        }
+        catch (Exception e)
+        {
+            return (false, Loc.F("云端备份解不开（{0}），这次不改本机配置", e.Message));
+        }
+
+        var remote = EntityCounts(remoteJson);
+        var local = EntityCounts(SnapshotJson());
+        if (remote.Aliases < local.Aliases || remote.Keys < local.Keys || remote.Macros < local.Macros)
+        {
+            return (false, Loc.F(
+                "云端那份比本机少（别名 {0}/{1}、按键 {2}/{3}、宏 {4}/{5}），判断是旧副本，已拒绝自动覆盖",
+                remote.Aliases, local.Aliases, remote.Keys, local.Keys, remote.Macros, local.Macros));
+        }
+
+        return (true, "");
+    }
+
+    /// <summary>
+    /// 覆盖本机配置前，把当前的 settings.json 原样另存一份。
+    ///
+    /// 为什么不是"反正有 .bak"：.bak 每保存一次就轮换一次，
+    /// 恢复之后程序会立刻保存，.bak 里那份"恢复前"的配置几秒内就被顶掉了。
+    /// 这里按时间戳留 5 份，出事了能从文件名直接认出是哪一次。
+    /// </summary>
+    private static void TrySnapshotCurrentSettings(string tag)
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.SettingsFile)) return;
+            string pattern = $"settings-{tag}-";
+            string path = Path.Combine(AppPaths.DataDir,
+                $"{pattern}{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            File.Copy(AppPaths.SettingsFile, path, true);
+            CoreLog.Info($"恢复前已另存本机配置：{Path.GetFileName(path)}");
+
+            // 只留最近 5 份，别让这个"保险"自己变成垃圾堆
+            var olds = Directory.GetFiles(AppPaths.DataDir, pattern + "*.json")
+                .OrderByDescending(f => f, StringComparer.OrdinalIgnoreCase)
+                .Skip(5);
+            foreach (string old in olds)
+            {
+                try { File.Delete(old); } catch { /* 预期内：占用时下次再清 */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("另存恢复前配置失败：" + ex.Message);
+        }
+    }
+
+    // ---------------- 备份内容 ----------------
+
+    /// <summary>
+    /// 生成备份内容 —— **一定是密文**。
+    ///
+    /// 没设备份密码时直接抛异常，由调用方提示用户去设。
+    /// 这里不做"没密码就明文"的妥协：备份会被传到网盘、
+    /// 会被拷到 U 盘、会被丢进聊天窗口，明文等于把凭据送人。
+    /// </summary>
+    public string BuildBackupPayload(out bool encrypted)
+    {
+        var s = _settings();
+        string password = s.Sync.BackupPassword ?? "";
+        if (string.IsNullOrWhiteSpace(password))
+            throw new InvalidOperationException(
+                "还没设备份密码。备份一律加密，请先在「备份密码」里设一个再备份。");
+
+        encrypted = true;
+        return CryptoBox.Encrypt(SnapshotJson(includeUsage: true), password);
+    }
+
+    /// <summary>不抛异常版本，供自动备份这类"失败就算了"的场景用。</summary>
+    public bool TryBuildBackupPayload(out string payload, out string error)
+    {
+        try
+        {
+            payload = BuildBackupPayload(out _);
+            error = "";
+            return true;
+        }
+        catch (Exception e)
+        {
+            payload = "";
+            error = e.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 把备份文本还原进设置。
+    /// </summary>
+    /// <param name="text">备份文件内容。</param>
+    /// <param name="mode">覆盖 or 合并。</param>
+    /// <param name="password">解密口令；null = 用当前设置里的备份密码。</param>
+    public RestoreOutcome RestoreFromText(string text, RestoreMode mode = RestoreMode.Overwrite,
+        string? password = null)
+    {
+        var s = _settings();
+        string pass = password ?? s.Sync.BackupPassword ?? "";
+
+        string json;
+        try
+        {
+            json = CryptoBox.Decrypt(text, pass);
+        }
+        catch (Exception e)
+        {
+            // 统一成一种异常，界面据此弹出"输入当时的密码"
+            throw new BackupPasswordException(e.Message, e);
+        }
+
+        /* ---- 内容校验：能反序列化 ≠ 这是一份备份 ----
+         *
+         * 任何 JSON 都能"成功"反序列化进 AppSettings，缺的字段会静默变成默认值。
+         * 于是「从备份恢复」选错文件（导出文件、别人的 settings.json、
+         * 手写的 {"Global":{"Theme":"dark"}}）会把用户的按键、层、宏全部冲成默认 ——
+         * 而且界面还会显示"恢复完成 ✓"。这在功能上就是一个数据丢失坑。
+         *
+         * 两道判据：
+         *   ① `kind = clp-config` → 这是「导出配置」的文件，该走「导入配置」；
+         *   ② 结构上什么都没有 → 不是备份（沿用加载路径的同一条判据）。
+         */
+        JsonNode? root = null;
+        try { root = JsonNode.Parse(json); }
+        catch (Exception e)
+        {
+            throw new InvalidOperationException(Loc.F("备份内容不是有效 JSON：{0}", e.Message), e);
+        }
+
+        string? kind = null;
+        if (root is JsonObject obj && obj.TryGetPropertyValue("kind", out var kindNode))
+        {
+            try { kind = kindNode?.GetValue<string>(); } catch { kind = null; }
+        }
+        if (string.Equals(kind, ExportImport.ExportKind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(Loc.T(
+                "这是一份「导出配置」文件，不是备份 —— 请到「同步与备份 → 导入配置」用它；"
+                + "「从备份恢复」只认 .inputplus 备份文件（旧版 .keyboardenhance / .clpbak 也能认）。"));
+        }
+
+        var parsed = JsonSerializer.Deserialize<AppSettings>(json, SettingsStore.JsonOptions)
+            ?? throw new InvalidOperationException("备份内容解析失败");
+
+        /* ⚠ 这条判定必须在 Normalize 之前：Normalize 会把缺失的字段补成默认值
+         * （10 个层 + 1 个触发键 + 一整套默认按键），补完就再也不"空"了。 */
+        if (SettingsStore.IsStructurallyEmpty(parsed))
+        {
+            throw new InvalidOperationException(Loc.T(
+                "这不是一份Input Plus的备份：里面没有任何按键、层、宏或搜索项。"
+                + "请确认选的是 .inputplus 备份文件（旧版 .keyboardenhance / .clpbak 也可以）。"));
+        }
+
+        SettingsStore.Normalize(parsed);
+
+        /* 备份里带使用统计就一起恢复（老备份没有这一段，跳过即可）。 */
+        if (root is JsonObject rootObj
+            && rootObj.TryGetPropertyValue("Usage", out var usageNode)
+            && usageNode != null)
+        {
+            Core.UsageStats.ImportJson(usageNode.ToJsonString());
+        }
+
+        if (mode == RestoreMode.Merge)
+        {
+            var (merged, added, replaced, mergeToken) = BackupMerge.Merge(s, parsed);
+            SettingsStore.CopyInto(s, merged);
+            CoreLog.Info($"已合并备份：新增 {added} 项，覆盖 {replaced} 项" +
+                         (mergeToken ? "，采用了备份里的 GitHub 令牌" : ""));
+
+            /* 令牌不进 added/replaced 的计数（它不是一个"条目"），
+             * 单独用一句话说清楚 —— 用户最关心的是"我的令牌被动了没有"。 */
+            string tokenNote = mergeToken ? "；已带上备份里的 GitHub 令牌" : "";
+            return new RestoreOutcome(mode, added, replaced,
+                Loc.F("已合并：新增 {0} 项，覆盖 {1} 项（本地独有的内容保留）{2}", added, replaced, tokenNote),
+                mergeToken);
+        }
+
+        /* 覆盖恢复也要**保留本机的同步与加密设置**。
+         *
+         * 理由不是"省事"，是安全：
+         *   * 备份可能来自别人的机器 / 另一台电脑，里面的 WebDavUrl + 密码
+         *     指向的是**别人的网盘**。整份灌进来，下次同步就把本机配置
+         *     （含宏、搜索记录）传到那个账号上去了；
+         *   * 备份密码更不能跟着走 —— 本地 vault 的密钥是按本机密码派生的，
+         *     换成备份里的密码，磁盘上的密文立刻解不开，等于把自己锁在外面。
+         *
+         * 所以恢复只恢复"内容"（按键、层、宏、搜索项、窗口绑定、外观），
+         * 不碰"这台机器的身份"。 */
+        var localSync = s.Sync;
+        var localSecurity = s.Security;
+        string localToken = s.Global.GitHubToken;
+        string backupToken = parsed.Global.GitHubToken;
+
+        SettingsStore.CopyInto(s, parsed);
+        s.Sync = localSync;
+        s.Security = localSecurity;   // 启动密码是“本机锁”，不能跟着备份走
+
+        /* GitHub 令牌的边界：
+         *   · 备份里有 → 采用（换台机器恢复后能直接检查更新，不用重新贴）；
+         *   · 备份里没有（老版本备份 / 明文导出再导入，那种本来就不带令牌）
+         *     → 保留本机原有的。清空它等于让用户的更新检查当场退回 60 次/小时，
+         *     而这条恢复大概率不是为了"清掉令牌"。 */
+        bool tokenAdopted = !string.IsNullOrWhiteSpace(backupToken);
+        if (!tokenAdopted && !string.IsNullOrWhiteSpace(localToken))
+            s.Global.GitHubToken = localToken;
+
+        string tokenSummary = tokenAdopted
+            ? "；GitHub 令牌已换成备份里的"
+            : (localToken.Length > 0 ? "；GitHub 令牌保留本机的" : "");
+
+        CoreLog.Info("已从备份恢复配置（覆盖，同步与加密设置保留本机）" + tokenSummary);
+        return new RestoreOutcome(mode, 0, 0,
+            "已整份恢复（覆盖，网盘与备份密码保留本机）" + tokenSummary, tokenAdopted);
+    }
+
+    /// <summary>这份备份能不能用这个口令解开（只试解密，不动任何设置）。</summary>
+    public static bool CanDecrypt(string text, string password)
+    {
+        try
+        {
+            CryptoBox.Decrypt(text, password);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ---------------- 维护：清理（本地 + 云端）----------------
+
+    /// <summary>
+    /// 一次清理的结果。
+    /// </summary>
+    /// <param name="RemoteSkipped">云端没配置，只清了本地。</param>
+    /// <param name="Summary">给用户看的一句话，界面上直接用。</param>
+    public sealed record CleanupResult(int LocalDeleted, int RemoteDeleted, long FreedBytes,
+        bool RemoteSkipped, string Summary);
+
+    /// <summary>
+    /// 清理早于 <paramref name="days"/> 天的备份（本地 + 云端）。
+    ///
+    /// **永远保留最新一份** —— 用户半个月没备份时，按天数会把唯一那份也删掉，
+    /// 那就成了"备份功能帮我清空了备份"。
+    /// </summary>
+    public async Task<CleanupResult> CleanupOlderThanAsync(int days, CancellationToken ct = default)
+    {
+        int dayN = Math.Max(1, days);
+
+        // 本地：keep 给 int.MaxValue 等于"只按天数"
+        int local = PruneLocal(keep: int.MaxValue, days: dayN);
+
+        int remote = 0;
+        long bytes = 0;
+        bool skipped = !Configured;
+        if (!skipped)
+        {
+            var (d, b) = await PruneRemoteAsync(keep: 0, dayN, ct).ConfigureAwait(false);
+            remote = d;
+            bytes = b;
+        }
+
+        string summary = BuildCleanupSummary(Loc.F("早于 {0} 天的备份", dayN), local, remote, bytes, skipped);
+        CoreLog.Info($"清理旧备份（>{dayN} 天）：本地 {local} 份，云端 {remote} 份");
+        return new CleanupResult(local, remote, bytes, skipped, summary);
+    }
+
+    /// <summary>只保留最近 <paramref name="keep"/> 份（本地 + 云端）。</summary>
+    public async Task<CleanupResult> KeepNewestAsync(int keep, CancellationToken ct = default)
+    {
+        int keepN = Math.Max(1, keep);
+
+        // days 给 0 = 不按天数
+        int local = PruneLocal(keep: keepN, days: 0);
+
+        int remote = 0;
+        long bytes = 0;
+        bool skipped = !Configured;
+        if (!skipped)
+        {
+            var (d, b) = await PruneRemoteAsync(keepN, days: 0, ct).ConfigureAwait(false);
+            remote = d;
+            bytes = b;
+        }
+
+        string summary = BuildCleanupSummary(Loc.F("只保留最近 {0} 份", keepN), local, remote, bytes, skipped);
+        CoreLog.Info($"保留最近 {keepN} 份：本地删 {local}，云端删 {remote}");
+        return new CleanupResult(local, remote, bytes, skipped, summary);
+    }
+
+    /// <summary>
+    /// 清掉云端"冗余 / 无效"的东西。判定范围（界面上照这个说）：
+    ///
+    ///   ① 上传残留：`.tmp` / `.part` / `.crdownload` 结尾，或 `~$` 开头的临时文件
+    ///   ② 太小：0 字节，或小于 64 字节（一份正常备份至少几 KB）
+    ///   ③ 内容完全重复：同一份备份被传了多次，只保留**最新**的那份
+    ///   ④ 打不开：既不是合法的加密备份，也不是合法的明文导出
+    ///
+    /// 只动云端 —— 本地目录里有用户自己的东西，不该被"自动判定"删掉。
+    /// </summary>
+    public async Task<CleanupResult> CleanupRedundantAsync(CancellationToken ct = default)
+    {
+        if (!Configured)
+            return new CleanupResult(0, 0, 0, true, "还没填 WebDAV 地址，云端没有可清理的对象。");
+
+        var client = Client();
+        var (all, _) = await client.ListEnsuringDirectoryAsync(ct).ConfigureAwait(false);
+
+        var doomed = new List<RemoteFile>();
+        var keepByHash = new Dictionary<string, string>(StringComparer.Ordinal);
+        int checkedCount = 0;
+
+        /* 降序遍历：第一次见到的同内容文件是**最新**的，留它，后面的都算重复。 */
+        foreach (var f in all.OrderByDescending(x => x.Modified))
+        {
+            // ① 上传残留：永远不可能是有效备份，直接清
+            if (IsTempArtifact(f.Name)) { doomed.Add(f); continue; }
+
+            /* 只处理"本软件的备份"。
+             *
+             * 这条**必须排在"太小"之前**：用户可能把自己的一些文件放在同一个
+             * WebDAV 目录里（地址是用户自己填的，只有两个已知网盘才会自动补
+             * InputPlus/ 子目录），旧顺序会把其中小于 64 字节的先判死，
+             * 与「只动云端冗余、不碰用户的其它文件」这句承诺相矛盾。 */
+            bool isStableAlias = WebDavClient.IsStableAlias(f.Name);
+            if (!IsBackupName(f.Name) && !isStableAlias) continue;
+
+            /* ② 太小 —— 只有服务器**明确报出**小尺寸时才判定。
+             *
+             * `<getcontentlength>` 在 PROPFIND 里是可选的，不少服务器根本不返回；
+             * 那时 RemoteFile.Size 就是 0。把"没报尺寸"当成"0 字节"，
+             * 会让下面的规则把整套云端备份一次性删光 —— 用户的备份历史
+             * 被"清理冗余"按钮清空，而且没法恢复。 */
+            if (f.Size > 0 && f.Size < MinBackupBytes) { doomed.Add(f); continue; }
+            if (isStableAlias) continue;                 // 稳定别名只留不删
+
+            // 只有"看起来是备份"的才值得下载校验（别去碰用户放在同目录的其它文件）
+            if (checkedCount >= MaxRedundantScan) continue;
+            checkedCount++;
+
+            string? text;
+            try { text = await client.DownloadAsync(f.Name, ct).ConfigureAwait(false); }
+            catch (Exception e)
+            {
+                CoreLog.Warn($"冗余检查时读不到 {f.Name}：{e.Message}");
+                continue;
+            }
+            if (text == null) continue;
+
+            // ④ 既不是密文备份，也不是明文导出 → 无效
+            if (!CryptoBox.LooksEncrypted(text) && !text.Contains("\"kind\"", StringComparison.Ordinal))
+            {
+                doomed.Add(f);
+                continue;
+            }
+
+            // ③ 内容重复
+            string hash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(text)));
+            if (keepByHash.ContainsKey(hash)) doomed.Add(f);
+            else keepByHash[hash] = f.Name;
+        }
+
+        int deleted = 0;
+        long bytes = 0;
+        foreach (var f in doomed)
+        {
+            try
+            {
+                await client.DeleteAsync(f.Name, ct).ConfigureAwait(false);
+                deleted++;
+                bytes += f.Size;
+                CoreLog.Info($"清理云端冗余：{f.Name}（{f.Size} 字节）");
+            }
+            catch (Exception e)
+            {
+                CoreLog.Warn($"删不掉云端冗余 {f.Name}：{e.Message}");
+            }
+        }
+
+        string summary = deleted == 0
+            ? Loc.F("云端没有冗余或无效数据（检查了 {0} 个文件，其中 {1} 份备份做了内容比对）。", all.Count, checkedCount)
+            : Loc.F("已清除 {0} 个冗余/无效文件，释放约 {1:0.#} KB", deleted, bytes / 1024.0)
+              + Loc.F("（检查了 {0} 个文件，其中 {1} 份备份做了内容比对）。", all.Count, checkedCount);
+
+        CoreLog.Info("清除云端冗余：" + summary);
+        return new CleanupResult(0, deleted, bytes, false, summary);
+    }
+
+    /// <summary>内容比对最多下载多少份 —— 网盘慢的时候别把"清理"变成"等十分钟"。</summary>
+    private const int MaxRedundantScan = 40;
+
+    /// <summary>
+    /// 一份正常备份至少这么大（字节）。小于它的**明确尺寸**才判定为无效；
+    /// 尺寸未知（服务器没报 getcontentlength，Size == 0）不参与这条判定。
+    /// </summary>
+    private const long MinBackupBytes = 64;
+
+    /// <summary>上传中断留下的临时文件。</summary>
+    internal static bool IsTempArtifact(string name)
+    {
+        string lower = name.ToLowerInvariant();
+        return lower.EndsWith(".tmp", StringComparison.Ordinal)
+            || lower.EndsWith(".part", StringComparison.Ordinal)
+            || lower.EndsWith(".crdownload", StringComparison.Ordinal)
+            || lower.StartsWith("~$", StringComparison.Ordinal)
+            || lower.EndsWith(".bak", StringComparison.Ordinal);
+    }
+
+    private static string BuildCleanupSummary(string what, int local, int remote, long bytes,
+        bool remoteSkipped)
+    {
+        var parts = new List<string>
+        {
+            local > 0 ? Loc.F("本地删除 {0} 份", local) : "本地没有需要清理的",
+        };
+
+        if (remoteSkipped) parts.Add("云端未配置，已跳过");
+        else parts.Add(remote > 0 ? Loc.F("云端删除 {0} 份", remote) : "云端没有需要清理的");
+
+        string freed = bytes > 0 ? Loc.F("，云端释放约 {0:0.#} KB", bytes / 1024.0) : "";
+        return Loc.F("{0}：{1}{2}。最新一份始终保留。", what, Loc.Join(parts), freed);
+    }
+
+    /// <summary>
+    /// 按"保留 N 份 / 清理 N 天前"清理云端。
+    /// 与本地 <see cref="PruneList"/> 用同一套规则（含"至少留一份"）。
+    /// </summary>
+    private async Task<(int Deleted, long Bytes)> PruneRemoteAsync(int keep, int? days,
+        CancellationToken ct)
+    {
+        var files = await ListBackupsAsync(ct).ConfigureAwait(false);
+        if (files.Count == 0) return (0, 0);
+
+        var client = Client();
+        int deleted = 0;
+        long bytes = 0;
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            var f = files[i];
+            bool tooMany = keep > 0 && i >= keep;
+            bool tooOld = days is > 0 && i > 0 &&        // i > 0：最新一份永不删
+                          (DateTimeOffset.Now - f.Modified).TotalDays > days.Value;
+            if (!tooMany && !tooOld) continue;
+
+            try
+            {
+                await client.DeleteAsync(f.Name, ct).ConfigureAwait(false);
+                deleted++;
+                bytes += f.Size;
+                CoreLog.Info($"清理云端备份：{f.Name}");
+            }
+            catch (Exception e)
+            {
+                CoreLog.Warn($"删不掉云端备份 {f.Name}：{e.Message}");
+            }
+        }
+
+        return (deleted, bytes);
+    }
+
+    // ---------------- 本地备份 ----------------
+
+    /// <summary>写一份本地备份，返回文件路径。</summary>
+    public string WriteLocalBackup(string payload, bool prune = true)
+    {
+        string path = Path.Combine(BackupDir, BackupName(DateTime.Now));
+        string tmp = path + ".tmp";
+        try
+        {
+            /* 直接写最终文件名：断电/磁盘满会留下半份备份，而 PruneLocal 会按时间
+             * 把它当成最新一份保留，反而挤掉旧的完好备份。先写临时文件并落盘，
+             * 成功后再原子改名。 */
+            using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+            {
+                writer.Write(payload);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, true);
+        }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            throw;
+        }
+
+        CoreLog.Info($"本地备份已写：{path}");
+        if (prune) PruneLocal();
+        return path;
+    }
+
+    /// <summary>不抛异常地写一份本地备份（自动备份 / 恢复前自保用）。</summary>
+    public string? TryWriteLocalBackup()
+    {
+        try
+        {
+            if (!TryBuildBackupPayload(out string payload, out _)) return null;
+            return WriteLocalBackup(payload);
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("本地备份失败：" + e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>列出本地备份（新的在前）。新旧两种后缀都收。</summary>
+    public static List<LocalBackup> ListLocal(string? dir = null)
+    {
+        var list = new List<LocalBackup>();
+        try
+        {
+            var info = new DirectoryInfo(dir ?? BackupDir);
+            if (!info.Exists) return list;
+            foreach (var f in info.GetFiles())
+            {
+                if (!IsBackupName(f.Name)) continue;
+                if (f.Length <= 0) continue;   // 截断/零字节备份不能参与轮换
+                bool enc = true;
+                try { enc = CryptoBox.LooksEncrypted(File.ReadAllText(f.FullName)); }
+                catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+                list.Add(new LocalBackup(f.FullName, f.Name, f.LastWriteTime, f.Length, enc));
+            }
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("列本地备份失败：" + e.Message);
+        }
+        return list.OrderByDescending(x => x.Time).ToList();
+    }
+
+    /// <summary>这个文件名是不是本软件的备份（三个品牌名 × 三个后缀都能认）。</summary>
+    public static bool IsBackupName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+
+        bool stem = name.StartsWith("InputPlus(", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("KeyboardEnhance(", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("capslock+(", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("capslockplus(", StringComparison.OrdinalIgnoreCase);
+        if (!stem) return false;
+
+        if (name.EndsWith(Extension, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (string ext in LegacyExtensions)
+            if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// 按保留策略清理本地备份。
+    ///
+    /// 两条规则同时生效，但**永远至少留最新一份** ——
+    /// 用户把"保留 10 份"和"清理 7 天前"都设上、又半个月没备份时，
+    /// 按天数会连唯一那份一起删掉，那就成了"备份功能帮我清空了备份"。
+    /// </summary>
+    public static int PruneLocal(int? keep = null, int? days = null) =>
+        PruneFolder(BackupDir, keep, days);
+
+    /// <summary>清理指定目录（自检走同一条代码路径）。</summary>
+    public static int PruneFolder(string dir, int? keep = null, int? days = null)
+    {
+        try
+        {
+            var s = ListLocal(dir);
+            return PruneList(s, keep, days, x => (x.Time, () => File.Delete(x.Path), x.Name));
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("清理旧备份失败：" + e.Message);
+            return 0;
+        }
+    }
+
+    /// <summary>清理的公共逻辑（本地与云端共用同一套规则）。</summary>
+    private static int PruneList<T>(List<T> items, int? keep, int? days,
+        Func<T, (DateTime Time, Action Delete, string Name)> info)
+    {
+        int keepN = Math.Max(1, keep ?? DefaultKeep);
+        int dayN = days ?? DefaultCleanDays;
+        var ordered = items
+            .Select(x => (Item: x, Info: info(x)))
+            .OrderByDescending(x => x.Info.Time)
+            .ToList();
+
+        int removed = 0;
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            bool tooMany = i >= keepN;
+            bool tooOld = dayN > 0 && i > 0 &&
+                          (DateTime.Now - ordered[i].Info.Time).TotalDays > dayN;
+            if (!tooMany && !tooOld) continue;
+            try
+            {
+                ordered[i].Info.Delete();
+                removed++;
+                CoreLog.Info($"清理旧备份：{ordered[i].Info.Name}");
+            }
+            catch (Exception e)
+            {
+                CoreLog.Warn($"删不掉 {ordered[i].Info.Name}：{e.Message}");
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>备份文件名：InputPlus(2026-10-21 22-30-00).inputplus</summary>
+    public static string BackupName(DateTime when) =>
+        $"InputPlus({when:yyyy-MM-dd HH-mm-ss}){Extension}";
+
+    // ---------------- 手动操作 ----------------
+
+    /// <summary>上传一份备份到云端（同时写一份本地）。</summary>
+    public async Task<SyncResult> UploadAsync(CancellationToken ct = default)
+    {
+        if (!Configured) return SyncResult.Fail("还没填 WebDAV 地址");
+        if (!SyncAllowedHere(out string blockedUpload))
+        {
+            CoreLog.Info("上传：" + blockedUpload + "，已跳过");
+            return SyncResult.Done(blockedUpload);
+        }
+        if (!await Gate.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false))
+            return SyncResult.Fail("已有同步在进行，稍后再试");
+
+        try
+        {
+            var s = _settings();
+            if (SettingsStore.IsStructurallyEmpty(s))
+            {
+                CoreLog.Warn("拒绝上传结构不完整的配置：没有任何按键/层/宏/搜索项");
+                return SyncResult.Fail("当前配置结构不完整，已取消上传，避免覆盖云端好备份");
+            }
+
+            string payload = BuildBackupPayload(out bool encrypted);
+
+            // ① 先本地
+            WriteLocalBackup(payload);
+
+            // ② 再把同一份字节推上去
+            var client = Client();
+            string stampName = BackupName(DateTime.Now);
+            await client.UploadAsync(stampName, payload, ct).ConfigureAwait(false);
+            // 稳定文件名永远指向最新一份，启动同步时不必列目录
+            await client.UploadAsync(WebDavClient.LatestFile, payload, ct).ConfigureAwait(false);
+
+            s.Sync.LastSyncAt = DateTime.Now;
+            s.Sync.LastSyncInfo = Loc.F("已上传 {0}", stampName);
+
+            long kb = payload.Length / 1024;
+            CoreLog.Info($"WebDAV 上传完成：{stampName}（已加密，{kb}KB）");
+
+            /* ③ 云端也按同一套策略清理，不然网盘会越堆越满。
+             * 清理自己已经兜了异常（内部 try/catch，失败只记日志），所以这里不用再包一层。 */
+            int pruned = await PruneCloudAsync(client, ct).ConfigureAwait(false);
+
+            return SyncResult.Done(Loc.F("已上传 {0}（已加密，{1}KB）", stampName, kb)
+                                   + (pruned > 0 ? Loc.F("，顺手清掉 {0} 份旧备份", pruned) : ""));
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("WebDAV 上传失败：" + e.Message);
+            return SyncResult.Fail(e.Message);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 云端最新备份的时间戳：新的稳定名 + 改名前的旧别名里取最晚的一个。
+    ///
+    /// 旧别名必须一起看：用户升级前上传的备份只存在于旧名字下，
+    /// 只看新名字会把它判成"云端还没有备份"，然后直接上传把旧的盖掉。
+    /// </summary>
+    private static async Task<DateTimeOffset?> LatestRemoteModifiedAsync(
+        WebDavClient client, CancellationToken ct)
+    {
+        // WebDavClient 的 Last-Modified 是 DateTimeOffset，别在这里折成 DateTime，
+        // 否则跨时区比较会悄悄差几个小时。
+        DateTimeOffset? newest = await client.GetModifiedAsync(WebDavClient.LatestFile, ct)
+            .ConfigureAwait(false);
+
+        foreach (string alias in WebDavClient.LegacyLatestFiles)
+        {
+            var at = await client.GetModifiedAsync(alias, ct).ConfigureAwait(false);
+            if (at != null && (newest == null || at > newest)) newest = at;
+        }
+
+        return newest;
+    }
+
+    /// <summary>
+    /// 取云端「最新那份」：先按新稳定文件名（inputplus-latest.inputplus）读，
+    /// 读不到再依次试改名前的别名（keyboardenhance-latest.keyboardenhance、
+    /// capslock-backup.json）。返回实际用到的名字与内容；都没有时 Text 为 null。
+    /// </summary>
+    private static async Task<(string Name, string? Text)> DownloadLatestAsync(
+        WebDavClient client, CancellationToken ct)
+    {
+        string? text = await client.DownloadAsync(WebDavClient.LatestFile, ct).ConfigureAwait(false);
+        if (text != null) return (WebDavClient.LatestFile, text);
+
+        foreach (string alias in WebDavClient.LegacyLatestFiles)
+        {
+            text = await client.DownloadAsync(alias, ct).ConfigureAwait(false);
+            if (text != null) return (alias, text);
+        }
+
+        return (WebDavClient.LatestFile, null);
+    }
+
+    /// <summary>从云端下载**最新**那份并覆盖恢复（保留旧入口，界面走恢复对话框）。</summary>
+    public async Task<SyncResult> DownloadAsync(CancellationToken ct = default)
+    {
+        if (!Configured) return SyncResult.Fail("还没填 WebDAV 地址");
+        if (!await Gate.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false))
+            return SyncResult.Fail("已有同步在进行，稍后再试");
+
+        try
+        {
+            var client = Client();
+            var (usedName, text) = await DownloadLatestAsync(client, ct).ConfigureAwait(false);
+
+            if (text == null)
+            {
+                // 新名字和两个旧别名都没有 → 回落列目录找最新
+                var files = await ListBackupsAsync(ct).ConfigureAwait(false);
+                var newest = files.FirstOrDefault();
+                if (newest == null) return SyncResult.Fail("云端还没有任何备份");
+                text = await client.DownloadAsync(newest.Name, ct).ConfigureAwait(false);
+                usedName = newest.Name;
+            }
+
+            if (text == null) return SyncResult.Fail("云端备份读不出来");
+
+            /* 恢复前留两份：
+             *   ① 一份加密备份（正常存档，用户能在界面里看到）；
+             *   ② 一份原样的 settings-*.json（.bak 会在恢复后几秒内被轮换掉，
+             *      只靠它等于没有"恢复前"这个状态）。 */
+            TryWriteLocalBackup();
+            TrySnapshotCurrentSettings("before-restore");
+            var outcome = RestoreFromText(text);
+
+            var s = _settings();
+            s.Sync.LastSyncAt = DateTime.Now;
+            s.Sync.LastSyncInfo = Loc.F("已恢复 {0}", usedName);
+
+            CoreLog.Info($"WebDAV 恢复完成：{usedName}");
+
+            /* 从旧别名恢复出来的配置，顺手用新名字再推一份上去。
+             * 不然用户每次恢复都要多走一趟"读旧名 → 列目录"的兜底，
+             * 而且旧别名会一直停在那份越来越旧的内容上。 */
+            if (!string.Equals(usedName, WebDavClient.LatestFile, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var up = await UploadAsync(ct).ConfigureAwait(false);
+                    if (!up.Ok) CoreLog.Warn("把恢复后的配置写到新稳定文件名失败：" + up.Message);
+                }
+                catch (Exception upEx)
+                {
+                    CoreLog.Warn("把恢复后的配置写到新稳定文件名失败：" + upEx.Message);
+                }
+            }
+
+            return SyncResult.Done(Loc.F("已从 {0} 恢复配置（恢复前的配置已另存一份）", usedName));
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("WebDAV 恢复失败：" + e.Message);
+            return SyncResult.Fail(e.Message);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>测试连接。</summary>
+    public async Task<SyncResult> TestAsync(CancellationToken ct = default)
+    {
+        if (!Configured) return SyncResult.Fail("还没填 WebDAV 地址");
+        try
+        {
+            var client = Client(15);
+            string msg = await client.ProbeAsync(ct).ConfigureAwait(false);
+            return SyncResult.Done(msg);
+        }
+        catch (Exception e)
+        {
+            return SyncResult.Fail(e.Message);
+        }
+    }
+
+    // ---------------- 备份列表 ----------------
+
+    /// <summary>
+    /// 列出云端的**历史备份**。
+    ///
+    /// 过滤掉 `keyboardenhance-latest.keyboardenhance` 这个稳定别名 ——
+    /// 它和最新那份时间戳备份内容完全一样，列出来会让用户以为有两份。
+    /// </summary>
+    public async Task<List<RemoteFile>> ListBackupsAsync(CancellationToken ct = default)
+    {
+        var client = Client();
+        /* 目录不存在就先建再列 —— 用户可能刚填完地址，
+         * 还没上传过任何东西，这时候"恢复"对话框也该能正常打开（空列表）。 */
+        var (all, _) = await client.ListEnsuringDirectoryAsync(ct).ConfigureAwait(false);
+        return all
+            .Where(f => IsBackupName(f.Name))
+            .OrderByDescending(f => f.Modified)
+            .ToList();
+    }
+
+    /// <summary>下载指定名字的云端备份。</summary>
+    public Task<string?> DownloadByNameAsync(string name, CancellationToken ct = default) =>
+        Client().DownloadAsync(name, ct);
+
+    /// <summary>删掉一份云端备份。</summary>
+    public async Task<SyncResult> DeleteCloudAsync(string name, CancellationToken ct = default)
+    {
+        if (!Configured) return SyncResult.Fail("还没填 WebDAV 地址");
+        try
+        {
+            await Client().DeleteAsync(name, ct).ConfigureAwait(false);
+            return SyncResult.Done(Loc.F("已删除云端备份 {0}", name));
+        }
+        catch (Exception e)
+        {
+            return SyncResult.Fail(e.Message);
+        }
+    }
+
+    /// <summary>按保留策略清理云端旧备份；返回删掉几份。</summary>
+    private async Task<int> PruneCloudAsync(WebDavClient client, CancellationToken ct)
+    {
+        try
+        {
+            var s = _settings().Sync;
+            var files = (await client.ListAsync(ct).ConfigureAwait(false))
+                .Where(f => IsBackupName(f.Name))
+                .ToList();
+            if (files.Count == 0) return 0;
+
+            int keep = Math.Max(1, s.KeepLocalBackups);
+            int days = s.CleanupDays;
+            int removed = 0;
+
+            var ordered = files.OrderByDescending(f => f.Modified).ToList();
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                bool tooMany = i >= keep;
+                bool tooOld = days > 0 && i > 0 &&
+                              (DateTimeOffset.Now - ordered[i].Modified).TotalDays > days;
+                if (!tooMany && !tooOld) continue;
+                try
+                {
+                    await client.DeleteAsync(ordered[i].Name, ct).ConfigureAwait(false);
+                    removed++;
+                }
+                catch (Exception e)
+                {
+                    CoreLog.Warn($"云端删不掉 {ordered[i].Name}：{e.Message}");
+                }
+            }
+            return removed;
+        }
+        catch (Exception e)
+        {
+            // 清理失败不影响同步本身
+            CoreLog.Warn("清理云端旧备份失败：" + e.Message);
+            return 0;
+        }
+    }
+
+    // ---------------- 自动备份 ----------------
+
+    /// <summary>上一次自动备份时的配置指纹，用于"没变化就跳过"。</summary>
+    private string _lastAutoHash = "";
+
+    /// <summary>
+    /// 配置指纹。
+    ///
+    /// 必须**排除** LastSyncAt / LastSyncInfo —— 它们每次备份后都会变，
+    /// 把它们算进来，指纹永远不同，"没变化就跳过"就形同虚设，
+    /// 结果是每隔几分钟往网盘塞一份只差一个时间戳的备份。
+    /// </summary>
+    private string StateHash()
+    {
+        /* 指纹要排除 LastSyncAt / LastSyncInfo，否则每次备份后指纹都变，
+         * "没变化就跳过"形同虚设。这里直接在 JSON 上剔除这两个字段，
+         * 不再 Clone 活对象（Clone 本身就要遍历正在被 UI 修改的集合）。 */
+        string json;
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(SnapshotJson());
+            if (node?["Sync"] is System.Text.Json.Nodes.JsonObject sync)
+            {
+                sync.Remove("LastSyncAt");
+                sync.Remove("LastSyncInfo");
+            }
+            json = node?.ToJsonString() ?? "";
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("计算配置指纹失败，退化为直接序列化：" + ex.Message);
+            json = SnapshotJson();
+        }
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(json));
+        return Convert.ToHexString(hash);
+    }
+
+    /// <summary>
+    /// 自动备份一次：本地必写；配了网盘就顺手推上去。
+    ///
+    /// 不弹任何提示 —— 它每隔一段时间就跑一次，弹窗会变成骚扰。
+    /// 配置跟上次比没有变化时直接跳过，免得空堆备份。
+    /// </summary>
+    public async Task<SyncResult> AutoBackupAsync(CancellationToken ct = default)
+    {
+        if (!SyncAllowedHere(out string blockedBackup))
+        {
+            CoreLog.Info("自动备份：" + blockedBackup + "，已跳过");
+            return SyncResult.Done(blockedBackup);
+        }
+
+        var s = _settings();
+        if (SettingsStore.IsStructurallyEmpty(s))
+        {
+            CoreLog.Warn("跳过自动备份：当前配置结构不完整");
+            return SyncResult.Fail("当前配置结构不完整，已跳过自动备份");
+        }
+        if (!TryBuildBackupPayload(out _, out string err)) return SyncResult.Fail(err);
+
+        string hash = StateHash();
+        if (hash == _lastAutoHash)
+            return SyncResult.Done("配置没有变化，跳过这次自动备份");
+
+        if (!Configured)
+        {
+            string? path = TryWriteLocalBackup();
+            if (path == null) return SyncResult.Fail("自动备份失败");
+            _lastAutoHash = hash;
+            s.Sync.LastSyncAt = DateTime.Now;
+            s.Sync.LastSyncInfo = "自动备份（本地）";
+            return SyncResult.Done(Loc.F("已自动备份到本地：{0}", Path.GetFileName(path)));
+        }
+
+        var r = await UploadAsync(ct).ConfigureAwait(false);
+        if (r.Ok) _lastAutoHash = hash;
+        return r;
+    }
+
+    // ---------------- 自动同步 ----------------
+
+    /// <summary>
+    /// 启动时同步：比云端与本机哪份新，谁新用谁。
+    ///
+    /// 云端压根没有备份 → 直接推一份上去。
+    /// </summary>
+    public async Task<SyncResult> SyncOnStartAsync(CancellationToken ct = default)
+    {
+        var s = _settings();
+        if (!s.Sync.SyncOnStart) return SyncResult.Done("");
+        if (!Configured) return SyncResult.Fail("已开启启动同步，但没填 WebDAV 地址");
+        if (!SyncAllowedHere(out string blocked))
+        {
+            CoreLog.Info("启动同步：" + blocked + "，已跳过（测试实例不该动用户的云端备份）");
+            return SyncResult.Done(blocked);
+        }
+
+        try
+        {
+            var client = Client();
+            var remoteAt = await LatestRemoteModifiedAsync(client, ct).ConfigureAwait(false);
+
+            if (remoteAt == null)
+            {
+                var up = await UploadAsync(ct).ConfigureAwait(false);
+                return up.Ok
+                    ? SyncResult.Done("云端还没有备份，已把本机配置推上去")
+                    : up;
+            }
+
+            DateTime localAt = SettingsStore.LastWriteTimeUtc.ToLocalTime();
+            // 两边都换算到本机时间再比（DateTimeOffset.ToLocalTime 带偏移，
+            // 取 .DateTime 就是本机的墙钟时间，和 localAt 同一个尺度）。
+            DateTime remoteLocal = remoteAt.Value.ToLocalTime().DateTime;
+
+            if (remoteLocal > localAt.AddSeconds(2))
+            {
+                /* 云端更新 → 先确认这份能不能盖本机。
+                 *
+                 * 只按"谁的文件更新"决定覆盖方向是不够的：测试实例把陈旧副本
+                 * 推上云之后，远端的时间戳很新、内容却很旧。于是这里补一道
+                 * "远端不许比本机少"的判据（见 SafeToOverwriteAsync），
+                 * 判不过就用本机覆盖云端，而不是反过来。 */
+                var guard = await SafeToOverwriteAsync(client, ct).ConfigureAwait(false);
+                if (!guard.Ok)
+                {
+                    CoreLog.Warn("启动同步：" + guard.Message);
+                    var reup = await UploadAsync(ct).ConfigureAwait(false);
+                    return reup.Ok
+                        ? SyncResult.Done(guard.Message + "；已用本机配置覆盖云端")
+                        : reup;
+                }
+
+                // 云端更新 → 拉下来
+                var down = await DownloadAsync(ct).ConfigureAwait(false);
+                return down.Ok
+                    ? SyncResult.Done(Loc.F("云端备份更新（{0:MM-dd HH:mm}），已恢复", remoteLocal))
+                    : down;
+            }
+
+            // 本机更新或一样新 → 推上去
+            var res = await UploadAsync(ct).ConfigureAwait(false);
+            return res.Ok
+                ? SyncResult.Done(Loc.F("本机配置更新，已上传（云端那份是 {0:MM-dd HH:mm}）", remoteLocal))
+                : res;
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("启动同步失败：" + e.Message);
+            return SyncResult.Fail(e.Message);
+        }
+    }
+
+    /// <summary>
+    /// 退出时同步：把当前配置推上去。
+    ///
+    /// 超时特意调短（8 秒）—— 网盘不通时不该让用户关不掉软件。
+    /// </summary>
+    public SyncResult SyncOnExit()
+    {
+        var s = _settings();
+        if (!s.Sync.SyncOnExit) return SyncResult.Done("");
+        if (!Configured) return SyncResult.Done("");
+        if (!SyncAllowedHere(out string blockedExit))
+        {
+            CoreLog.Info("退出同步：" + blockedExit + "，已跳过");
+            return SyncResult.Done(blockedExit);
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var task = UploadAsync(cts.Token);
+            /* ① 用 CancellationToken 控制硬上限：到点后 HTTP 请求真的会中断，
+             *    而不是像 task.Wait(timeout) 那样只放弃等待、请求还在后台跑
+             *    （孤儿任务会在进程退出时抛未观察异常）。
+             * ② ContinueWith 观察异常，保证即便仍出现晚到的失败也不会是"未观察"的。 */
+            _ = task.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+            if (!task.Wait(TimeSpan.FromSeconds(9)))
+            {
+                cts.Cancel();
+                CoreLog.Warn("退出同步超时（8 秒），放弃这次上传");
+                return SyncResult.Fail("退出同步超时，本次未上传");
+            }
+            return task.IsCompletedSuccessfully ? task.Result : SyncResult.Fail("退出同步失败");
+        }
+        catch (Exception e)
+        {
+            CoreLog.Warn("退出同步失败：" + e.Message);
+            return SyncResult.Fail(e.Message);
+        }
+    }
+}
+
+/// <summary>备份解密失败（多半是密码不对）。界面据此弹出"输入当时的密码"。</summary>
+public sealed class BackupPasswordException : Exception
+{
+    public BackupPasswordException(string message, Exception? inner = null)
+        : base(message, inner) { }
+}

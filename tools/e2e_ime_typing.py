@@ -81,12 +81,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _default_exe():
-    # 发布产物叫 KeyboardEnhance.exe（AssemblyName），Release 附件才改名 CapsLockPlus.exe
-    for name in ("KeyboardEnhance.exe", "CapsLockPlus.exe"):
+    # 发布产物叫 InputPlus.exe（AssemblyName），Release 附件才改名 InputPlus.exe
+    for name in ("InputPlus.exe", "InputPlus.exe"):
         p = os.path.join(ROOT, "dist", name)
         if os.path.exists(p):
             return p
-    return os.path.join(ROOT, "dist", "KeyboardEnhance.exe")
+    return os.path.join(ROOT, "dist", "InputPlus.exe")
 
 
 EXE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else _default_exe()
@@ -364,8 +364,8 @@ def main():
     data = os.path.join(ROOT, f"out-e2e-ime-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_e2e_ime_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_e2e_ime_{stamp}"
 
     if not os.path.exists(EXE):
         print(f"找不到 exe：{EXE}")

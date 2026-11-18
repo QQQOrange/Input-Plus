@@ -4,13 +4,13 @@
 
 ```powershell
 # 还原 & 构建
-dotnet build src\CapsLockPlus\CapsLockPlus.csproj
+dotnet build src\InputPlus\InputPlus.csproj
 
 # 单文件发布（框架依赖，约 2.8 MB；运行前需装 .NET 10 桌面运行时）
-dotnet publish src\CapsLockPlus\CapsLockPlus.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
 
 # 需要更小（放弃内置自检与离屏渲染，再省约 0.5 MB）
-dotnet publish src\CapsLockPlus\CapsLockPlus.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
 ```
 
 ### 一次出齐四个发布形态
@@ -34,16 +34,16 @@ powershell -ExecutionPolicy Bypass -File tools\release.ps1 -SkipBuild
 
 ```
 dist\4.20.5\
-  KeyboardEnhance.exe                                    Win10/11 x64
-  KeyboardEnhance-4.20.5-x86-Win10-Win11.exe             Win10/11 x86
-  KeyboardEnhance-4.20.5-x64-Win7-SelfContained.exe      Win7 SP1 x64
-  KeyboardEnhance-4.20.5-x86-Win7-SelfContained.exe      Win7 SP1 x86
+  InputPlus.exe                                    Win10/11 x64
+  InputPlus-4.20.5-x86-Win10-Win11.exe             Win10/11 x86
+  InputPlus-4.20.5-x64-Win7-SelfContained.exe      Win7 SP1 x64
+  InputPlus-4.20.5-x86-Win7-SelfContained.exe      Win7 SP1 x86
   SHA256SUMS.txt     每行「哈希  文件名」，certutil / 7-Zip 都能校验
   manifest.json      版本 / 大小 / 哈希 / 缺了哪个形态（CI 与上传脚本用）
   release-notes.md   从 CHANGELOG.md 抽出的本版说明（Release 正文）
 ```
 
-> 版本号只认 `src\CapsLockPlus\CapsLockPlus.csproj` 里的 `<Version>`；
+> 版本号只认 `src\InputPlus\InputPlus.csproj` 里的 `<Version>`；
 > 文件名、页脚版本、更新检查全都跟它走，所以**发版第一步是改 csproj**。
 > 标签和 csproj 版本不一致时，CI 会直接失败（避免用错版本号覆盖已发布资产）。
 
@@ -70,19 +70,36 @@ CI 机器没有真实桌面，个别用例会因环境限制跳过）。
 加密与备份、横条与连续调节。
 
 ```powershell
-dist\KeyboardEnhance.exe --selftest
+dist\InputPlus.exe --selftest
 ```
 
 退出码 0 表示全部通过。自检日志写在数据目录（默认在 exe 同级的
-`KeyboardEnhance Data`，不可写时回落 `%LocalAppData%\KeyboardEnhance`），
-可用环境变量 `CAPSLOCKPLUS_DATA` 覆盖（便于测试与截图，互不干扰）。
+`InputPlus Data`，不可写时回落 `%LocalAppData%\InputPlus`），
+可用环境变量 `INPUTPLUS_DATA` 覆盖（便于测试与截图，互不干扰）。
+
+### 部署到本机（发版前必做）
+
+**不要**用 `Stop-Process -Force` 直接覆盖 exe（旧版 `dist\install-*.ps1` 就是这么干的）：
+强杀会掐断 400ms 防抖保存和自检 `finally` 的写回窗口，2026-11-17 连续丢配置
+就是这条链路，复盘见 `docs\DATA-LOSS-POSTMORTEM-2026-11-17.md`。
+
+```powershell
+# 1) 数据安全回归：必须 PASS 才能发（旧版会 FAIL）
+dist\check-data-loss.ps1 -Exe .\artifacts\InputPlus.exe
+
+# 2) 部署：优雅退出 → 数据快照 → 换 exe → 临时目录自检 → 指纹复核 → 失败自动回滚
+dist\deploy.ps1 -Exe .\artifacts\InputPlus.exe
+```
+
+> `--selftest` 现在自动使用 `%TEMP%\InputPlus-selftest-<pid>`，
+> 备份目录也跟着数据目录走；即便如此，发版流程里也不要指到用户真实目录。
 
 ## 界面截图 / 回归
 
 离屏渲染所有页面与浮层，结果不受桌面遮挡、DPI 缩放和焦点动画影响，可复现：
 
 ```powershell
-dist\KeyboardEnhance.exe --render docs\screenshots
+dist\InputPlus.exe --render docs\screenshots
 ```
 
 ## 性能基准
@@ -106,7 +123,7 @@ tools\bench.ps1
 ## 目录结构
 
 ```
-src/CapsLockPlus/
+src/InputPlus/
 ├─ Core/                  与界面无关的核心逻辑（可无界面自检）
 │  ├─ Input/              键盘钩子、Caps 组合键状态机、按键名映射、输入注入
 │  ├─ Actions/            动作目录、动作上下文、剪贴板、窗口绑定

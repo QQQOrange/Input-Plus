@@ -1,9 +1,9 @@
 # 代码审视与优化报告
 
-**项目**：KeyboardEnhance（CapsLock+ 重写版）
+**项目**：InputPlus（CapsLock+ 重写版）
 **审视基准**：`main` @ `06c21ba`（v4.3.3）
 **审视时间**：2026-10-22
-**范围**：`src/CapsLockPlus` 全部源代码（C# 36,416 行 / XAML 4,963 行）
+**范围**：`src/InputPlus` 全部源代码（C# 36,416 行 / XAML 4,963 行）
 **约束**：本次只出报告，不改功能行为；所有建议都标注了回归风险与验证方式
 
 ---
@@ -151,7 +151,7 @@ P0-1 那批"性能优化"本身埋了一个运行时回归，上面的静态审�
 - **影响**：补齐一类"按了没反应"的体验缺口；改动局限在 `KeyName` + 捕获窗口。
 
 ### P1-5 · 自检/离屏渲染工具编进发布版
-- **位置**：`SelfTest.cs`（6,418 行）、`UI/RenderTools.cs`，`CapsLockPlus.csproj` 无排除条件
+- **位置**：`SelfTest.cs`（6,418 行）、`UI/RenderTools.cs`，`InputPlus.csproj` 无排除条件
 - **问题**：约占最终 exe 的 3~5%，且让发布产物携带大量测试代码与 `--render/--selftest/--webdav-test` 入口。
 - **建议**：`<Compile Remove="SelfTest.cs" Condition="'$(Configuration)'=='Release'"/>`，或拆成独立的 `Tools` 项目引用主工程；`App.xaml.cs` 的测试开关用 `#if DEBUG`（保留 Release 下的 `--selftest` 需要的话，可保留但减重）。
 - **收益**：exe 体积 -150~250KB、发布面更干净。**风险**：中（要保证 CI/自检流程仍可跑）。

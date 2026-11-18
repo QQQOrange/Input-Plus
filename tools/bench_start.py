@@ -19,8 +19,8 @@ def once(exe, tag, idx):
     data = os.path.join(ROOT, f"out-bench-{tag}-{idx}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_bench_{tag}_{idx}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_bench_{tag}_{idx}"
 
     log = os.path.join(data, "logs", "app.log")
     t0 = time.perf_counter()

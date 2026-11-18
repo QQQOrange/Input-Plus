@@ -1,0 +1,482 @@
+using System.IO;
+using System.Threading.Tasks;
+using System.Windows.Threading;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using InputPlus.Core;
+using InputPlus.Core.Actions;
+using InputPlus.Core.Input;
+using InputPlus.UI.Windows;
+using InputPlus.Core.Settings;
+using KeyBinding = InputPlus.Core.Settings.KeyBinding;
+
+namespace InputPlus.UI.Views;
+
+public partial class KeysView : UserControl
+{
+// 自定义按键面板（拼接键 + 目标程序）与「恢复默认」。
+
+    // ---------------- 自定义按键面板 ----------------
+
+    /// <summary>
+    /// 选了「自定义按键」分类时，把当前键的动作切成 customKey。
+    ///
+    /// ⚠ 只在"不是 customKey"时才改，绝不动已有的参数 ——
+    /// 用户在这个分类里反复点来点去，不能把他填好的键和应用冲掉。
+    /// </summary>
+    private void EnsureCustomKeyAction()
+    {
+        /* ⚠ 这里**不能**落盘。
+         *
+         * 以前只要在分类里点一下「自定义按键」，就把当前键的动作改成了 customKey
+         * 并存进配置 —— 用户还没设"要发送的键"、也没绑应用，等于什么都没配好，
+         * 但重启后这个键还是显示「自定义按键」，看起来像"没设置成功却记住了"。
+         *
+         * 正确语义：**只有真正设置了参数（键/应用）才算选了这个动作**，
+         * 参数由 SaveCustomSpec 落盘。这里只负责把面板显示出来。 */
+    }
+
+    /// <summary>当前键的「自定义按键」参数（没绑这一类就返回空参数）。</summary>
+    private CustomKeySpec CurrentCustomSpec()
+    {
+        var b = FindInCurrentLayer(CurrentCombo());
+        return b != null && b.Action == "customKey"
+            ? CustomKeySpec.FromArg(b.Arg)
+            : new CustomKeySpec();
+    }
+
+    /// <summary>
+    /// 保存参数到当前键。
+    ///
+    /// 注意这里**只动这一个绑定**，不碰 _layer / _selectedKey / 其它层 ——
+    /// 早先那版捕获完会顺手改掉当前层内修饰键和选中键，
+    /// 结果整个视图跳到一个空的修饰子层，看起来像"所有绑定都被清空了"。
+    /// </summary>
+    private void SaveCustomSpec(CustomKeySpec spec)
+    {
+        if (_host == null) return;
+
+        string combo = CurrentCombo();
+        var binding = FindInCurrentLayer(combo);
+        if (binding == null)
+        {
+            binding = new KeyBinding { Combo = combo };
+            CurrentLayerKeys.Add(binding);
+        }
+
+        binding.Action = "customKey";
+        binding.Arg = spec.ToArg();
+        _host.SaveSettings();
+
+        BuildKeyboard();          // 键帽上的名字要跟着变
+        RefreshCustomKeyPanel();
+    }
+
+    /// <summary>把面板刷成当前绑定的内容。</summary>
+    private void RefreshCustomKeyPanel()
+    {
+        if (_host == null || CustomKeyPicker == null) return;
+
+        var spec = CurrentCustomSpec();
+
+        _suppressEvents = true;
+        BuildCustomKeyPickList();
+        CustomKeyPickBox.SelectedIndex = -1;
+        CustomAppBox.Text = spec.AppPath;
+        CustomAdminBox.IsChecked = spec.RunAsAdmin;
+        CustomMainWindowBox.IsChecked = spec.BringFront;
+        CustomWaitBox.Text = spec.WaitAfterLaunchMs.ToString();
+        CustomNoteBox.Text = FindInCurrentLayer(CurrentCombo())?.Note ?? "";
+        _suppressEvents = false;
+
+        /* 要发送的键：文本框里放的是**规范化后的键文本**（ctrl+c），
+         * 和设置文件里存的那串完全一致 —— 用户看到什么，程序就发什么。
+         * 录制 / 从列表挑 / 手打三条路都写进这一个框，不再有只读键帽。 */
+        string keyText = CustomKeyRunner.Canonical(spec.Key);
+        if (!string.Equals(CustomKeyTextBox.Text, keyText, StringComparison.Ordinal))
+            CustomKeyTextBox.Text = keyText;
+        CustomKeyCaptureButton.Content = string.IsNullOrWhiteSpace(keyText)
+            ? Loc.T("按下要发送的键…")
+            : Loc.T("重新录…");
+
+        // 应用状态：路径存不存在直接说，别等按下去才报错
+        if (string.IsNullOrWhiteSpace(spec.AppPath))
+        {
+            CustomAppStatus.Text = Loc.T("未绑定应用 —— 按下时直接发给当前窗口（任何程序都能用）");
+        }
+        else if (File.Exists(spec.AppPath))
+        {
+            CustomAppStatus.Text = Loc.F("已找到：{0}（进程名 {1}）", Path.GetFileName(spec.AppPath), spec.ProcessName);
+        }
+        else if (!spec.AppPath.Contains('\\') && !spec.AppPath.Contains('/'))
+        {
+            // 只填了 exe 名字：靠进程名匹配，也能用
+            CustomAppStatus.Text = Loc.F("按进程名「{0}」匹配（没有填完整路径）", spec.ProcessName);
+        }
+        else
+        {
+            CustomAppStatus.Text = Loc.T("这个路径现在不存在 —— 按下去会启动失败");
+        }
+
+        CustomKeyHint.Text = !spec.IsReady
+            ? Loc.T("还差：「要发送的键」")
+            : !spec.HasApp
+                ? Loc.T("按这个键时：不找应用、不等窗口，直接把键发给当前窗口 —— 任何时候按都生效。")
+                : Loc.F("按这个键时：先看「{0}」在不在运行 —— ", spec.ProcessName)
+                  + Loc.T("在运行就直接把键发过去；没运行就先启动它（")
+                  + (spec.RunAsAdmin ? Loc.T("以管理员身份") : Loc.T("普通权限"))
+                  + Loc.T("），等窗口出来再发键。");
+    }
+
+    /// <summary>
+    /// 填「从列表选键」下拉：字母 / 数字 / 功能键 / 编辑键 / 符号 / 小键盘。
+    ///
+    /// 为什么要有这条路：用捕获窗"按一下就录"在多数机器上没问题，但只要有一处
+    /// 输入链路出岔子（钩子被摘、按键被别的程序抢），用户就完全没法设键 ——
+    /// 而这些键的名字本来就是确定的，直接列出来让他点，永远不会失败。
+    /// </summary>
+    private void BuildCustomKeyPickList()
+    {
+        if (CustomKeyPickBox == null) return;
+        if (CustomKeyPickBox.Items.Count > 0) return;   // 只建一次
+
+        void Group(string title)
+        {
+            // 分组标题：不可选、灰一点
+            CustomKeyPickBox.Items.Add(new ComboBoxItem
+            {
+                Content = title,
+                IsEnabled = false,
+                Foreground = (Brush)FindResource("Brush.TextTertiary"),
+            });
+        }
+
+        void Item(string name)
+        {
+            if (KeyName.VkOf(name) is not int vk || vk == 0) return;
+            CustomKeyPickBox.Items.Add(new ComboBoxItem
+            {
+                Content = KeyName.Display(name),
+                Tag = name,
+            });
+        }
+
+        /* 两个大分类：键盘按键 / 鼠标功能。
+         * 用户找键时先想到的是"这是键盘上的还是鼠标上的"，所以大分类先立住，
+         * 键盘里再按区段细分（字母/数字/功能键…），滚起来才好找。 */
+        Group(Loc.T("键盘按键"));
+
+        Group(Loc.T("字母键"));
+        foreach (char c in "abcdefghijklmnopqrstuvwxyz") Item(c.ToString());
+
+        Group(Loc.T("数字键"));
+        foreach (char c in "1234567890") Item(c.ToString());
+
+        Group(Loc.T("功能键"));
+        for (int i = 1; i <= 12; i++) Item("f" + i);
+
+        Group(Loc.T("编辑与方向键"));
+        foreach (var name in new[]
+                 {
+                     "up", "down", "left", "right", "home", "end", "pageup", "pagedown",
+                     "insert", "delete", "backspace", "enter", "tab", "esc", "space",
+                 })
+            Item(name);
+
+        Group(Loc.T("符号键"));
+        foreach (var name in new[]
+                 {
+                     "minus", "equal", "leftSquareBracket", "rightSquareBracket", "backslash",
+                     "semicolon", "quote", "comma", "dot", "slash",
+                 })
+            Item(name);
+
+        Group(Loc.T("小键盘"));
+        for (int i = 0; i <= 9; i++) Item("numpad" + i);
+
+        /* 修饰键与系统键：以前这个列表里没有它们，"把 Ctrl 发给对面"这类需求
+         * 只能靠捕获窗；捕获窗一旦被别的程序抢了键就录不进来，所以这里补全。 */
+        Group(Loc.T("修饰键与系统键"));
+        foreach (var name in new[]
+                 {
+                     "ctrl", "shift", "alt", "lctrl", "rctrl", "lshift", "rshift",
+                     "lalt", "ralt", "lwin", "rwin", "capslock", "apps",
+                     "printScreen", "scrollLock", "pause", "numLock",
+                 })
+            Item(name);
+
+        /* 鼠标键：键盘图上没有它们，只能在这里挑（或在捕获窗里直接按一下鼠标）。
+         * 键名和捕获窗、改键表用的是同一套（mouseLeft…），发键时会走鼠标注入。 */
+        Group(Loc.T("鼠标功能"));
+        foreach (var name in new[] { "mouseLeft", "mouseRight", "mouseMiddle", "mouseX1", "mouseX2" })
+            Item(name);
+    }
+
+    /// <summary>从列表里挑了一个键（和按一下捕获等价）。</summary>
+    private void OnCustomKeyPick(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+        if (CustomKeyPickBox.SelectedItem is not ComboBoxItem { Tag: string name }) return;
+
+        _suppressEvents = true;
+        try
+        {
+            var spec = CurrentCustomSpec();
+            spec.Key = CustomKeyRunner.Canonical(name);
+            SaveCustomSpec(spec);
+            ShowBindStatus(Loc.F("已设置要发送的键：{0}", CustomKeyRunner.ComboDisplay(spec.Key)));
+        }
+        finally
+        {
+            CustomKeyPickBox.SelectedIndex = -1;
+            _suppressEvents = false;
+        }
+    }
+
+    /// <summary>捕获"要发送的键"。</summary>
+    private void OnCustomKeyCapture(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        /* 统一走 KeyCaptureWindow.Capture：
+         *   · 非模态 —— 不会因为"看不见的模态窗"把整个程序卡死；
+         *   · 上一次没关掉的窗口会先被收掉，不会出现"再点一次没反应"；
+         *   · 窗口没显示出来会自动换朴素窗口重开，并把状态写进日志。 */
+        UI.Windows.KeyCaptureWindow.Capture(
+            r =>
+            {
+                CoreLog.Info($"自定义按键：捕获结果=[{r.Combo ?? "(空)"}]");
+                if (string.IsNullOrEmpty(r.Combo)) return;
+
+                var latest = CurrentCustomSpec();
+                latest.Key = CustomKeyRunner.Canonical(r.Combo);
+                SaveCustomSpec(latest);
+                ShowBindStatus(Loc.F("已设置要发送的键：{0}", CustomKeyRunner.ComboDisplay(latest.Key)));
+            },
+            TriggerPrefixKeys());
+    }
+
+    /// <summary>文本框失焦：把「ctrl+c」这种手打的键文本落盘。</summary>
+    private void OnCustomKeyTextCommit(object sender, RoutedEventArgs e) => CommitCustomKeyText();
+
+    /// <summary>文本框里按回车：和失焦一样提交。</summary>
+    private void OnCustomKeyTextKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        CommitCustomKeyText();
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 把手打的键文本写进当前绑定的参数。
+    ///
+    /// 只在失焦 / 回车时提交，不在 TextChanged 里：打到一半是「ctrl+」，
+    /// 每个字符都判一次会把没写完的内容判成非法，还会边打边落盘。
+    /// 认不出来的输入不覆盖原配置，退回上一个能用的值并提示。
+    /// </summary>
+    private void CommitCustomKeyText()
+    {
+        if (_host == null || _suppressEvents) return;
+
+        string typed = (CustomKeyTextBox.Text ?? "").Trim();
+        var spec = CurrentCustomSpec();
+
+        if (typed.Length == 0)
+        {
+            spec.Key = "";
+            SaveCustomSpec(spec);
+            return;
+        }
+
+        if (!CustomKeyRunner.TryNormalize(typed, out string canonical, out string bad))
+        {
+            ShowBindStatus(Loc.F("认不出「{0}」这个键，照着 ctrl+c 或 ctrl+v enter 这样写", bad));
+            CustomKeyTextBox.Text = CustomKeyRunner.Canonical(spec.Key);
+            return;
+        }
+
+        spec.Key = canonical;
+        SaveCustomSpec(spec);
+        ShowBindStatus(Loc.F("已设置要发送的键：{0}", CustomKeyRunner.ComboDisplay(canonical)));
+    }
+
+    /// <summary>当前配置的触发键（捕获时要告诉捕获窗口，免得把前缀键录成目标键）。</summary>
+    private HashSet<int> TriggerPrefixKeys()
+    {
+        var prefixes = new HashSet<int>();
+        if (_host == null) return prefixes;
+
+        foreach (var t in _host.Settings.Triggers)
+        {
+            if (string.IsNullOrWhiteSpace(t.Key)) continue;
+            if (KeyName.VkOf(t.Key) is int vk && vk != 0) prefixes.Add(vk);
+        }
+        if (KeyName.VkOf("capslock") is int caps && caps != 0) prefixes.Add(caps);
+        return prefixes;
+    }
+
+    private void OnCustomAppChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+        var spec = CurrentCustomSpec();
+        spec.AppPath = CustomAppBox.Text.Trim();
+        SaveCustomSpec(spec);
+    }
+
+    private void OnBrowseCustomApp(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("选择要绑定的程序"),
+            Filter = Loc.T("程序 (*.exe)|*.exe|所有文件 (*.*)|*.*"),
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog(Window.GetWindow(this)) != true) return;
+
+        var spec = CurrentCustomSpec();
+        spec.AppPath = dlg.FileName;
+        SaveCustomSpec(spec);
+        ShowBindStatus(Loc.F("已绑定应用：{0}", Path.GetFileName(dlg.FileName)));
+    }
+
+    private void OnCustomAdminChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+        var spec = CurrentCustomSpec();
+        spec.RunAsAdmin = CustomAdminBox.IsChecked == true;
+        SaveCustomSpec(spec);
+    }
+
+    private void OnCustomMainWindowChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+        var spec = CurrentCustomSpec();
+        spec.BringFront = CustomMainWindowBox.IsChecked == true;
+        SaveCustomSpec(spec);
+    }
+
+    /// <summary>
+    /// 「启动后等多久再发键」。
+    ///
+    /// 边打字边落盘，但**不合法就不落盘** —— 清空输入框时 TextChanged 会先来一个
+    /// 空串，这时候把 0 写进去会把用户原来的 900 冲掉；等用户真的输入数字再写。
+    /// </summary>
+    private void OnCustomWaitChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+        if (!int.TryParse(CustomWaitBox.Text.Trim(), out int ms)) return;
+
+        var spec = CurrentCustomSpec();
+        spec.WaitAfterLaunchMs = Math.Clamp(ms, 0, 10000);
+        SaveCustomSpec(spec);
+    }
+
+    /// <summary>
+    /// 备注。存在 <see cref="KeyBinding.Note"/> 上（不是 spec 里）——
+    /// 备注是"这个键叫什么"，属于绑定本身，和"发什么键给哪个程序"无关。
+    /// 键帽优先显示它。
+    /// </summary>
+    private void OnCustomNoteChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_host == null || _suppressEvents) return;
+
+        string combo = CurrentCombo();
+        var binding = FindInCurrentLayer(combo);
+        if (binding == null)
+        {
+            binding = new KeyBinding { Combo = combo, Action = "customKey" };
+            CurrentLayerKeys.Add(binding);
+        }
+
+        string note = CustomNoteBox.Text.Trim();
+        // 空备注存 null，设置文件里干脆不出现这个字段（和直达链接保持一致）
+        binding.Note = note.Length == 0 ? null : note;
+        _host.SaveSettings();
+        BuildKeyboard();          // 键帽上要立刻显示新名字
+    }
+
+    /// <summary>键帽上显示什么：备注 → 应用名 → "自定义"。</summary>
+    internal static string CustomKeyLabelOf(string? note, CustomKeySpec spec)
+    {
+        if (!string.IsNullOrWhiteSpace(note)) return note.Trim();
+        string proc = spec.ProcessName;
+        if (proc.Length > 0) return proc.Length <= 8 ? proc : proc[..8] + "…";
+        return Loc.T("自定义");
+    }
+
+    /// <summary>
+    /// 「恢复默认」——这是整页**唯一会一次性丢掉大量配置**的按钮，必须过两道门。
+    ///
+    /// 改错一个键还能改回来；恢复默认会一次覆盖基础层的上百个绑定，
+    /// 点错就是"刚配好的东西全没了"。所以：
+    ///   · 第一道门是按钮本身：它在工具栏最右侧，和"点击某键即可编辑"的说明分开；
+    ///   · 第二道门是 <see cref="AppDialog.ConfirmDanger"/>：警告图标 + 红色确定键，
+    ///     正文逐条写清"丢什么 / 留什么 / 能不能撤销"；
+    ///   · 只有真点了「恢复默认」才执行；点取消、按 Esc、直接关窗口一律不动。
+    ///
+    /// ⚠ 别改成 <c>MessageBox.Show(...) == OK</c> 之类：全程序都用 AppDialog，
+    /// 换回系统对话框会在深色主题下弹一块白底，而且按钮措辞不受控。
+    /// </summary>
+    private void OnResetClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        /* 选中了某台设备时，"本页"指的是**这台设备的这一层**。
+         * 绝不能顺手把通用设置也清了 —— 那会影响所有设备，
+         * 而用户此刻明确只对着这一只键盘说话。 */
+        if (_editDevice.Length > 0) { ResetDeviceLayer(); return; }
+
+        /* 原键替换层不是"层"：它没有触发键、也不存在 Layers 里，
+         * 所以「恢复本页默认设置」对它的含义就是"把这一层清空"。 */
+        if (_layerId == ReplaceLayerId)
+        {
+            var list = DeviceProfiles.ReplacementsFor(_host.Settings, "");
+            int n = list.Count(b => b != null);
+            if (n == 0)
+            {
+                _host.Notify(Loc.T("原键替换层本来就是空的"));
+                return;
+            }
+
+            string ask = Loc.F("把原键替换层里的 {0} 条设置清空？\n", n) +
+                         Loc.T("· 清空后这些键恢复成原来的输入；\n") +
+                         Loc.T("· 层、触发键、宏、基础改键都不动；\n") +
+                         Loc.T("· 这一步不能撤销。");
+            if (!AppDialog.ConfirmDanger(Window.GetWindow(this), ask,
+                    Loc.T("清空原键替换层"), okText: Loc.T("清空"))) return;
+
+            list.Clear();
+            DeviceProfiles.InvalidateBindings();
+            _host.Settings.Global.BindingsVersion++;
+            _host.SaveSettings();
+            Refresh();
+            _host.Notify(Loc.F("原键替换层已清空（{0} 条）", n));
+            return;
+        }
+
+        var layerObj = _host.Settings.Layers.FirstOrDefault(l => l.Id == _layerId);
+        string layerName = LayerName.Display(_layerId, layerObj?.Name);
+
+        /* 按钮叫「恢复本页默认设置」，而"本页"看的是**当前选中的层** ——
+         * 用户在第 2 层点它，就该只重置第 2 层。第 1 层有内置方案，其它层默认是空的。 */
+        string text = _layerId == 1
+            ? Loc.F("把第 {0} 层「{1}」恢复成默认设置？\n", _layerId, layerName) +
+              Loc.T("· 这一层的绑定会被覆盖（功能、参数、网址、文本、程序、备注）；\n") +
+              Loc.T("· 你自己新增的组合键会保留；其它 9 层、触发键、宏、别名替换都不动；\n") +
+              Loc.T("· 这一步不能撤销。")
+            : Loc.F("把第 {0} 层「{1}」恢复成默认设置？\n", _layerId, layerName) +
+              Loc.T("· 这一层默认是空的，所以这一层里你配的绑定会被清空；\n") +
+              Loc.T("· 其它层、触发键、宏、别名替换都不动；\n") +
+              Loc.T("· 这一步不能撤销。");
+
+        if (!AppDialog.ConfirmDanger(Window.GetWindow(this), text,
+                Loc.T("恢复本页默认设置"), okText: Loc.T("恢复本页默认设置"))) return;
+
+        _host.ResetLayer(_layerId);
+        Refresh();
+        _host.Notify(Loc.F("第 {0} 层已恢复默认设置", _layerId));
+    }
+}

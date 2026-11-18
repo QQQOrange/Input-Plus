@@ -1,4 +1,4 @@
-﻿# Keyboard Enhance
+﻿# Input Plus
 
 > Author: **QQQOrange**
 >
@@ -7,7 +7,7 @@
 > Every feature is here, but everything is configured by clicking —
 > no more hand-editing `CapsLock+settings.ini`.
 >
-> The executable is **`KeyboardEnhance.exe`**; user data lives in **`KeyboardEnhance Data`**.
+> The executable is **`InputPlus.exe`**; user data lives in **`InputPlus Data`**.
 >
 > [简体中文](README.md) ｜ **English**
 
@@ -67,15 +67,15 @@ dotnet --list-runtimes | findstr WindowsDesktop
 
 ### 2.2 Pick the right build
 
-Download from [Releases](https://github.com/QQQOrange/Keyboard-enhance/releases) and put the
+Download from [Releases](https://github.com/QQQOrange/Input-Plus/releases) and put the
 file in any folder:
 
 | Your system | Download | Runtime |
 | --- | --- | --- |
-| Windows 11 / Windows 10 1809+, **64-bit** (most PCs) | `KeyboardEnhance.exe` | Requires the .NET 10 Desktop Runtime |
-| Windows 10 1809+, **32-bit** | `KeyboardEnhance-5.4.1-x86-Win10-Win11.exe` | Requires the .NET 10 Desktop Runtime (x86) |
-| **Windows 7 SP1**, 64-bit | `KeyboardEnhance-5.4.1-x64-Win7-SelfContained.exe` | **No runtime needed** |
-| **Windows 7 SP1**, 32-bit | `KeyboardEnhance-5.4.1-x86-Win7-SelfContained.exe` | **No runtime needed** |
+| Windows 11 / Windows 10 1809+, **64-bit** (most PCs) | `InputPlus.exe` | Requires the .NET 10 Desktop Runtime |
+| Windows 10 1809+, **32-bit** | `InputPlus-5.4.1-x86-Win10-Win11.exe` | Requires the .NET 10 Desktop Runtime (x86) |
+| **Windows 7 SP1**, 64-bit | `InputPlus-5.4.1-x64-Win7-SelfContained.exe` | **No runtime needed** |
+| **Windows 7 SP1**, 32-bit | `InputPlus-5.4.1-x86-Win7-SelfContained.exe` | **No runtime needed** |
 
 > GitHub rewrites non-alphanumeric characters in asset filenames to dots, hence the
 > `x86 / x64 / Win7 / SelfContained` suffixes on the release page.
@@ -89,9 +89,9 @@ file in any folder:
 The app creates two folders next to itself on first run:
 
 ```
-KeyboardEnhance.exe
-KeyboardEnhance Data\     user data (encrypted)
-KeyboardEnhance Back\     local backups
+InputPlus.exe
+InputPlus Data\     user data (encrypted)
+InputPlus Back\     local backups
 ```
 
 Copy the whole folder and you have moved the app and all of its data.
@@ -370,7 +370,7 @@ The engine table is versioned: new built-ins are merged on startup without touch
 2. For programs, the executable's own icon
 3. Otherwise a rounded tile with the initial and the brand colour
 
-Website icons are cached on disk under `KeyboardEnhance Data/icons/web/`, prewarmed at
+Website icons are cached on disk under `InputPlus Data/icons/web/`, prewarmed at
 startup, so the *Websites* page shows real icons immediately — no "initial, then refresh".
 
 ---
@@ -430,9 +430,9 @@ type ;mail  →  someone@example.com
 - A shorter trigger yields to a longer candidate for 120 ms, so `;m` does not steal `;mail`
 
 **Lost aliases?** *Find lost aliases* on the snippets page scans `.bak`, pre-upgrade copies
-and the daily snapshots (`KeyboardEnhance Data/backups/settings-YYYYMMDD.json`, last 30) and
+and the daily snapshots (`InputPlus Data/backups/settings-YYYYMMDD.json`, last 30) and
 offers entries that are missing from the current configuration. Existing triggers are never
-overwritten. `KeyboardEnhance.exe --dump-snippets [file]` prints the same information.
+overwritten. `InputPlus.exe --dump-snippets [file]` prints the same information.
 
 ---
 
@@ -447,36 +447,53 @@ to 10% and can be overridden per binding; hold to repeat.
 
 ---
 
-## 12. Mouse gestures (since v5.1; direction strings since v5.3; targets and the record window since v5.4)
+## 12. Mouse gestures (built-in library since 1.0; the engine is WGestures 2's own)
 
 Hold the right button, the middle button, or either side button, draw a shape, release — the action runs.
 Gestures share the same action catalogue as key bindings, with no WGestures-style tool needed.
 
+**1.0 ships 52 ready-made gestures** (close window, refresh, forward / back, task manager, screenshot, media keys, open WeChat / QQ / SiYuan Note…).
+They are sanitized and de-duplicated by shape, and are seeded automatically on a fresh install or after you empty the list.
+> If the machine already has a WGestures 2 configuration, the first launch imports that whole table instead (see *Migrating from WGestures* below); the built-in library never overwrites your data.
+
+```
+InputPlus.exe --gesture-import "D:\backup\my-gestures.wg28bw"        :: replace the whole table (clears it first)
+InputPlus.exe --gesture-import "D:\backup\gestures.json" --keep    :: append only
+```
+
+After importing, gestures are de-duplicated by shape, pure clicks and script entries are skipped, and the report is written to `InputPlus Data\gesture-import.txt`.
+
 | Trigger | How it works |
 | --- | --- |
-| Stroke | Hold the start button, draw a shape, release |
+| Stroke | Hold the start button, draw a shape, release (the last 16 px of the release tail is trimmed before matching, see below) |
 | Corner click | Move to a screen corner (24 px hot zone by default) and click the button |
 | Hold + wheel | While holding the button, turn the wheel one notch (up / down / left / right) |
 | Single click | Press and release without moving (off by default, see below) |
 | Chord | Hold the start button, then click another one (e.g. hold right, click left) |
 
-- The **Targets** column separates global gestures from per-app ones: pick an app to see only its gestures, and new ones are filed there by default. A shape bound in an app wins over the global one.
+- The **Targets** column has four kinds: **global**, **group** (several programs share one set), **application** (a single exe), and **special targets** (taskbar / desktop). A shape is looked up from the narrowest target outwards: special target → application → group → global.
 - Add an app with **Choose program…** or **Pick window** (the same pair of buttons as *Keys → enable a layer per app*). The gesture details no longer ask for a program — the selected target decides who owns the gesture.
-- **Record gesture** opens a small window: hold a mouse button and draw inside it. It recognises right, middle and side buttons, shows the direction string as you draw, and *Use this stroke* fills it into the gesture before you save.
+- Every target has a **trigger list** (WGestures 2's TriggerList): 61 entries = 5 mouse buttons + 8 corner positions × (stroke / stroke + wheel / stroke + one of the 5 buttons). Click one to cycle *default → enabled → disabled*; *default* follows the parent layer. When a trigger is disabled in every target, that button does not take part in gestures at all — the event is passed straight to Windows.
+- **Record gesture** opens a separate window: hold a mouse button and draw inside it. It recognises right, middle and side buttons and *Use this stroke* fills the shape into the gesture before you save.
 - Chords: hold the start button and click another one (hold right, click left). Chords never take part in ordinary stroke matching, so the right-click menu stays yours.
-- Recognition: the path is turned into a direction string (`↑ ↓ ← →`) as you draw, and the string is matched exactly on release; if several gestures share a string, their shape distance breaks the tie. The approach follows [FlowMouse](https://github.com/Hmily-LCG/FlowMouse).
-- No accidental turns: nothing is recorded until the pointer travels the *start distance* (20 px by default), and a turn only counts once it passes the *turn factor* (0.1 by default), so a shaky hand will not produce extra segments. Both are adjustable at the top of the page.
-- While drawing, the overlay shows the direction string so far plus up to four "draw this next" candidates, so you do not have to memorise strokes.
-- Wildcard: set a gesture's direction string to `*` and it becomes the fallback when nothing else matches.
-- Older data (imported from WGestures, or recorded before 5.3) gets its direction string derived from the stored path when the page opens; no re-recording needed.
-- The press/release is swallowed only while a stroke is possible; when nothing is drawn, a real click is replayed, so the right-click menu still works. **Clicks trigger too** is off by default — enable it for WGestures-style “middle click = mute”.
+- Recognition (since v5.11 it is **WGestures 2's engine**, ported line by line from the decompiled 2.9.1 sources): a stroke is simplified at 18°, re-sampled into a curve of *cumulative arc length s* against *direction angle θ*, and two curves are compared with a coupled `∫(Δθ)²·ds` dynamic-programming distance (capped at 0.2; more than 128 points or a 10× point-count difference counts as "not comparable"). Drawing fast or slow, big or small, or starting a few pixels off does not change the result: the same shape measures 0.010–0.017, different shapes 0.071 and up, and the threshold sits at 0.05 in that gap.
+- **Release tail (new in 1.0)**: people flick the pointer back a little before letting go. WG judges while you draw, so a prefix hitting is enough; this app compares the whole stroke once, on release, and those 15 px would push the distance to the 0.2 cap — the gesture "obviously correct" but nothing happens. On release the last 16 px (at most 25 % of the stroke) is now trimmed before matching, and the untrimmed stroke is only consulted when the trimmed result is a near miss. On 1800 synthetic samples whole-stroke matching was right 56 % of the time, trimmed 85.4 %; with a 15 px release flick it went from 47.4 % to 98.9 %.
+- No accidental turns: nothing is recorded until the pointer travels the *start distance* (20 px by default), and a turn only counts once it passes the *turn factor* (0.1 by default), so a shaky hand will not produce extra segments. *Minimum length*, *match tolerance*, *start distance* and *turn factor* all live in the **Gesture parameters** panel.
+- Closed shapes (circles) keep an extra start-point / winding tolerance — the WG engine compares from a fixed start, and nobody remembers where they began a circle.
+- There is exactly one engine, with no switch and no fallback (the old direction-string layer was deleted in v5.13): if matching feels off, tune *match tolerance* — that is the only knob. When the best and the runner-up are within 0.01, nothing runs instead of guessing.
+- The overlay draws the stroke itself (two-tone outline, adjustable width and opacity), turns it into the *recognised* colour on a hit, and floats the gesture name next to the pointer. No direction strings, no "draw this next" suggestions — the engine compares whole shapes.
+- Wildcard: a gesture whose stored direction string is `*` becomes the fallback when nothing else matches; it never takes part in shape comparison.
+- Older data (imported from WGestures, or recorded before 5.3) gets a path synthesised from its direction string on startup, so everything goes through the same engine.
+- The press/release is swallowed only while a stroke is possible; when nothing is drawn, a real click is replayed, so the right-click menu still works. **Clicks trigger too** is off by default — set a gesture's trigger to *single click* for WGestures-style "middle click = mute".
 - Before an action runs, the window under the pointer is brought to the front, so *Close* acts on the window you pointed at, not on this app.
-- *Show trail* draws the stroke on a click-through topmost overlay and flashes the gesture name on a hit.
+- The top of the page is a single row (since v5.12): the master switch, the gesture on/off hotkey, and a "N in this target · M in total" counter. Everything else sits in two collapsible panels, and no setting appears twice.
+- **Gesture appearance (WGestures 2 preferences)**: trail on/off, two-tone outline, separate colours before / after recognition, width 1–4 (default 1.5), trail opacity, per-button colours (right / middle / side 1 / side 2 / left — an extra this app adds; unset ones show "follows the unrecognised colour"), gesture-name label with border and before / after-run colours, height above the bottom (default 25 %, 0 = bottom, 1 = top), fade-out right after running, and the start-timeout dot.
+- **Gesture parameters**: target (app under the pointer / active window), minimum length, match tolerance, start distance, turn factor.
 - *Only in this app* accepts a full exe path or a process name, case-insensitive; blank means everywhere.
 
 ### Migrating from WGestures
 
-Use **Import from WGestures** and pick `%APPDATA%\WGestures2\<version>\gestures.json`.
+Use **Import from WGestures** and pick `%APPDATA%\WGestures2\<version>\gestures.json`, or hand the whole `.wg28bw` package to `--gesture-import` (a `.wg28bw` is a zip; the command reads `gestures.json` out of it).
 
 | WGestures | Here |
 | --- | --- |
@@ -487,7 +504,7 @@ Use **Import from WGestures** and pick `%APPDATA%\WGestures2\<version>\gestures.
 
 SendKeys becomes *send key sequence*, RunApp becomes *run program*, WebSearch becomes *open URL*, WindowControl becomes window actions, Cmd becomes `cmd.exe /c ...`; Lua scripts are skipped and counted in the result.
 
-The first launch imports an existing WGestures file once when the gesture list is still empty (the source path is remembered, so deleting gestures will not resurrect them).
+The first launch imports an existing WGestures file once when the gesture list is still empty (the source path is remembered, so deleting gestures will not resurrect them). Without a WGestures configuration the built-in 52-gesture library is seeded instead.
 
 ![Mouse gestures](docs/screenshots/gestures.png)
 
@@ -504,7 +521,7 @@ The first launch imports an existing WGestures file once when the gesture list i
 | Clipboard | Both clipboards, recent history |
 | Macros | Record, edit, bind |
 | Trigger keys & layers | Triggers, thresholds, tap actions, 10 layers and their sub-layers |
-| Mouse gestures | Draw with a mouse button to run an action; direction-string matching with live arrows and candidates, trail overlay, hot corners, hold + wheel; app gestures beat global ones, scope picked with Choose app… / Pick window / All apps; one-click WGestures import; v5.4 adds the Targets column (global vs per-app), a record window, chords, and clicks that stay with Windows by default |
+| Mouse gestures | Draw with a mouse button to run an action; the recognition engine is **WGestures 2's own** (arc length + direction angle, matched on release with a 16 px release-tail trim); **52 built-in gestures in 1.0**, one-click WGestures 2 import (.wg28bw); four target kinds (global / group / app / taskbar-desktop) with a 61-entry trigger list per target; trail overlay, per-button colours, hot corners, hold + wheel, chords, clicks that stay with Windows by default |
 | Sync & backup | WebDAV, backup list, import/export, startup password lives under Settings |
 | Settings | Autostart, tray, tap behaviour, repeat, animations, feedback, mouse, volume/brightness steps, theme, language (Chinese / English, instant), startup password, snippets, base remap |
 | Test | Live hook status, current layer, recent keys, matched actions, diagnostics |
@@ -526,12 +543,12 @@ what the last key resolves to, and can copy a diagnostic report.
 
 | Content | Location |
 | --- | --- |
-| User data | `KeyboardEnhance Data\settings.json` (encrypted), `vault.json`, `icons\`, `logs\` |
-| Local backups | `KeyboardEnhance Back\KeyboardEnhance(<time>).keyboardenhance` |
+| User data | `InputPlus Data\settings.json` (encrypted), `vault.json`, `icons\`, `logs\` |
+| Local backups | `InputPlus Back\InputPlus(<time>).inputplus` |
 
 When installed somewhere read-only (e.g. `Program Files`) data falls back to
-`%LocalAppData%\KeyboardEnhance`; the *Sync & backup* page shows the actual path. Data from
-`%LocalAppData%\CapsLockPlus` is migrated on first run, keeping the old folder.
+`%LocalAppData%\InputPlus`; the *Sync & backup* page shows the actual path. Data from
+`%LocalAppData%\InputPlus` is migrated on first run, keeping the old folder.
 
 - **Local backups**: keep the last 10, optional automatic backup (60 min), restore by
   overwrite or merge
@@ -616,8 +633,8 @@ the UAC prompt (or run it as administrator).
 **`Caps+1`…`Caps+0` do nothing.** They are intentionally unbound: bind each to a program under
 *Window binding*.
 
-**Where is my data?** `KeyboardEnhance Data` next to the executable, or
-`%LocalAppData%\KeyboardEnhance` when that folder is read-only.
+**Where is my data?** `InputPlus Data` next to the executable, or
+`%LocalAppData%\InputPlus` when that folder is read-only.
 
 **How do I uninstall?** Quit from the tray, delete the executable and the two data folders.
 Nothing is written to the registry except the optional autostart entry.
@@ -638,17 +655,17 @@ Requires the **.NET 10 SDK**. See [BUILD.md](BUILD.md).
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
 
 # All command-line switches
-dist\KeyboardEnhance.exe --help
+dist\InputPlus.exe --help
 
 # Self-test: ~3958 checks (varies slightly by system environment) (key model, expressions, Qbar, chips, migration, hooks,
 # combo state machine, OSD ratios, localisation, snippets, popups, window cache, UIA, shutdown)
-dist\KeyboardEnhance.exe --selftest
+dist\InputPlus.exe --selftest
 
 # Hook-chain diagnostics (injects an F24 probe, 6/6 expected)
-dist\KeyboardEnhance.exe --diag
+dist\InputPlus.exe --diag
 
 # Off-screen render of every page (docs / regression; 48 images)
-dist\KeyboardEnhance.exe --render docs\screenshots
+dist\InputPlus.exe --render docs\screenshots
 ```
 
 | Switch | Purpose |
@@ -671,7 +688,7 @@ locks C# 11, uses System.Management 8.0.0 and `app-win7.manifest`. A few .NET 8+
 are written in a form both targets compile, so behaviour never diverges.
 
 ```
-src/CapsLockPlus/
+src/InputPlus/
 ├─ Core/                  UI-free engine (self-testable headless)
 │  ├─ Input/              Hook, Caps state machine, key names, injection
 │  ├─ Actions/            Action catalogue, context, clipboard, window binding

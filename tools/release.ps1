@@ -4,10 +4,10 @@
 
 .DESCRIPTION
     发版要交四个单文件 exe：
-      · KeyboardEnhance.exe                                  Win10/11 x64（框架依赖，约 4 MB）
-      · KeyboardEnhance-<版本>-x86-Win10-Win11.exe           Win10/11 x86（框架依赖）
-      · KeyboardEnhance-<版本>-x64-Win7-SelfContained.exe    Win7 SP1 x64（自带运行时，约 140 MB）
-      · KeyboardEnhance-<版本>-x86-Win7-SelfContained.exe    Win7 SP1 x86（自带运行时，约 130 MB）
+      · InputPlus.exe                                  Win10/11 x64（框架依赖，约 4 MB）
+      · InputPlus-<版本>-x86-Win10-Win11.exe           Win10/11 x86（框架依赖）
+      · InputPlus-<版本>-x64-Win7-SelfContained.exe    Win7 SP1 x64（自带运行时，约 140 MB）
+      · InputPlus-<版本>-x86-Win7-SelfContained.exe    Win7 SP1 x86（自带运行时，约 130 MB）
 
     为什么必须用脚本而不是手敲 dotnet publish：
       · 四个形态的 RID / TFM 不同，**每个形态之间必须先清 obj 与 bin**，
@@ -16,10 +16,10 @@
         手工做迟早有一处对不上，用户下到错包很难第一时间发现。
 
     产物目录：dist/<版本>/
-        KeyboardEnhance.exe
-        KeyboardEnhance-<版本>-x86-Win10-Win11.exe
-        KeyboardEnhance-<版本>-x64-Win7-SelfContained.exe
-        KeyboardEnhance-<版本>-x86-Win7-SelfContained.exe
+        InputPlus.exe
+        InputPlus-<版本>-x86-Win10-Win11.exe
+        InputPlus-<版本>-x64-Win7-SelfContained.exe
+        InputPlus-<版本>-x86-Win7-SelfContained.exe
         SHA256SUMS.txt          每行 "哈希  文件名"，可直接校验
         release-notes.md        从 CHANGELOG.md 抽出的本版说明（GitHub Release 正文）
         manifest.json           版本 / 文件 / 大小 / 哈希 / 构建时间（脚本或 CI 自检用）
@@ -56,7 +56,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$csproj = Join-Path $repo 'src\CapsLockPlus\CapsLockPlus.csproj'
+$csproj = Join-Path $repo 'src\InputPlus\InputPlus.csproj'
 if (-not (Test-Path -LiteralPath $csproj)) { throw "找不到工程文件：$csproj" }
 if (-not $OutRoot) { $OutRoot = Join-Path $repo 'dist' }
 
@@ -80,19 +80,19 @@ New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 $allShapes = @(
     [pscustomobject]@{
         Id = 'win10-x64'; Tfm = 'net10.0-windows'; Rid = 'win-x64'; SelfContained = $false
-        Asset = 'KeyboardEnhance.exe'; Note = 'Win10/11 x64（框架依赖，需 .NET 10 桌面运行时）'
+        Asset = 'InputPlus.exe'; Note = 'Win10/11 x64（框架依赖，需 .NET 10 桌面运行时）'
     },
     [pscustomobject]@{
         Id = 'win10-x86'; Tfm = 'net10.0-windows'; Rid = 'win-x86'; SelfContained = $false
-        Asset = "KeyboardEnhance-$version-x86-Win10-Win11.exe"; Note = 'Win10/11 x86（框架依赖，需 .NET 10 桌面运行时 x86）'
+        Asset = "InputPlus-$version-x86-Win10-Win11.exe"; Note = 'Win10/11 x86（框架依赖，需 .NET 10 桌面运行时 x86）'
     },
     [pscustomobject]@{
         Id = 'win7-x64'; Tfm = 'net7.0-windows'; Rid = 'win-x64'; SelfContained = $true
-        Asset = "KeyboardEnhance-$version-x64-Win7-SelfContained.exe"; Note = 'Win7 SP1 x64（自带运行时）'
+        Asset = "InputPlus-$version-x64-Win7-SelfContained.exe"; Note = 'Win7 SP1 x64（自带运行时）'
     },
     [pscustomobject]@{
         Id = 'win7-x86'; Tfm = 'net7.0-windows'; Rid = 'win-x86'; SelfContained = $true
-        Asset = "KeyboardEnhance-$version-x86-Win7-SelfContained.exe"; Note = 'Win7 SP1 x86（自带运行时）'
+        Asset = "InputPlus-$version-x86-Win7-SelfContained.exe"; Note = 'Win7 SP1 x86（自带运行时）'
     }
 )
 
@@ -107,10 +107,10 @@ if ($Only -and $Only.Count -gt 0) {
 function Clear-Intermediates {
     # 四个形态之间必须清干净，否则 RID 不同的中间产物会互相污染（BUILD.md 记录过的坑）。
     foreach ($rel in @(
-            'src\CapsLockPlus\obj',
-            'src\CapsLockPlus\bin',
-            'src\CapsLockPlus.Localization\obj',
-            'src\CapsLockPlus.Localization\bin')) {
+            'src\InputPlus\obj',
+            'src\InputPlus\bin',
+            'src\InputPlus.Localization\obj',
+            'src\InputPlus.Localization\bin')) {
         $path = Join-Path $repo $rel
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
@@ -122,7 +122,7 @@ $results = @()
 $failed = @()
 
 Write-Host ''
-Write-Host "Keyboard Enhance $version — 发布四个形态" -ForegroundColor Cyan
+Write-Host "Input Plus $version — 发布四个形态" -ForegroundColor Cyan
 Write-Host ''
 
 foreach ($shape in $shapes) {
@@ -149,7 +149,7 @@ foreach ($shape in $shapes) {
         Write-Host ("  构建完成，用时 {0:0.0} 秒" -f $sw.Elapsed.TotalSeconds) -ForegroundColor DarkGray
     }
 
-    $exe = Join-Path $stage 'KeyboardEnhance.exe'
+    $exe = Join-Path $stage 'InputPlus.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
         if ($SkipBuild) {
             # -SkipBuild 时从成品目录里找对应资产
@@ -225,7 +225,7 @@ $sumLines = $manifestShapes | Sort-Object asset | ForEach-Object { '{0}  {1}' -f
 
 # ---- manifest.json：CI / 上传脚本据此核对，不用再数文件 ----
 $manifest = [pscustomobject]@{
-    product    = 'Keyboard Enhance'
+    product    = 'Input Plus'
     version    = $version
     builtAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     shapes     = @($manifestShapes)

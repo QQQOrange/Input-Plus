@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_EXE = os.path.join(ROOT, "dist", "KeyboardEnhance.exe")
+_DEFAULT_EXE = os.path.join(ROOT, "dist", "InputPlus.exe")
 EXE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else _DEFAULT_EXE
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -131,8 +131,8 @@ def main():
     log_path = os.path.join(data, "logs", "app.log")
 
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_smoke_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_smoke_{stamp}"
 
     note = subprocess.Popen(["notepad.exe"])
     app = subprocess.Popen([EXE, "--tray"], env=env)

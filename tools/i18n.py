@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""界面文本本地化工具链（CapsLockPlus / 按键增强）。
+"""界面文本本地化工具链（InputPlus / Input Plus）。
 
 用法
 ----
@@ -32,11 +32,11 @@ from collections import OrderedDict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "src" / "CapsLockPlus"
+SRC = ROOT / "src" / "InputPlus"
 # 本地化内核已经拆成独立程序集，它自己也有 Loc.T("…") 的键（如列表连接符「、」），
 # 扫描时必须一起看 —— 否则 check 会把它们当成"语言包里多出来的条目"。
-LOC_SRC = ROOT / "src" / "CapsLockPlus.Localization"
-LANG_DIR = ROOT / "src" / "CapsLockPlus.Localization" / "Assets" / "Lang"
+LOC_SRC = ROOT / "src" / "InputPlus.Localization"
+LANG_DIR = ROOT / "src" / "InputPlus.Localization" / "Assets" / "Lang"
 
 # 故意不译的原文：自检用来验证"中英混排/查不到就回退原文"的样本，
 # 译文一填这些断言就没有意义了；「简体中文」是语言自身的名字，永远显示原文。
@@ -58,7 +58,7 @@ XAML_ATTRS = (
     "AutomationProperties.Name", "AutomationProperties.HelpText",
 )
 
-# 参与 C# 自动替换的文件（相对 src/CapsLockPlus）。
+# 参与 C# 自动替换的文件（相对 src/InputPlus）。
 #
 # 只放"中文只用于**界面文案**"的文件 —— 自检、日志、协议常量一律不碰。
 #
@@ -630,7 +630,7 @@ def cmd_apply_xaml(args):
         if new != raw and "xmlns:loc=" not in new:
             new = re.sub(
                 r'(xmlns:x="http://schemas\.microsoft\.com/winfx/2006/xaml")',
-                r'\1\n             xmlns:loc="clr-namespace:CapsLockPlus.UI.Markup"',
+                r'\1\n             xmlns:loc="clr-namespace:InputPlus.UI.Markup"',
                 new, count=1,
             )
         if new != raw:

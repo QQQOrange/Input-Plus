@@ -35,7 +35,7 @@ tap()
 time.sleep(0.55)
 
 img = ImageGrab.grab(all_screens=True).convert("RGB")
-img.save(r"D:\Local AI\git\Keyboard enhance源代码\tools\osd_black.png")
+img.save(r"D:\Local AI\git\Input-Plus源代码\tools\osd_black.png")
 print("size", img.size)
 
 px = img.load()

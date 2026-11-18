@@ -19,8 +19,8 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 user32.SetProcessDPIAware()
 
-ROOT = r"D:\Local AI\git\Keyboard enhance源代码"
-EXE = os.path.join(ROOT, r"src\CapsLockPlus\bin\Release\net10.0-windows\win-x64\KeyboardEnhance.exe")
+ROOT = r"D:\Local AI\git\Input-Plus源代码"
+EXE = os.path.join(ROOT, r"src\InputPlus\bin\Release\net10.0-windows\win-x64\InputPlus.exe")
 OUT_DIR = os.path.join(ROOT, "tools")
 
 DPI = 2.0
@@ -32,8 +32,8 @@ SIZES = [
 ]
 
 env = dict(os.environ)
-env["CAPSLOCKPLUS_DATA"] = os.path.join(ROOT, ".uitest-data")
-env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "uitest"
+env["INPUTPLUS_DATA"] = os.path.join(ROOT, ".uitest-data")
+env["INPUTPLUS_MUTEX_SUFFIX"] = "uitest"
 
 EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
@@ -104,7 +104,7 @@ hwnd = None
 for _ in range(80):
     time.sleep(0.25)
     for h, title in find_window(proc.pid):
-        if "按键增强" in title or "Keyboard" in title:
+        if "Input Plus" in title or "Keyboard" in title:
             hwnd = h
             break
     if hwnd:

@@ -20,8 +20,8 @@ import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.join(ROOT, "src", "CapsLockPlus", "bin", "Debug",
-                   "net10.0-windows", "win-x64", "KeyboardEnhance.exe")
+EXE = os.path.join(ROOT, "src", "InputPlus", "bin", "Debug",
+                   "net10.0-windows", "win-x64", "InputPlus.exe")
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -137,8 +137,8 @@ def main():
     os.makedirs(data, exist_ok=True)
 
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "_smoke"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = "_smoke"
 
     def start():
         return subprocess.Popen([EXE, "--tray"], env=env)

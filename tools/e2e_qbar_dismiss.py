@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, "dist", "KeyboardEnhance.exe")
+EXE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, "dist", "InputPlus.exe")
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 u32.SetProcessDPIAware()
@@ -215,8 +215,8 @@ def main():
     data = os.path.join(ROOT, f"out-qbar-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_qbar_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_qbar_{stamp}"
 
     note = subprocess.Popen(["notepad.exe"])
     app = subprocess.Popen([EXE, "--tray"], env=env)

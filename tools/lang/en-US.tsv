@@ -4,8 +4,8 @@ __culture	en-US
 选择程序…	Choose app…
 点一下，然后在目标程序窗口上点一下就能选中它	Click, then click the target app's window to select it
 点选窗口	Pick a window
-按键增强	Keyboard Enhance
-Keyboard Enhance · 让每一个按键都能变成你的快捷键	Keyboard Enhance · Turn every key into your own shortcut
+Input Plus	Input Plus
+Input Plus · 让每一个按键都能变成你的快捷键	Input Plus · Turn every key into your own shortcut
 在浏览器中打开项目主页	Open the project page in your browser
 更新	Update
 自动更新	Automatic updates
@@ -39,7 +39,7 @@ wo52616111/capslock-plus（AutoHotkey 原版）	wo52616111/capslock-plus (the Au
 Windows 10 1809+ / Windows 11（x64、x86）；Win7 SP1 版为自包含包	Windows 10 1809+ / Windows 11 (x64, x86); the Windows 7 SP1 build is self-contained
 设置文件	Settings file
 关于这个程序	About this app
-按键增强（Keyboard Enhance）是一个 Windows 键盘增强工具：按住一个触发键进入功能层，就能把任意按键变成快捷键 —— 光标移动、文字选择、窗口切换、打开网页、播放宏，全部可以自己配。	Keyboard Enhance is a Windows keyboard utility: hold a trigger key to enter a function layer, then any key becomes a shortcut — move the cursor, select text, switch windows, open websites, play macros. All of it is up to you.
+Input Plus（Input Plus）是一个 Windows 键盘增强工具：按住一个触发键进入功能层，就能把任意按键变成快捷键 —— 光标移动、文字选择、窗口切换、打开网页、播放宏，全部可以自己配。	Input Plus is a Windows keyboard utility: hold a trigger key to enter a function layer, then any key becomes a shortcut — move the cursor, select text, switch windows, open websites, play macros. All of it is up to you.
 支持 10 个独立图层，每层可以有自己的触发键和整套按键绑定。所有配置都在图形界面里完成，也支持 WebDAV 同步与导入导出。	Ten independent layers, each with its own trigger key and full set of bindings. Everything is configured in the GUI, with WebDAV sync, import and export.
 本程序的按键语义源自 Junkai Chen 的 AutoHotkey 版 CapsLock+，界面、引擎与全部设置系统为重新实现。	The key semantics come from Junkai Chen's AutoHotkey-based CapsLock+; the UI, engine and settings system are a fresh implementation.
 帮助与反馈	Help & feedback
@@ -60,7 +60,7 @@ WebDAV 同步	WebDAV sync
 把配置备份到网盘（坚果云等）。启动同步、退出同步、自动备份是三个独立开关，可以同时打开。	Back up your settings to cloud storage (Nutstore, etc.). Sync on launch, sync on exit and auto backup are three independent switches that can all be on.
 传上去的是密文（用下面的备份密码加密后才上传），里面包含 GitHub 个人访问令牌这类凭据 —— 换台机器用同一个密码恢复，令牌就一起带过去了。	What gets uploaded is ciphertext (encrypted with the backup password below) and it contains credentials such as the GitHub personal access token — restore on another machine with the same password and the token comes along.
 服务器地址	Server address
-例：https://dav.jianguoyun.com/dav/　（只填到 dav/ 即可；软件会在里面建一个 KeyboardEnhance/ 子目录，点「测连接」时如果还没有会当场建好）	e.g. https://dav.jianguoyun.com/dav/  (stop at dav/; the app creates a KeyboardEnhance/ subfolder inside, and "Test connection" will create it if missing)
+例：https://dav.jianguoyun.com/dav/　（只填到 dav/ 即可；软件会在里面建一个 InputPlus/ 子目录，点「测连接」时如果还没有会当场建好）	e.g. https://dav.jianguoyun.com/dav/  (stop at dav/; the app creates a InputPlus/ subfolder inside, and "Test connection" will create it if missing)
 用户名	Username
 密码	Password
 坚果云要用「应用密码」，不是登录密码	Nutstore needs an app password, not your login password
@@ -84,7 +84,7 @@ WebDAV 同步	WebDAV sync
 清除冗余数据…	Remove redundant data…
 清掉云端的上传残留、0 字节、重复内容和打不开的文件	Remove leftover uploads, zero-byte files, duplicates and unreadable files in the cloud
 本地备份	Local backups
-备份就放在软件旁边的「KeyboardEnhance Back」文件夹里，拷走整个文件夹就带走了软件和全部备份。	Backups live in the "KeyboardEnhance Back" folder next to the app; copy that whole folder and you take the app plus every backup with you.
+备份就放在软件旁边的「InputPlus Back」文件夹里，拷走整个文件夹就带走了软件和全部备份。	Backups live in the "InputPlus Back" folder next to the app; copy that whole folder and you take the app plus every backup with you.
 软件目录不可写，备份已改放到数据目录。	The app folder is not writable, so backups were moved to the data folder.
 用户数据目录	User data folder
 打开备份目录	Open backup folder
@@ -575,7 +575,7 @@ Unicode 注入	Unicode injection
 按下目标组合键	Press the target combo
 例如 Ctrl+Shift+K、Alt+D。支持小键盘、功能键、媒体键等键盘上不显示的按键。\nEsc 取消。	e.g. Ctrl+Shift+K, Alt+D. Numpad keys, function keys, media keys and other keys not printed on the keyboard are supported.\nEsc cancels.
 等待按键…	Waiting for a key…
-按键增强 Keyboard Enhance	Keyboard Enhance
+Input Plus Input Plus	Input Plus
 快速上手	Getting started
 按键映射	Key mapping
 别名替换	Alias substitutions
@@ -592,7 +592,7 @@ Qbar 面板	Qbar panel
 CapsLock 增强	CapsLock enhancements
 全局搜索（Ctrl+K）：页面、别名、触发键、按键绑定	Global search (Ctrl+K): pages, aliases, trigger keys, bindings
 暂停	Pause
-临时暂停所有按键增强热键	Temporarily pause all Keyboard Enhance hotkeys
+临时暂停所有Input Plus热键	Temporarily pause all Input Plus hotkeys
 切换深浅色	Toggle light/dark
 最小化	Minimise
 关闭到托盘	Close to tray
@@ -603,7 +603,7 @@ CapsLock 增强	CapsLock enhancements
 新密码	New password
 再输一遍确认	Type it again to confirm
 至少 4 位。启动密码与备份密码相互独立，互不影响。忘记密码可删除数据目录里的 startup.json 解除保护（其他设置不受影响）。	At least 4 characters. The startup password and the backup password are independent. If you forget it, delete startup.json in the data folder to remove protection (other settings are unaffected).
-欢迎使用按键增强	Welcome to Keyboard Enhance
+欢迎使用Input Plus	Welcome to Input Plus
 让 Caps 键成为你最顺手的修饰键	Make Caps your most comfortable modifier
 光标移动不用离开主键区	Move the caret without leaving the home row
 一个 Qbar 搞定搜索与启动	One Qbar for search and launching
@@ -630,7 +630,7 @@ Caps+LAlt+方向 切窗口，Caps+Z 撤销重做	Caps+LAlt+arrows switch windows
 跳过	Skip
 上一步	Back
 下一步	Next
-按键增强 横条	Keyboard Enhance band
+Input Plus 横条	Input Plus band
 解锁本地数据	Unlock local data
 本地数据已加密	Local data is encrypted
 请输入你在「同步与备份」里设置的备份密码。只需要这一次 —— 解锁后密钥会交给 Windows 凭据缓存，以后启动不再询问。	Enter the backup password you set under "Sync and backup". Only once — the key is then handed to the Windows credential cache and later launches will not ask.
@@ -685,7 +685,7 @@ Enter 执行	Enter runs
 点击要绑定的窗口	Click the window you want to bind
 左键选中　·　右键或 Esc 取消	Left click selects · Right click or Esc cancels
 读取配置失败：	Failed to read configuration: 
-按键增强 · 触发键配置	Keyboard Enhance · Trigger configuration
+Input Plus · 触发键配置	Input Plus · Trigger configuration
 结论：目标不存在，无法测试	Result: the target does not exist, cannot test
 结论：前台不是目标窗口 ✗	Result: the foreground window is not the target ✗
 异常：	Exception: 
@@ -717,9 +717,9 @@ Enter 执行	Enter runs
 发送退格	Send Backspace
 发送 Delete	Send Delete
 打开设置	Open settings
-打开 按键增强 设置窗口	Open the Keyboard Enhance settings window
+打开 Input Plus 设置窗口	Open the Input Plus settings window
 启用/暂停	Enable / pause
-临时暂停或恢复所有按键增强热键	Temporarily pause or resume every Keyboard Enhance hotkey
+临时暂停或恢复所有Input Plus热键	Temporarily pause or resume every Input Plus hotkey
 启暂停	On/Off
 键盘按键	Keyboard keys
 发送 	
@@ -834,7 +834,7 @@ Ctrl+A 再删除	Ctrl+A then delete
 恢复系统剪贴板后粘贴	Restore the system clipboard, then paste
 粘系统	PasteOS
 开关独立剪贴板	Toggle the separate clipboards
-开/关 按键增强剪贴板功能	Turn the Keyboard Enhance clipboard feature on or off
+开/关 Input Plus剪贴板功能	Turn the Input Plus clipboard feature on or off
 查看并粘贴最近的复制内容	Browse and paste recently copied items
 Qbar 快速启动	Qbar launcher
 打开 Qbar。参数可填搜索引擎关键字（bd / bili / gh…），留空则用上次的引擎	Open Qbar. The argument can be a search-engine keyword (bd / bili / gh…); leave empty to reuse the last engine
@@ -1075,12 +1075,12 @@ Win11 风格贴边	Windows 11 style snapping
 启动失败：被拦截	Launch failed: blocked
 启动这个程序	launch this program
 {0} 好像还没启动完成，再按一次试试	{0} does not seem to be ready yet — try again
-按键增强 · 绑定快照	Keyboard Enhance · Binding snapshot
+Input Plus · 绑定快照	Input Plus · Binding snapshot
    <<<< 未完成（空壳动作）	   <<<< incomplete (action set, no arguments)
    <<<< 残留备注（没有动作却还有备注）	   <<<< stale note (note left without an action)
    <<<< 残留备注	   <<<< stale note
 打开捕获窗失败：	Failed to open the capture window: 
-按键增强 · 捕获自检	Keyboard Enhance · Capture self-test
+Input Plus · 捕获自检	Input Plus · Capture self-test
 注入失败：	Injection failed: 
 结论：捕获窗能收到按键 ✓	Result: the capture window receives keys ✓
 结论：三路都收不到按键 ✗	Result: none of the three paths receives keys ✗
@@ -1132,7 +1132,7 @@ WG 手势	WG gesture
 说明：连程序自己注入的按键都收不到，说明这台机器上有东西	Even keys injected by the app itself are not received, which means something on this machine
 （安全软件 / 输入过滤驱动 / 系统策略）拦住了低级键盘钩子。	 (security software / an input filter driver / a system policy) is blocking the low-level keyboard hook.
 下一步：把本程序加入安全软件白名单，或改用普通权限再试一次。	Next step: whitelist this app in your security software, or try again without administrator rights.
-按键增强 · 钩子自检	Keyboard Enhance · Hook self-test
+Input Plus · 钩子自检	Input Plus · Hook self-test
   跳过 	  skipped 
 : 几何体为空	: the geometry is empty
 : 画笔和笔刷都为空	: both pen and brush are null
@@ -1160,7 +1160,7 @@ Enabled 切换	Enabled toggles
 Suspended 切换	Suspended toggles
 进入录键模式	
 退出录键模式	
-运行 KeyboardEnhance.exe --diag 查看原因。	Run KeyboardEnhance.exe --diag to see why.
+运行 InputPlus.exe --diag 查看原因。	Run InputPlus.exe --diag to see why.
 层长时间无操作	layer idle for too long
 （远程桌面 / 注入输入时是正常的）	(normal with remote desktop / injected input)
 回调连续异常	Repeated callback errors
@@ -1233,7 +1233,7 @@ Win ↔ Alt（左）	Win ↔ Alt (left)
 共 {0} 条	{0} items
 {0}里的「{1}」不是可识别的键名，这条规则不会生效。	"{1}" in {0} is not a recognized key name, so that rule never applies.
 用法: --probe-key <键名|0xNN|NN>，例如 --probe-key mouseMiddle 或 --probe-key 0x04	
-按键增强 · 按键探针	
+Input Plus · 按键探针	
 读配置失败: 	
 --- 配置里和这个键有关的规则 ---	
 --- 引擎判定 ---	
@@ -1264,7 +1264,7 @@ Win ↔ Alt（左）	Win ↔ Alt (left)
 宏的流程控制配对有误	The macro's control blocks are not paired correctly
 「{0}」等待超时（{1} ms）	"{0}" timed out after {1} ms
 动作「{0}」没有完成	Action "{0}" did not complete
-目标窗口以管理员身份运行，按键被系统拦截。请右键以管理员身份运行 KeyboardEnhance，或在设置里开启“以管理员身份运行”。	
+目标窗口以管理员身份运行，按键被系统拦截。请右键以管理员身份运行 InputPlus，或在设置里开启“以管理员身份运行”。	
 生成 {0} 步	Created {0} steps
 第 {0} 步的「设置变量」还没填变量名，这一步不会生效。	Step {0} has a "Set variable" step without a name, so it will not take effect.
 第 {0} 步的变量名「{1}」不能用（不能含空格或花括号）。	The variable name "{1}" in step {0} is invalid (no spaces or braces allowed).
@@ -1396,7 +1396,7 @@ PowerShell（管理员）
 锁定计算机	
 立即锁定当前会话	
 让计算机进入睡眠	
-按键增强 设置窗口	Keyboard Enhance settings window
+Input Plus 设置窗口	Input Plus settings window
 窗口绑定管理	Window binding manager
 管理 10 个窗口槽位	manage 10 window slots
 最近复制的内容	recently copied items
@@ -1404,8 +1404,8 @@ PowerShell（管理员）
 带历史记录的计算器	calculator with history
 重新读取设置文件	reload the settings file
 暂停 / 恢复	Pause / Resume
-临时关闭按键增强热键	temporarily disable Keyboard Enhance hotkeys
-退出按键增强	Quit Keyboard Enhance
+临时关闭Input Plus热键	temporarily disable Input Plus hotkeys
+退出Input Plus	Quit Input Plus
 完全退出程序	quit the app completely
 快捷	
 用 {0} 查询…	
@@ -1704,7 +1704,7 @@ Yandex 图片	Yandex Images
 缺少 salt / hash	missing salt / hash
 迭代次数非法	invalid iteration count
 本次启动没有密码门。要重新加锁，到设置里再设一次即可。	there is no password gate this launch; set one again in Settings to re-lock.
-按键增强 开机自启（最高权限，不弹 UAC）	Keyboard Enhance autostart (highest privileges, no UAC prompt)
+Input Plus 开机自启（最高权限，不弹 UAC）	Input Plus autostart (highest privileges, no UAC prompt)
 已回滚到操作前的密钥，配置没有丢	
 启用加密 / 改密码	
 关闭加密	
@@ -1753,20 +1753,20 @@ WebDAV 地址、用户名、备份保留策略；加密导出时含密码	WebDAV
 文件内容不是有效的 JSON：{0}	The file is not valid JSON: {0}
 文件内容不是一个 JSON 对象	The file content is not a JSON object
 这个文件既不是导出配置、也不是备份（里面没有可识别的配置字段）。	This file is neither an exported configuration nor a backup (no recognisable fields inside).
-请确认选的是 KeyboardEnhance 导出的 .clpconf 或备份的 .keyboardenhance 文件。	Make sure you picked a .clpconf exported by KeyboardEnhance or a .keyboardenhance backup.
+请确认选的是 InputPlus 导出的 .clpconf 或备份的 .keyboardenhance 文件。	Make sure you picked a .clpconf exported by InputPlus or a .keyboardenhance backup.
 不支持的文件类型：{0}	Unsupported file type: {0}
 导出文件的 items 字段不对（应当是字符串数组）	The export's items field is invalid (it should be an array of strings)
 这份导出里没有任何数据（导出时大概什么都没勾）	This export contains no data (nothing was ticked when exporting)
 文件超过 32MB，确认选对了吗	The file is over 32MB — did you pick the right one?
 导入的数据格式不对（有字段的类型和预期不一致），这个文件可能被手工改过。	The import data is malformed (some field has an unexpected type); this file may have been edited by hand.
 导入的数据解析失败	Failed to parse the imported data
-KeyboardEnhance 备份	KeyboardEnhance backup
+InputPlus 备份	InputPlus backup
 还没设备份密码。备份一律加密，请先在「备份密码」里设一个再备份。	No backup password yet. Backups are always encrypted — set one under Backup password first.
 备份内容不是有效 JSON：{0}	The backup is not valid JSON: {0}
 这是一份「导出配置」文件，不是备份 —— 请到「同步与备份 → 导入配置」用它；	This is an exported-config file, not a backup — import it via Sync & backup → Import;
 「从备份恢复」只认 .keyboardenhance 备份文件。	Restore only accepts .keyboardenhance backup files.
 备份内容解析失败	Failed to parse the backup content
-这不是一份按键增强的备份：里面没有任何按键、层、宏或搜索项。	This is not a Keyboard Enhance backup — no keys, layers, macros or search entries found.
+这不是一份Input Plus的备份：里面没有任何按键、层、宏或搜索项。	This is not a Input Plus backup — no keys, layers, macros or search entries found.
 请确认选的是 .keyboardenhance 备份文件。	Please make sure you picked a .keyboardenhance backup file.
 ，采用了备份里的 GitHub 令牌	, used the GitHub token from the backup
 ；已带上备份里的 GitHub 令牌	; the GitHub token from the backup was included
@@ -1823,7 +1823,7 @@ KeyboardEnhance 备份	KeyboardEnhance backup
 {0}失败：地址或目录不存在	{0} failed: address or folder does not exist
 {0}失败：网盘空间不足	{0} failed: cloud storage is full
 {0}失败：服务器返回 {1} {2}	{0} failed: the server returned {1} {2}
-用法：KeyboardEnhance.exe --webdav-test <地址> [用户名] [密码]	Usage: KeyboardEnhance.exe --webdav-test <address> [user] [password]
+用法：InputPlus.exe --webdav-test <地址> [用户名] [密码]	Usage: InputPlus.exe --webdav-test <address> [user] [password]
 端到端测试密码	end-to-end password test
 能连上服务器并列出目录	can connect and list the directory
 端到端测试宏	end-to-end macro test
@@ -1976,7 +1976,7 @@ Qbar 打不开，详情见日志	Can't open Qbar — see the log for details
 只提示并给出下载地址。\n\n已保存的令牌会被删掉，需要重新填。	only a notice and a download address.\n\nThe saved token is deleted and must be entered again.
 清除 GitHub 令牌？	Clear the GitHub token?
 已清除令牌，更新检查回到匿名访问	Token cleared; update checks are back to anonymous access
-Keyboard Enhance 诊断信息	
+Input Plus 诊断信息	
 版本: 	
 系统: 	
 架构: 	
@@ -2081,8 +2081,8 @@ Keyboard Enhance 诊断信息
 继续导出	Continue export
 导出配置（加密）	Export settings (encrypted)
 导出配置（明文）	Export settings (plaintext)
-KeyboardEnhance配置({0:yyyy-MM-dd HH-mm-ss}){1}	KeyboardEnhance config ({0:yyyy-MM-dd HH-mm-ss}){1}
-KeyboardEnhance 配置|*{0}|所有文件|*.*	KeyboardEnhance config|*{0}|All files|*.*
+InputPlus配置({0:yyyy-MM-dd HH-mm-ss}){1}	InputPlus config ({0:yyyy-MM-dd HH-mm-ss}){1}
+InputPlus 配置|*{0}|所有文件|*.*	InputPlus config|*{0}|All files|*.*
 已导出（加密，{0} 个设置项，含令牌与全部字段）	Exported (encrypted, {0} settings, token and every field included)
 已导出（明文，{0} 个设置项，含令牌）	Exported (plaintext, {0} settings, token included)
 已导出到：{0}\n共 {1} 个设置项，包含 {2} 个分组。\n	Exported to: {0}\n{1} settings across {2} groups.\n
@@ -2090,7 +2090,7 @@ KeyboardEnhance 配置|*{0}|所有文件|*.*	KeyboardEnhance config|*{0}|All fil
 这是明文文件：里面的 GitHub 令牌与配置都能被直接读到，别公开分享。	This is a plaintext file: its GitHub token and settings can be read directly. Do not share it publicly.
 导出失败：	Export failed: 
 导入配置（导出文件或备份文件都行）	Import settings (an export or a backup file both work)
-KeyboardEnhance 配置|*{0};*{1}	KeyboardEnhance config|*{0};*{1}
+InputPlus 配置|*{0};*{1}	InputPlus config|*{0};*{1}
 |导出的配置 (*{0})|*{1}	|Exported config (*{0})|*{1}
 |备份文件 (*{0})|*{1}	|Backup file (*{0})|*{1}
 |所有文件|*.*	|All files|*.*
@@ -2213,7 +2213,7 @@ exe 名不一定是软件名（idea64.exe 是 IDEA），可以在「显示名称
 「宏」页可以录制一串按键操作，然后把整个宏绑到一个键上。	The "Macros" page records a sequence of key presses, then binds the whole macro to one key.
 录制中的按键不会被拦截，录完在列表里可以调整每一步的延迟。	Keystrokes are not intercepted while recording, and each step's delay can be tuned in the list afterwards.
 绑定时分类选「宏」，再从功能下拉里选具体那个宏。	When binding, choose the "Macros" category and then the specific macro from the function drop-down.
-录不到按键时：标题下会说明是「钩子没工作」还是「还没敲键盘」。前者到「测试」页看钩子状态，或运行 KeyboardEnhance.exe --diag。	No keys captured? The header says whether the hook is down or you simply haven't typed yet. For the former, check the Test page or run KeyboardEnhance.exe --diag.
+录不到按键时：标题下会说明是「钩子没工作」还是「还没敲键盘」。前者到「测试」页看钩子状态，或运行 InputPlus.exe --diag。	No keys captured? The header says whether the hook is down or you simply haven't typed yet. For the former, check the Test page or run InputPlus.exe --diag.
 远程桌面（向日葵 / ToDesk / RDP）也能录：这类按键是注入的，钩子常常收不到，录制会同时读 Raw Input 那一路，日志里写成「Raw Input 补录」。	Remote sessions (Sunlogin / ToDesk / RDP) record too: their keys are injected and the hook often misses them, so recording also reads Raw Input; the log labels those "Raw Input fallback".
 「固定延迟」勾上后，录出来的每个键之间都用你填的毫秒数（默认 120），回放节奏均匀；不勾就照你真实按的间隔录。	With "Fixed delay" on, every recorded key waits the number of milliseconds you enter (default 120) for an even rhythm; with it off, your real timing is used.
 触发键可以设成 Tab 等任意键：长按进入对应层期间，这个键的按下与自动重复都会被吞掉，只有短按松手才补发一次原功能。	The trigger key can be any key, Tab included: while held into its layer, its presses and auto-repeats are all swallowed; only a short tap replays the original function.
@@ -2221,7 +2221,7 @@ exe 名不一定是软件名（idea64.exe 是 IDEA），可以在「显示名称
 ⑧ 剪贴板与同步	⑧ Clipboard and sync
 内置 10 组独立剪贴板（Caps+C / Caps+V 那一套），与系统剪贴板分开。	Ten separate clipboards are built in (the Caps+C / Caps+V set), kept apart from the system clipboard.
 「剪贴板」页里每条记录都能一键「复制」到系统剪贴板（不是往本程序里粘贴），历史记录双击也能复制。	Every entry on the Clipboard page has a Copy button that puts it on the system clipboard (it does not paste into this app); double-clicking a history entry copies it too.
-所有用户数据都在软件旁边的「KeyboardEnhance Data」文件夹里，备份在「KeyboardEnhance Back」里 —— 拷走整个文件夹就带走了软件和全部数据。	All user data lives in the "KeyboardEnhance Data" folder next to the app, with backups in "KeyboardEnhance Back" — copy that folder and you take the app plus all data.
+所有用户数据都在软件旁边的「InputPlus Data」文件夹里，备份在「InputPlus Back」里 —— 拷走整个文件夹就带走了软件和全部数据。	All user data lives in the "InputPlus Data" folder next to the app, with backups in "InputPlus Back" — copy that folder and you take the app plus all data.
 本地数据一律加密（AES-256-GCM），密钥由「备份密码」派生；没设密码时是明文，设了会立刻转成密文。	Local data is always encrypted (AES-256-GCM) with a key derived from the backup password; without a password it stays plaintext, and setting one converts it immediately.
 「同步与备份」支持 WebDAV：可以把整套配置同步到网盘，也能导入导出。导出默认加密、含全部字段；关掉加密则是明文，会剔除密码类字段。	"Sync and backup" supports WebDAV: the whole configuration can be synced to cloud storage, imported and exported. Exports are encrypted and complete by default; disabling encryption makes them plaintext and strips password fields.
 ⑧b 别名替换	8b Alias substitutions
@@ -2268,7 +2268,7 @@ Enter 执行，Esc 关闭，Tab 补全	Enter runs, Esc closes, Tab completes
 换个关键词试试 —— 可以搜按键名、功能名或说明。	Try another keyword — you can search key names, action names or descriptions.
 到「按键映射」页点一个键、选一个功能，这里就会多一条。	Open Key mapping, pick a key and choose an action — the new binding shows up here.
 筛选「{0}」· 命中 {1} 条	Filter "{0}" · {1} matches
-按键增强 · 快捷键速查（v{0}）	Keyboard Enhance · Shortcut cheat sheet (v{0})
+Input Plus · 快捷键速查（v{0}）	Input Plus · Shortcut cheat sheet (v{0})
 已复制	Copied
 自定义按键（还没配好）	Custom key (not configured yet)
 把 {0} 发给 {1}	Send {0} to {1}
@@ -2588,7 +2588,7 @@ Enter 执行，Esc 关闭，Tab 补全	Enter runs, Esc closes, Tab completes
 宏已录制：{0} 步	Macro recorded: {0} steps
 这个宏只录到了 Ctrl/Alt/Shift，没有字母键；快捷键宏请把最后一个字母也录进去	
 键盘钩子没在工作，这次录制收不到按键 —— 到「测试」页看钩子状态，	The keyboard hook isn't running, so this recording will capture nothing — check the Test page,
-或运行 KeyboardEnhance.exe --diag 查原因	or run KeyboardEnhance.exe --diag to find out why
+或运行 InputPlus.exe --diag 查原因	or run InputPlus.exe --diag to find out why
 已取消这次录制	Recording cancelled
 已取消录制	Recording cancelled
 录制中… {0} · {1} 个事件	Recording… {0} · {1} events
@@ -2656,7 +2656,7 @@ Qbar 外观已恢复默认	Qbar appearance restored to defaults
 没有新增内容：这 {0} 项都已存在	Nothing new: all {0} item(s) already exist
 重新检查（{0} 条）	Check again ({0})
 去修改	Fix it
-按键增强 v{0} 规则体检 · {1}	Keyboard Enhance v{0} rule check · {1}
+Input Plus v{0} 规则体检 · {1}	Input Plus v{0} rule check · {1}
 已复制体检结果	Rule-check result copied
 复制失败：剪贴板被其它程序占用	Copy failed: the clipboard is held by another app
 　（新增 {0} 条冲突，可在「规则体检」查看）	  ({0} new conflict(s), see "Rule check")
@@ -2975,8 +2975,8 @@ Qbar：{0}	Qbar: {0}
 「{0}」里的 {1} 项你都已经有了，没有可添加的内容	You already have all {1} items in "{0}", nothing to add.
 「绑定应用」	the target app
 「要发送的键」	the key to send
-不能绑定按键增强自己	Cannot bind Keyboard Enhance itself
-不能绑定按键增强自己的窗口	Cannot bind Keyboard Enhance's own window
+不能绑定Input Plus自己	Cannot bind Input Plus itself
+不能绑定Input Plus自己的窗口	Cannot bind Input Plus's own window
 两个键不能相同	The two keys must be different
 两个键同时按下触发动作。被配置的这两个键会有约 70ms 的按下延迟（否则无法区分连打和同按），未配置的键不受影响。	Pressing both keys together runs an action. Those two keys get about 70ms of press latency (otherwise a quick double press cannot be told apart); other keys are unaffected.
 从文件管理器里挑一个 exe	Pick an exe from the file manager
@@ -3097,7 +3097,7 @@ Qbar：{0}	Qbar: {0}
 槽位 {0} 还没绑定窗口（先按 Caps+LAlt+{1} 绑定）	Slot {0} has no windows yet (press Caps+LAlt+{1} to bind one first)
 槽位 {0}：已加入 {1}（共 {2} 个窗口）	Slot {0}: added {1} ({2} windows)
 槽位 {0}：已绑定 {1} 的全部窗口	Slot {0}: bound to all windows of {1}
-欢迎使用 CapsLock+	Welcome to Keyboard Enhance
+欢迎使用 CapsLock+	Welcome to Input Plus
 正在显示替换内容，点一下隐藏	Alias text is visible — click to hide
 正文只显示备注；没有备注的显示「（无备注）」。替换内容不会出现在列表里。	The list shows only notes; entries without one show "(no note)". Replacement text never appears in the list.
 正文显示备注；没有备注的显示「（无备注）」。点右上角眼睛按钮可临时显示真正的替换内容。	The list shows the note; entries without one show "(no note)". Use the eye button at the top right to see the actual replacement text.

@@ -1,0 +1,258 @@
+using InputPlus.Core.Settings;
+
+namespace InputPlus.Core.Input;
+
+/// <summary>
+/// 文本片段的匹配规则（纯函数，便于自检）。
+///
+/// ## 为什么规则定得这么"小气"
+///
+/// 片段展开是**不可逆的输入副作用**：一旦在正常打字时误触发，
+/// 用户看到的是一段话被替换成别的东西，比"没反应"糟糕得多。
+/// 所以宁可少匹配，也不要错匹配：
+///
+///   ① 触发词必须落在**词边界**上 —— 前一个字符不能是字母/数字，
+///      于是 `email` 不会在 `myemail` 里被触发；
+///   ② 只认**非字母数字开头**的触发词（`;mail`、`/sig`）——
+///      正常打字几乎不会出现这种前缀；
+///   ③ 完全大小写敏感 —— `;Mail` 和 `;mail` 是两条不同的片段，
+///      避免用户以为自己只配了一条。
+/// </summary>
+public static class SnippetMatcher
+{
+    /// <summary>缓冲区最多记多少字符（够放几个触发词，也防止无限增长）。</summary>
+    public const int MaxBuffer = 64;
+
+    /// <summary>
+    /// 这个字符算"词字符"吗（ASCII 字母 / 数字 / 下划线）。
+    ///
+    /// 刻意**只认 ASCII**：中文别名（「中文」「地址」这种）在钩子层是打不出来的，
+    /// 所以它们从"编辑框里的真实文本"匹配（见 TextMirror）。若把汉字也算词字符，
+    /// 这些触发词会被 IsValidTrigger 直接判非法、保存后永远不生效 —— 用户看到
+    /// 的就是"别名只能设英文"。
+    /// </summary>
+    public static bool IsWordChar(char c)
+        => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_';
+
+    /// <summary>
+    /// 把全角/中文标点折成它对应的半角 ASCII。
+    ///
+    /// 为什么必须折：击键钩子只能看到**物理键**。中文输入法下打 `、`
+    /// 按的是 `\` 键，缓冲区里记的也是 `\`；而用户在别名里写的触发词是
+    /// `、mail` —— 不折就永远匹配不上，表现就是"改成 `、` 之后不触发了"。
+    ///
+    /// 折叠是 1:1 的（一个字符换一个字符），所以下标运算不用改。
+    /// </summary>
+    public static char Fold(char c) => c switch
+    {
+        '、' => '\\',
+        '。' => '.',
+        '，' => ',',
+        '；' => ';',
+        '：' => ':',
+        '？' => '?',
+        '！' => '!',
+        '／' => '/',
+        '．' => '.',
+        '－' => '-',
+        '＿' => '_',
+        '＋' => '+',
+        '＝' => '=',
+        '＠' => '@',
+        '＃' => '#',
+        '＄' => '$',
+        '％' => '%',
+        '＆' => '&',
+        '＊' => '*',
+        '（' => '(',
+        '）' => ')',
+        '［' => '[',
+        '］' => ']',
+        '｛' => '{',
+        '｝' => '}',
+        '＜' => '<',
+        '＞' => '>',
+        '｜' => '|',
+        '～' => '~',
+        '＾' => '^',
+        '｀' => '`',
+        '＼' => '\\',
+        '＂' => '"',
+        '＇' => '\'',
+        '　' => ' ',
+        '“' => '"',
+        '”' => '"',
+        '‘' => '\'',
+        '’' => '\'',
+        '【' => '[',
+        '】' => ']',
+        '「' => '[',
+        '」' => ']',
+        '『' => '[',
+        '』' => ']',
+        '《' => '<',
+        '》' => '>',
+        _ => c,
+    };
+
+    /// <summary>整串折叠（见 <see cref="Fold(char)"/>）。</summary>
+    public static string Fold(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (char c in s) sb.Append(Fold(c));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 触发词是否以任一前缀开头（折叠后比较）。
+    /// 前缀列表为空 = 没配前缀，任何触发词都算通过。
+    /// </summary>
+    public static bool StartsWithAnyPrefix(string? trigger, IReadOnlyList<string>? prefixes)
+    {
+        if (prefixes == null || prefixes.Count == 0) return true;
+        string t = Fold(trigger);
+        foreach (string p in prefixes)
+        {
+            string fp = Fold(p);
+            if (fp.Length > 0 && t.StartsWith(fp, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>配置的触发词是否合法（非空、以非字母数字开头、且不纯空白）。</summary>
+    public static bool IsValidTrigger(string? trigger)
+    {
+        if (string.IsNullOrEmpty(trigger)) return false;
+        if (trigger.Any(char.IsWhiteSpace)) return false;
+        return !IsWordChar(Fold(trigger[0]));
+    }
+
+    /// <summary>
+    /// 在当前缓冲区里找一条可展开的片段；没有则返回 null。
+    /// 命中条件是"缓冲区以触发词结尾，且触发词前面不是词字符"。
+    /// </summary>
+    public static Snippet? Match(IEnumerable<Snippet>? snippets, string buffer)
+        => Match(snippets, buffer, null);
+
+    /// <summary>
+    /// 带前台程序的匹配。<paramref name="process"/> 为空表示"不知道前台是什么"，
+    /// 此时**不做限定**（fail open）：判定不了就别拦，否则片段会在所有程序里一起失效。
+    /// </summary>
+    public static Snippet? Match(IEnumerable<Snippet>? snippets, string buffer, string? process)
+    {
+        if (snippets == null || string.IsNullOrEmpty(buffer)) return null;
+
+        Snippet? best = null;
+
+        /* 缓冲区里是**物理键**折出来的字符，触发词是用户按屏上字符写的，
+         * 两边都折一遍才能对上（中文输入法里 `、` 与 `\` 是同一个键）。 */
+        string folded = Fold(buffer);
+
+        foreach (var s in snippets)
+        {
+            if (s == null || !s.Enabled || !IsValidTrigger(s.Trigger)) continue;
+            if (!AllowedIn(s, process)) continue;
+
+            string ft = Fold(s.Trigger);
+            if (ft.Length == 0) continue;
+            if (!folded.EndsWith(ft, StringComparison.Ordinal)) continue;
+
+            int start = folded.Length - ft.Length;
+            if (start > 0 && IsWordChar(folded[start - 1])) continue;   // 不在词边界
+
+            // 多个触发词同时命中时取最长的（更具体的优先）
+            if (best == null || s.Trigger.Length > best.Trigger.Length) best = s;
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// 命中的触发词后面还有没有"更长的、以它开头的"触发词。
+    ///
+    /// 为什么需要：触发词是**边打边判**的，缓冲一到 `;m` 就命中 `;m`——
+    /// 于是同时配了 `;m` 和 `;mail` 时，`;mail` 永远没机会触发。
+    /// 有这个判断，引擎就知道"先别急着展开，再等 120ms 看看"。
+    /// </summary>
+    public static bool HasLongerCandidate(IEnumerable<Snippet>? snippets, string buffer, string? process)
+    {
+        if (snippets == null || string.IsNullOrEmpty(buffer)) return false;
+
+        /* 缓冲区可能包含普通文字（"hello ;m"）。先找出**当前命中的那个触发词**，
+         * 再只比较以它为前缀的更长的触发词；直接拿整个 buffer 去 StartsWith
+         * 会让前面有文字时的 ;m / ;mail 判定失效。 */
+        var hit = Match(snippets, buffer, process);
+        if (hit == null) return false;
+
+        string fh = Fold(hit.Trigger);
+
+        foreach (var s in snippets)
+        {
+            if (s == null || !s.Enabled || !IsValidTrigger(s.Trigger)) continue;
+            if (!AllowedIn(s, process)) continue;
+            if (s.Trigger.Length <= hit.Trigger.Length) continue;
+            if (Fold(s.Trigger).StartsWith(fh, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 这条片段是否允许在指定程序里展开。
+    ///
+    /// 三种情况：
+    ///   · 没配 Apps → 到处都行（旧行为）；
+    ///   · 配了 Apps 但拿不到前台进程（受保护进程等）→ **放行**（fail open）；
+    ///   · 配了 Apps → 按进程名比较，不区分大小写，允许写 `.exe` 或不写。
+    /// </summary>
+    public static bool AllowedIn(Snippet snippet, string? process)
+    {
+        string apps = (snippet.Apps ?? "").Trim();
+        if (apps.Length == 0) return true;
+        if (string.IsNullOrWhiteSpace(process)) return true;
+
+        string current = Normalize(process);
+        foreach (string raw in apps.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (Normalize(raw) == current) return true;
+        }
+        return false;
+    }
+
+    /// <summary>进程名规范化：去空白、转小写、补 .exe，便于 `code` 与 `Code.exe` 互相匹配。</summary>
+    public static string Normalize(string? process)
+    {
+        string p = (process ?? "").Trim().ToLowerInvariant();
+        if (p.Length == 0) return "";
+        return p.EndsWith(".exe", StringComparison.Ordinal) ? p : p + ".exe";
+    }
+
+    /// <summary>
+    /// 把 <paramref name="add"/> 合并进"只在哪些程序里展开"的列表（逗号分隔）。
+    ///
+    /// 纯函数是为了能被自检钉住：这段逻辑错了的表现是"选了程序却没生效"，
+    /// 而用户只会觉得按钮坏了。
+    /// </summary>
+    /// <returns>合并后的文本；<paramref name="added"/> 表示是否真的加进去了（false = 已经有了）</returns>
+    public static string MergeAppList(string? existing, string? add, out bool added)
+    {
+        added = false;
+        string name = Normalize(add);
+        if (name.Length == 0) return existing ?? "";
+
+        var parts = (existing ?? "")
+            .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim())
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        if (parts.Any(x => Normalize(x) == name)) return string.Join(", ", parts);
+
+        parts.Add(name);
+        added = true;
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>把缓冲区截到上限，只保留末尾部分。</summary>
+    public static string Trim(string buffer)
+        => buffer.Length <= MaxBuffer ? buffer : buffer[^MaxBuffer..];
+}

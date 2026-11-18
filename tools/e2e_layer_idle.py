@@ -16,8 +16,8 @@ import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.join(ROOT, "src", "CapsLockPlus", "bin", "Debug",
-                   "net10.0-windows", "win-x64", "KeyboardEnhance.exe")
+EXE = os.path.join(ROOT, "src", "InputPlus", "bin", "Debug",
+                   "net10.0-windows", "win-x64", "InputPlus.exe")
 
 u32 = ctypes.WinDLL("user32", use_last_error=True)
 u32.SetProcessDPIAware()
@@ -52,8 +52,8 @@ def main():
     data = os.path.join(ROOT, f"out-idle-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_idle_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_idle_{stamp}"
 
     p = subprocess.Popen([EXE, "--tray"], env=env)
     try:

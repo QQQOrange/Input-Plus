@@ -9,18 +9,18 @@ import time
 
 from PIL import ImageGrab
 
-EXE = r"D:\Local AI\git\Keyboard enhance源代码\src\CapsLockPlus\bin\Release\net10.0-windows\win-x64\KeyboardEnhance.exe"
+EXE = r"D:\Local AI\git\Input-Plus源代码\src\InputPlus\bin\Release\net10.0-windows\win-x64\InputPlus.exe"
 
 env = dict(os.environ)
-env["CAPSLOCKPLUS_DATA"] = r"D:\Local AI\git\Keyboard enhance源代码\.osdtest-data"
-env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "osdtest"
+env["INPUTPLUS_DATA"] = r"D:\Local AI\git\Input-Plus源代码\.osdtest-data"
+env["INPUTPLUS_MUTEX_SUFFIX"] = "osdtest"
 
 time.sleep(1.4)          # 等黑底窗口就位
 proc = subprocess.Popen([EXE, "--osd", "50"], env=env)
 time.sleep(1.1)          # 等它 Show 出来
 
 img = ImageGrab.grab(all_screens=True).convert("RGB")
-img.save(r"D:\Local AI\git\Keyboard enhance源代码\tools\osd_ours.png")
+img.save(r"D:\Local AI\git\Input-Plus源代码\tools\osd_ours.png")
 
 px = img.load()
 W, H = img.size

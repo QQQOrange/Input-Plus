@@ -1,0 +1,87 @@
+<Window x:Class="InputPlus.UI.Windows.GestureOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="手势轨迹"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Focusable="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        IsHitTestVisible="False"
+        SnapsToDevicePixels="True">
+    <!--
+        全屏透明覆盖层：只负责"看见"，不接任何输入。
+        点击穿透靠 WS_EX_TRANSPARENT（见 code-behind），IsHitTestVisible 只挡住
+        WPF 内部的命中测试，挡不住窗口本身。
+
+        轨迹三层画法和 WGestures 2 的 PathView 一致（YingDev.WGApp.Views\PathView.xaml.cs）：
+        阴影 → 描边 → 主线，三层同一组点，只是粗细和透明度不同。
+        描边是主线两侧各 BorderWidth 像素，所以它的粗细 = 线宽 + 2×描边宽。
+    -->
+    <Canvas x:Name="Root" Background="Transparent" IsHitTestVisible="False">
+        <Polyline x:Name="TrailShadow"
+                  Stroke="#14000000"
+                  StrokeThickness="5"
+                  StrokeLineJoin="Round"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round"
+                  IsHitTestVisible="False" />
+        <Polyline x:Name="TrailBorder"
+                  Stroke="#B3FFFFFF"
+                  StrokeThickness="3.5"
+                  StrokeLineJoin="Round"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round"
+                  IsHitTestVisible="False" />
+        <Polyline x:Name="Trail"
+                  Stroke="#FF3B82F6"
+                  StrokeThickness="1.5"
+                  StrokeLineJoin="Round"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round"
+                  IsHitTestVisible="False" />
+
+        <!-- 起始超时：鼠标尖端一个红色实心圆，短暂闪一下就走。 -->
+        <Ellipse x:Name="TimeoutDot"
+                 Width="16" Height="16"
+                 Fill="#FFEF4444"
+                 Stroke="#CCFFFFFF"
+                 StrokeThickness="1"
+                 Visibility="Collapsed"
+                 IsHitTestVisible="False">
+            <Ellipse.Effect>
+                <DropShadowEffect Color="#FFFF3B30" BlurRadius="12" ShadowDepth="0" Opacity="0.9" />
+            </Ellipse.Effect>
+        </Ellipse>
+
+        <!-- 手势名称：圆角 16、白色描边、白字 24 号，尺寸和 WGestures 的 GestureLabelView 对齐 -->
+        <Border x:Name="LabelBox"
+                Canvas.Left="0" Canvas.Top="0"
+                Padding="24,14,24,16"
+                MinWidth="120"
+                MinHeight="52"
+                CornerRadius="16"
+                Background="#55000000"
+                BorderBrush="#FFFFFFFF"
+                BorderThickness="2"
+                Visibility="Collapsed"
+                IsHitTestVisible="False">
+            <!-- VerticalAlignment/HorizontalAlignment=Center 缺一不可：
+                 Border 的子元素默认 Stretch，MinHeight 时文字会被顶到上边缘，
+                 看上去"没在方框正中间"。 -->
+            <TextBlock x:Name="LabelText"
+                       Foreground="#FFFFFFFF"
+                       FontSize="24"
+                       FontFamily="Microsoft YaHei UI, Microsoft YaHei, Segoe UI"
+                       TextAlignment="Center"
+                       TextWrapping="NoWrap"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Border>
+
+    </Canvas>
+</Window>

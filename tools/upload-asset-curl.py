@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 
-REPO = "QQQOrange/Keyboard-enhance"
+REPO = "QQQOrange/Input-Plus"
 
 
 class CREDENTIAL(ctypes.Structure):
@@ -60,7 +60,7 @@ def main():
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("Authorization: Bearer " + token + "\n")
             f.write("Accept: application/vnd.github+json\n")
-            f.write("User-Agent: CapsLockPlus-Release\n")
+            f.write("User-Agent: InputPlus-Release\n")
 
         # 同名旧资产先删掉（失败重传时留下的半截会挡住）
         listing = curl(["--max-time", "60",

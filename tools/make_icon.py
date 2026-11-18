@@ -2,7 +2,7 @@
 from PIL import Image, ImageDraw, ImageFilter
 import os
 
-OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "CapsLockPlus", "Assets")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "InputPlus", "Assets")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 BASE = 1024

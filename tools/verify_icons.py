@@ -30,7 +30,7 @@ def pixels(data):
 
 def main():
     changed = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD", "--", "src/CapsLockPlus/Assets/engine-icons"],
+        ["git", "diff", "--name-only", "HEAD", "--", "src/InputPlus/Assets/engine-icons"],
         cwd=ROOT, capture_output=True, text=True).stdout.split()
 
     print(f"比较 {len(changed)} 张改动过的图标")

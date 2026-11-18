@@ -1,0 +1,797 @@
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using InputPlus.Core.Input;
+using InputPlus.Core.Settings;
+using InputPlus.Core.Text;
+using InputPlus.Core.Windows;
+
+namespace InputPlus.Core.Actions;
+
+/// <summary>动作的展示信息（用于按键映射界面）。</summary>
+public sealed record ActionInfo(
+    string Id, string Category, string Title, string Description,
+    bool NeedsArg = false, string ArgHint = "", string ShortTitle = "",
+    bool Hidden = false)
+{
+    /// <summary>
+    /// 键帽上实际显示的文字。
+    ///
+    /// 有短名用短名；没有就自动截断 —— 键帽只有约 26px 宽，再长的文字必然被裁，
+    /// 不如主动截断保证"能认出前几个字"。
+    ///
+    /// 中英文的截法不同：中文一个字符占一格，截 5 个字信息量够；
+    /// 拉丁字母 5 个字符常常只截出半个单词（"Bright"），所以英文按**词**截，
+    /// 上限 9 个字符 —— 再多键帽就装不下了。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string KeycapTitle
+    {
+        get
+        {
+            string t = string.IsNullOrWhiteSpace(ShortTitle) ? Title : ShortTitle.Trim();
+            if (t.Length == 0) return t;
+
+            if (!NeedsCjkCut(t))
+                return t.Length <= 9 ? t : CutLatin(t);
+
+            return t.Length <= 5 ? t : t[..5];
+        }
+    }
+
+    /// <summary>
+    /// 分类名要按**当前语言**显示，但 <see cref="Category"/> 本身必须保持原文 ——
+    /// 它是各处比较用的**身份标识**（KeysView 的 `Tag as string == info.Category`、
+    /// 分类常量和自检断言都拿中文原文对），一旦翻译过就对不上了。
+    /// 所以"存原文、显示时翻"：显示走这个属性，比较走 Category。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string DisplayCategory => Localization.Loc.T(Category);
+
+    /// <summary>
+    /// 这段文字是否要按"中文字数"截断。
+    ///
+    /// 判据不是"有没有汉字"而是"有没有中日韩字形"—— `Qbar：Bing` 里一个汉字都没有，
+    /// 但那个全角冒号就是中文排版，整串仍该按 5 字截（它也确实放不进 26px 的键帽）。
+    /// 纯 ASCII 的英文标题才走"按词截、上限 9 字符"那条路。
+    /// </summary>
+    private static bool NeedsCjkCut(string t)
+        => t.Any(c =>
+            (c >= '\u3000' && c <= '\u303f') ||   // CJK 标点：、「」。等
+            (c >= '\u3400' && c <= '\u9fff') ||   // 表意文字（含扩展 A）
+            (c >= '\uf900' && c <= '\ufaff') ||   // 兼容表意文字
+            (c >= '\ufe30' && c <= '\ufe4f') ||   // CJK 兼容形式
+            (c >= '\uff00' && c <= '\uffef'));    // 全角字符：：？！（）等
+
+    private static string CutLatin(string t)
+    {
+        int sp = t.IndexOf(' ');
+        string head = sp > 0 && sp <= 9 ? t[..sp] : t;
+        return head.Length <= 9 ? head : head[..9];
+    }
+}
+
+/// <summary>
+/// 动作目录：动作 ID -> 显示名 + 执行逻辑。
+/// 界面的“按键映射”页完全由这个目录生成，所以新增动作只需要改这里一处。
+/// </summary>
+public sealed class ActionCatalog
+{
+    /// <summary>正在启动/等待窗口的自定义按键参数，防止连按重复拉起同一个程序。</summary>
+    private static readonly ConcurrentDictionary<string, byte> CustomKeyInFlight =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Func<string, bool>> _handlers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ActionInfo> _items = new();
+
+    public IReadOnlyList<ActionInfo> Items => _items;
+
+    /// <summary>
+    /// 动作 ID → 中文标题的全静态表。
+    ///
+    /// 为什么需要一张静态表：触发键的「短按动作」要在列表里显示成人话
+    /// （"保留按键原功能"而不是 `keepKey`），而那个显示属性在
+    /// `TriggerKey`（Core.Settings）上，拿不到某次运行时构造的
+    /// <see cref="ActionCatalog"/> 实例。
+    ///
+    /// 早先 `TriggerKey.Detail` 里写死了一个 switch，只覆盖
+    /// toggleCapsLock / esc / qbar / doNothing 四个 —— 用户把短按改成
+    /// 「保留按键原功能」后，列表上显示的却是 "无"，
+    /// 让人以为设置没保存成功。现在改成查这张表，新增动作自动就有名字。
+    /// </summary>
+    private static readonly Dictionary<string, string> StaticTitles =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>按 ID 取动作的标题（不存在时返回 null）。</summary>
+    public static string? TitleOf(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        // 表里存的是原文（身份/回退都用它），显示时按当前语言翻一次
+        return StaticTitles.TryGetValue(id, out var title) ? Localization.Loc.T(title) : null;
+    }
+
+    public ActionInfo? Get(string id) => _items.FirstOrDefault(i => i.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+    public bool Invoke(string id, string arg)
+    {
+        if (_handlers.TryGetValue(id, out var handler)) return handler(arg);
+        CoreLog.Warn($"未知动作：{id}");
+        return false;
+    }
+
+    /// <summary>
+    /// 注册一个动作。
+    ///
+    /// **目录是文本的显示出口**：几百条标题/说明/短名全在下面的 <see cref="Create"/> 里写中文，
+    /// 翻译统一在这里做一次，调用点不用包 Loc.T —— 否则那 300 多处会变成噪音。
+    /// 换语言时 <see cref="Create"/> 会重新跑一遍（AppHost.RebuildActions），
+    /// 所以目录里存的就是"当前语言"的文本。
+    ///
+    /// 唯独 <paramref name="category"/> 保持原文：它是各处比较用的身份标识，翻了就对不上。
+    /// </summary>
+    private void Add(string id, string category, string title, string desc, Func<string, bool> handler,
+                     bool needsArg = false, string argHint = "", string shortTitle = "",
+                     bool hidden = false)
+    {
+        _items.Add(new ActionInfo(
+            id, category,
+            Localization.Loc.T(title), Localization.Loc.T(desc),
+            needsArg, Localization.Loc.T(argHint), Localization.Loc.T(shortTitle), hidden));
+        _handlers[id] = handler;
+        StaticTitles[id] = title;      // 供 TriggerKey.Detail 等"离线显示"用（存原文，取时再翻）
+    }
+
+    public static ActionCatalog Create(ActionContext ctx)
+    {
+        var c = new ActionCatalog();
+
+        // ---------------- 基础 ----------------
+        c.Add("doNothing", "基础", "不绑定", "该组合键不执行任何动作", _ => true);
+        /* 「不绑定」和「禁用这个键」是两件事：
+         *   不绑定   = 没有规则，按键照常传给别的程序（原键替换层尤其重要）
+         *   禁用     = 有规则，把这个键吞掉、什么都不做
+         * 以前只有前者，用户想禁用一个键时只能靠"写一条 doNothing"，
+         * 而在替换层里这两者被混成了同一个效果 —— 中键到不了 wGesture 就是这么来的。 */
+        c.Add("swallowKey", "基础", "禁用这个键",
+            "按下后什么都不做，也不传给其它程序", _ => true, shortTitle: "禁用");
+        c.Add("toggleCapsLock", "基础", "切换大小写", "等价于按一下 CapsLock", _ => { HotkeyEngineToggle(); return true; }, shortTitle: "大小写");
+        c.Add("keepKey", "基础", "保留按键原功能",
+            "短按触发键 = 这个键本来的意思。把 F5 设为触发键时，短按就是刷新", _ => true);
+        /* 下面六条是「键盘按键」分类里的同款动作（Esc/回车/Tab/空格/退格/删除）。
+         *
+         * 分类列表里不再重复列出（hidden），但 id 一定不能删：老配置里
+         * `"action": "esc"` 这样的绑定还指着它，删掉就变成"找不到动作"。
+         * 留着它们，只是不让用户再从下拉里选一遍。 */
+        c.Add("esc", "基础", "Esc", "发送 Esc", _ => Send(VK_Esc), hidden: true);
+        c.Add("enter", "基础", "回车", "发送回车", _ => Send(VK_Enter), hidden: true);
+        c.Add("tab", "基础", "Tab", "发送 Tab", _ => Send(VK_Tab), hidden: true);
+        c.Add("space", "基础", "空格", "发送空格", _ => Send(VK_Space), hidden: true);
+        c.Add("backspace", "基础", "退格", "发送退格", _ => Send(VK_Back), hidden: true);
+        c.Add("delete", "基础", "删除", "发送 Delete", _ => Send(VK_Delete), hidden: true);
+        c.Add("openSettings", "基础", "打开设置", "打开 Input Plus 设置窗口", _ => { ctx.RequestOpenSettings(); return true; }, shortTitle: "设置");
+        c.Add("toggleEnabled", "基础", "启用/暂停", "临时暂停或恢复所有Input Plus热键", _ => { ctx.RequestToggleEnabled(); return true; }, shortTitle: "启暂停");
+
+        // ---------------- 键盘按键 ----------------
+        /* 每个键一条「发送这个键」的动作：为了发一个 F7 不必再绕「自定义按键」。
+         * 鼠标键归「鼠标功能」；纯修饰键不列 —— 单独发一下 Ctrl 没有任何意义。 */
+        foreach (int code in KeyName.BindableKeys)
+        {
+            if (InputDevices.IsMouseButton(code) || IsBareModifier(code)) continue;
+            if (KeyName.NameOf(code) is not { } keyName) continue;
+
+            int vk = code;                       // 循环变量不能直接被 lambda 捕获
+            string label = KeyName.Display(keyName);
+            c.Add("key:" + vk.ToString("X2"), "键盘按键", label, "发送 " + label,
+                _ => Send(vk), shortTitle: KeycapOf(keyName, label));
+        }
+
+        /* Win 是纯修饰键，上面的循环会跳过；但很多用户只想单独发一下开始菜单。
+         * 单独补两条，别让「键盘按键」分类里找不到 Windows 键。 */
+        c.Add("key:5B", "键盘按键", "Win 键", "发送左侧 Windows 键", _ => Send(VK.LWin), shortTitle: "Win");
+        c.Add("key:5C", "键盘按键", "右 Win 键", "发送右侧 Windows 键", _ => Send(VK.RWin), shortTitle: "右Win");
+
+        // ---------------- 光标 ----------------
+        c.Add("moveLeft", "光标移动", "左移", "光标左移一个字符（可长按连续）", a => SendRepeat(0x25, a));
+        c.Add("moveRight", "光标移动", "右移", "光标右移一个字符", a => SendRepeat(0x27, a));
+        c.Add("moveUp", "光标移动", "上移", "光标上移一行", a => SendRepeat(0x26, a));
+        c.Add("moveDown", "光标移动", "下移", "光标下移一行", a => SendRepeat(0x28, a));
+        c.Add("moveWordLeft", "光标移动", "左移一个单词", "Ctrl+←", a => SendCtrlRepeat(0x25, a), shortTitle: "词←");
+        c.Add("moveWordRight", "光标移动", "右移一个单词", "Ctrl+→", a => SendCtrlRepeat(0x27, a), shortTitle: "词→");
+        c.Add("home", "光标移动", "行首", "Home", _ => Send(VK_Home));
+        c.Add("end", "光标移动", "行尾", "End", _ => Send(VK_End));
+        c.Add("moveToPageBeginning", "光标移动", "文档开头", "Ctrl+Home", _ => SendCtrl(0x24));
+        c.Add("moveToPageEnd", "光标移动", "文档结尾", "Ctrl+End", _ => SendCtrl(0x23));
+        c.Add("pageUp", "光标移动", "上一页", "PgUp", _ => Send(0x21));
+        c.Add("pageDown", "光标移动", "下一页", "PgDn", _ => Send(0x22));
+        c.Add("pageMoveLineUp", "光标移动", "页面上移一行", "Ctrl+↑，光标不动", a => SendCtrlRepeat(0x26, a), shortTitle: "页↑");
+        c.Add("pageMoveLineDown", "光标移动", "页面下移一行", "Ctrl+↓，光标不动", a => SendCtrlRepeat(0x28, a), shortTitle: "页↓");
+        c.Add("enterWherever", "光标移动", "在行尾换行", "先 End 再回车（不管光标在哪）", _ => { Send(VK_End); Send(VK_Enter); return true; });
+
+        // ---------------- 选择 ----------------
+        c.Add("selectLeft", "文本编辑", "向左选中", "Shift+←", a => SendShiftRepeat(0x25, a), shortTitle: "选←");
+        c.Add("selectRight", "文本编辑", "向右选中", "Shift+→", a => SendShiftRepeat(0x27, a), shortTitle: "选→");
+        c.Add("selectUp", "文本编辑", "向上选中", "Shift+↑", a => SendShiftRepeat(0x26, a), shortTitle: "选↑");
+        c.Add("selectDown", "文本编辑", "向下选中", "Shift+↓", a => SendShiftRepeat(0x28, a), shortTitle: "选↓");
+        c.Add("selectWordLeft", "文本编辑", "向左选中单词", "Ctrl+Shift+←", a => SendCtrlShiftRepeat(0x25, a), shortTitle: "选词←");
+        c.Add("selectWordRight", "文本编辑", "向右选中单词", "Ctrl+Shift+→", a => SendCtrlShiftRepeat(0x27, a), shortTitle: "选词→");
+        c.Add("selectHome", "文本编辑", "选中到行首", "Shift+Home", _ => SendShift(0x24), shortTitle: "选行首");
+        c.Add("selectEnd", "文本编辑", "选中到行尾", "Shift+End", _ => SendShift(0x23), shortTitle: "选行尾");
+        c.Add("selectToPageBeginning", "文本编辑", "选中到文档开头", "Ctrl+Shift+Home", _ => SendCtrlShift(0x24), shortTitle: "选到首");
+        c.Add("selectToPageEnd", "文本编辑", "选中到文档结尾", "Ctrl+Shift+End", _ => SendCtrlShift(0x23), shortTitle: "选到尾");
+        c.Add("selectCurrentWord", "文本编辑", "选中当前单词", "Ctrl+← 再 Ctrl+Shift+→", _ => { SendCtrl(0x25); SendCtrlShift(0x27); return true; }, shortTitle: "选中词");
+        c.Add("selectCurrentLine", "文本编辑", "选中当前行", "Home 再 Shift+End", _ => { TextActions.SelectLine(); return true; }, shortTitle: "选行");
+        c.Add("selectAll", "文本编辑", "全选", "Ctrl+A", _ => SendCtrl(0x41));
+
+        // ---------------- 编辑 ----------------
+        c.Add("deleteLine", "文本编辑", "删除整行", "End + Shift+Home + 退格", _ => { Send(VK_End); SendShift(0x24); Send(VK_Back); return true; }, shortTitle: "删行");
+        c.Add("deleteToLineBeginning", "文本编辑", "删除到行首", "Shift+Home + 退格", _ => { SendShift(0x24); Send(VK_Back); return true; }, shortTitle: "删到首");
+        c.Add("deleteToLineEnd", "文本编辑", "删除到行尾", "Shift+End + 退格", _ => { SendShift(0x23); Send(VK_Back); return true; }, shortTitle: "删到尾");
+        c.Add("deleteToPageBeginning", "文本编辑", "删除到文档开头", "Ctrl+Shift+Home + 退格", _ => { SendCtrlShift(0x24); Send(VK_Back); return true; }, shortTitle: "删到顶");
+        c.Add("deleteToPageEnd", "文本编辑", "删除到文档结尾", "Ctrl+Shift+End + 退格", _ => { SendCtrlShift(0x23); Send(VK_Back); return true; }, shortTitle: "删到底");
+        c.Add("deleteWord", "文本编辑", "删除前一个单词", "Ctrl+Shift+← 再删除", _ => { SendCtrlShift(0x25); Send(VK_Delete); return true; }, shortTitle: "删词");
+        c.Add("forwardDeleteWord", "文本编辑", "删除后一个单词", "Ctrl+Shift+→ 再删除", _ => { SendCtrlShift(0x27); Send(VK_Delete); return true; }, shortTitle: "删词后");
+        c.Add("wrapSelection", "文本编辑", "用符号包裹选区", "例如把选中的文字变成 (文字)，参数为起始符号", a =>
+        {
+            string open = string.IsNullOrEmpty(a) ? "(" : a;
+            string close = open switch { "(" => ")", "[" => "]", "{" => "}", "<" => ">", "\"" => "\"", "'" => "'", _ => open };
+            TextActions.WrapSelection(open, close);
+            return true;
+        }, true, "例如 ( 或 [ 或 \"");
+
+        c.Add("deleteAll", "文本编辑", "清空内容", "Ctrl+A 再删除", _ => { SendCtrl(0x41); Send(VK_Delete); return true; });
+        c.Add("undoRedo", "文本编辑", "撤销 / 重做", "交替发送 Ctrl+Z 与 Ctrl+Y", _ => ctx.UndoRedo(), shortTitle: "撤销");
+        c.Add("upperCase", "文本编辑", "转大写", "把选中文本转成大写", _ => { TextActions.ChangeCase(TextActions.CaseMode.Upper); return true; });
+        c.Add("lowerCase", "文本编辑", "转小写", "把选中文本转成小写", _ => { TextActions.ChangeCase(TextActions.CaseMode.Lower); return true; });
+        c.Add("titleCase", "文本编辑", "首字母大写", "把选中文本转成词首大写", _ => { TextActions.ChangeCase(TextActions.CaseMode.Title); return true; });
+
+        // ---------------- 剪贴板 ----------------
+        c.Add("copy1", "剪贴板", "复制到剪贴板 1", "按下触发键 + C：复制到独立剪贴板 1", _ => ctx.Clipboard.Copy(1), shortTitle: "复制1");
+        c.Add("cut1", "剪贴板", "剪切到剪贴板 1", "按下触发键 + X", _ => ctx.Clipboard.Cut(1), shortTitle: "剪到1");
+        c.Add("paste1", "剪贴板", "粘贴剪贴板 1", "按下触发键 + V", _ => ctx.Clipboard.Paste(1), shortTitle: "粘1");
+        c.Add("copy2", "剪贴板", "复制到剪贴板 2", "按下触发键 + LAlt + C：复制到独立剪贴板 2", _ => ctx.Clipboard.Copy(2), shortTitle: "复制2");
+        c.Add("cut2", "剪贴板", "剪切到剪贴板 2", "按下触发键 + LAlt + X", _ => ctx.Clipboard.Cut(2), shortTitle: "剪到2");
+        c.Add("paste2", "剪贴板", "粘贴剪贴板 2", "按下触发键 + LAlt + V", _ => ctx.Clipboard.Paste(2), shortTitle: "粘2");
+        c.Add("pasteSystem", "剪贴板", "粘贴系统剪贴板", "恢复系统剪贴板后粘贴", _ => ctx.Clipboard.PasteSystem(), shortTitle: "粘系统");
+        c.Add("toggleClipboard", "剪贴板", "开关独立剪贴板", "开/关 Input Plus剪贴板功能", _ => ctx.Clipboard.ToggleEnabled(), shortTitle: "剪贴板");
+        c.Add("clipboardHistory", "剪贴板", "剪贴板历史", "查看并粘贴最近的复制内容", _ => { ctx.RequestOpenClipboardHistory(); return true; });
+
+        // ---------------- 面板 / 工具 ----------------
+        /* Qbar：参数填引擎关键字（如 bili / gh）就默认用那个引擎搜索，
+         * 留空 = 用上次的引擎。这样"面板里所有引擎"在按键映射里都能用，
+         * 又不用为每个引擎注册一个动作（那样动作会逼近 600 条，键盘页布局扛不住）。 */
+        c.Add("qbar", "基础", "Qbar 快速启动",
+            "打开 Qbar。参数可填搜索引擎关键字（bd / bili / gh…），留空则用上次的引擎",
+            a =>
+            {
+                string? key = string.IsNullOrWhiteSpace(a) ? null : a.Trim();
+                ctx.RequestQbar(key);
+                return true;
+            },
+            needsArg: true, argHint: "引擎关键字，可留空，如 bili", shortTitle: "Qbar");
+
+        // ---- 直接用指定搜索引擎开 Qbar ----
+        //
+        // 每个引擎一个动作（qbar:<关键字>），在「按键映射」页像普通动作一样
+        // 绑到任意层的任意按键。按下后弹出的 Qbar **默认就用这个引擎搜索**，
+        // 省得每次再在面板里选一次。
+        //
+        /* 注册**全部**引擎。
+         *
+         * 曾经担心"动作总数逼近 600 会让键盘页布局卡死"，于是只挑了 11 个常用引擎；
+         * 后来查明那次卡死是**粘键巡检定时器**在无人值守的渲染里空转导致的，
+         * 与动作条数无关（定时器现在在诊断模式下不启动）。所以全部引擎都放回来：
+         * 「按键映射」的搜索框能直接过滤，想绑哪个引擎都能选到。 */
+        foreach (var e in ctx.Settings().Search.Where(x =>
+                     !x.Key.Equals("default", StringComparison.OrdinalIgnoreCase) &&
+                     !string.IsNullOrWhiteSpace(x.Value)))
+        {
+            string key = e.Key;
+            string name = string.IsNullOrWhiteSpace(e.Comment) ? key : e.Comment;
+            c.Add("qbar:" + key, "Qbar 搜索",
+                Loc.F("Qbar：{0}", name),
+                Loc.F("打开 Qbar 并直接用「{0}」搜索", name),
+                _ => { ctx.RequestQbar(key); return true; });
+        }
+
+        /* 常用网址也注册成 qbar:<关键字>。
+         * 否则用户把 bili 绑到 Q 键时，动作列表里只有 bilis（B 站搜索），
+         * 没有“打开 B 站首页”这个动作。与搜索表同 Key 的条目跳过，
+         * 由搜索优先，避免动作 ID 重复。 */
+        var qbarActionKeys = new HashSet<string>(
+            ctx.Settings().Search
+                .Where(x => !x.Key.Equals("default", StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Key),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var e in ctx.Settings().Web.Where(x => !string.IsNullOrWhiteSpace(x.Value)))
+        {
+            string key = e.Key;
+            if (string.IsNullOrWhiteSpace(key) || !qbarActionKeys.Add(key)) continue;
+            string name = string.IsNullOrWhiteSpace(e.Comment) ? key : e.Comment;
+            c.Add("qbar:" + key, "Qbar 网址",
+                Loc.F("Qbar：{0}", name),
+                Loc.F("打开 Qbar 并直接打开「{0}」", name),
+                _ => { ctx.RequestQbar(key); return true; });
+        }
+        c.Add("mathBoard", "基础", "计算器", "打开带历史记录的计算器", _ => { ctx.RequestMathBoard(); return true; });
+        c.Add("tabScript", "基础", "Tab 计算 / 热字串", "把光标前的算式直接算出结果，或展开热字串", _ => ctx.RunTabScript(), shortTitle: "计算板");
+        c.Add("openDocs", "基础", "使用帮助", "打开内置帮助", _ => { ctx.RequestHelp(); return true; });
+        c.Add("reload", "基础", "重新加载配置", "重新读取设置并重装钩子", _ => { ctx.RequestReload(); return true; }, shortTitle: "重载");
+
+        // ---------------- 直接搜索 ----------------
+        //
+        // 用途：在任意程序里选中一段文字，按这个键 → 直接用指定引擎
+        // 在**默认浏览器**里搜索那段文字，不经过 Qbar 面板。
+        //
+        // 和「Qbar 搜索」分类的区别：
+        //   · Qbar 搜索 = 打开面板，预先选好引擎，用户再输入关键词
+        //   · 直接搜索 = 拿**当前选中的文本**直接去搜索，不弹面板
+        /* 注册**全部**搜索引擎（不只是常用那几个）。
+         *
+         * 「直接搜索」下拉里有搜索框可以过滤，所以即使有 300 多项也能快速找到 ——
+         * 不像「Qbar 搜索」那样受下拉长度限制。用户要求"把 Qbar 面板里
+         * 所有引擎都搬过来"。 */
+        foreach (var e in ctx.Settings().Search.Where(x =>
+                     !x.Key.Equals("default", StringComparison.OrdinalIgnoreCase) &&
+                     !string.IsNullOrWhiteSpace(x.Value)))
+        {
+            string key = e.Key;
+            string name = string.IsNullOrWhiteSpace(e.Comment) ? key : e.Comment;
+            c.Add("search:" + key, "直接搜索",
+                Loc.F("搜索：{0}", name),
+                Loc.F("在默认浏览器里用「{0}」搜索当前选中的文字", name),
+                a => ctx.SearchSelection(key, a),
+                needsArg: false, argHint: "",
+                shortTitle: name.Length <= 4 ? name : name[..4]);
+        }
+
+        // ---------------- 窗口 ----------------
+        c.Add("winPin", "窗口功能", "窗口置顶 / 取消", "让当前窗口永远在最前面", _ => ctx.Windows.ToggleTopmost(), shortTitle: "置顶");
+        c.Add("winTransparent", "窗口功能", "窗口透明度切换", "在几档透明度之间循环", _ => ctx.Windows.CycleOpacity(), shortTitle: "透明");
+        c.Add("winMinimize", "窗口功能", "最小化窗口", "最小化当前窗口", _ => ctx.Windows.Minimize());
+        c.Add("winMaximize", "窗口功能", "最大化 / 还原", "切换最大化状态", _ => ctx.Windows.ToggleMaximize(), shortTitle: "最大化");
+        c.Add("winClose", "窗口功能", "关闭窗口", "关闭当前窗口", _ => ctx.Windows.Close());
+        c.Add("winCenter", "窗口功能", "窗口居中", "把窗口移到屏幕中央", _ => ctx.Windows.Center());
+        c.Add("winSnapLeft", "窗口功能", "贴左半屏", "Win11 风格贴边", _ => ctx.Windows.Snap(SnapSide.Left));
+        c.Add("winSnapRight", "窗口功能", "贴右半屏", "Win11 风格贴边", _ => ctx.Windows.Snap(SnapSide.Right));
+        c.Add("winSnapTop", "窗口功能", "贴上半屏", "顶部半屏", _ => ctx.Windows.Snap(SnapSide.Top));
+        c.Add("winSnapBottom", "窗口功能", "贴下半屏", "底部半屏", _ => ctx.Windows.Snap(SnapSide.Bottom));
+        c.Add("winSnapTopLeft", "窗口功能", "贴左上角", "四分之一屏", _ => ctx.Windows.Snap(SnapSide.TopLeft));
+        c.Add("winSnapTopRight", "窗口功能", "贴右上角", "四分之一屏", _ => ctx.Windows.Snap(SnapSide.TopRight));
+        c.Add("winSnapBottomLeft", "窗口功能", "贴左下角", "四分之一屏", _ => ctx.Windows.Snap(SnapSide.BottomLeft));
+        c.Add("winSnapBottomRight", "窗口功能", "贴右下角", "四分之一屏", _ => ctx.Windows.Snap(SnapSide.BottomRight));
+        c.Add("winSendToBottom", "窗口功能", "窗口置底", "把窗口压到最下面", _ => ctx.Windows.SendToBottom());
+        c.Add("winNextApp", "窗口功能", "同程序下一个窗口", "在当前程序的窗口间循环", _ => ctx.Windows.CycleSameApp(false), shortTitle: "下窗口");
+        c.Add("winPrevApp", "窗口功能", "同程序上一个窗口", "反向循环", _ => ctx.Windows.CycleSameApp(true), shortTitle: "上窗口");
+        c.Add("winLeft", "窗口功能", "激活左边的窗口", "按屏幕位置找左边最近的窗口", _ => ctx.Windows.ActivateDirectional("l"), shortTitle: "左窗");
+        c.Add("winRight", "窗口功能", "激活右边的窗口", "按屏幕位置找右边最近的窗口", _ => ctx.Windows.ActivateDirectional("r"), shortTitle: "右窗");
+        c.Add("winUp", "窗口功能", "激活上边的窗口", "按屏幕位置找上边最近的窗口", _ => ctx.Windows.ActivateDirectional("u"), shortTitle: "上窗");
+        c.Add("winDown", "窗口功能", "激活下边的窗口", "按屏幕位置找下边最近的窗口", _ => ctx.Windows.ActivateDirectional("d"), shortTitle: "下窗");
+
+        /* 热角默认动作。Alt+Tab / Win+D 这类组合键必须走 SendInput，
+         * 不能只发一颗键 —— 系统级快捷键认的是修饰键的真实按下状态。 */
+        c.Add("switchNextApp", "窗口功能", "切换到下一个软件", "Alt+Tab：在打开的软件之间切换", _ =>
+        {
+            InputSender.Chord(VK.Menu, VK.Tab);
+            return true;
+        }, shortTitle: "下个软件");
+        c.Add("switchPrevApp", "窗口功能", "切换到上一个软件", "Alt+Shift+Tab：反向切换打开的软件", _ =>
+        {
+            InputSender.WithModifiers(new[] { VK.Menu, VK.Shift }, () => InputSender.Tap(VK.Tab));
+            return true;
+        }, shortTitle: "上个软件");
+        c.Add("showDesktop", "窗口功能", "显示桌面", "Win+D：最小化所有窗口 / 再按恢复", _ =>
+        {
+            InputSender.WithModifiers(new[] { VK.LWin }, () => InputSender.Tap(0x44)); // D
+            return true;
+        }, shortTitle: "显示桌面");
+        c.Add("prevDesktop", "窗口功能", "上一个虚拟桌面", "Ctrl+Win+←", _ =>
+        {
+            InputSender.WithModifiers(new[] { VK.Control, VK.LWin }, () => InputSender.Tap(VK.Left));
+            return true;
+        }, shortTitle: "上个桌面");
+        c.Add("nextDesktop", "窗口功能", "下一个虚拟桌面", "Ctrl+Win+→", _ =>
+        {
+            InputSender.WithModifiers(new[] { VK.Control, VK.LWin }, () => InputSender.Tap(VK.Right));
+            return true;
+        }, shortTitle: "下个桌面");
+
+        // ---------------- 鼠标功能 ----------------
+        /* 分类名从「鼠标」改成「鼠标功能」：里面不光有移动，还有点击中键/侧键和滚轮，
+         * 叫「鼠标」会让人以为只是移动。 */
+        c.Add("mouseLeft", "鼠标功能", "鼠标左移", "可长按加速", _ => ctx.Mouse.Move(-1, 0));
+        c.Add("mouseRight", "鼠标功能", "鼠标右移", "可长按加速", _ => ctx.Mouse.Move(1, 0));
+        c.Add("mouseUp", "鼠标功能", "鼠标上移", "可长按加速", _ => ctx.Mouse.Move(0, -1));
+        c.Add("mouseDown", "鼠标功能", "鼠标下移", "可长按加速", _ => ctx.Mouse.Move(0, 1));
+        c.Add("clickLeft", "鼠标功能", "鼠标左键", "点击左键", _ => { InputSender.Click(false); return true; }, shortTitle: "左键");
+        c.Add("clickRight", "鼠标功能", "鼠标右键", "点击右键", _ => { InputSender.Click(true); return true; }, shortTitle: "右键");
+        c.Add("clickMiddle", "鼠标功能", "鼠标中键", "点击中键", _ =>
+        {
+            /* 告诉手势服务“这颗中键是改键发出来的”，允许它当手势起点：
+             * 用户把侧键换成中键，就是希望中键上的手势照样能用。 */
+            InputSender.AllowGesturePass(VK_Middle);
+            return Send(VK_Middle);
+        }, shortTitle: "中键");
+        c.Add("clickX1", "鼠标功能", "鼠标侧键 1", "点击侧键 1（通常是「后退」）", _ => Send(VK_X1), shortTitle: "侧1");
+        c.Add("clickX2", "鼠标功能", "鼠标侧键 2", "点击侧键 2（通常是「前进」）", _ => Send(VK_X2), shortTitle: "侧2");
+        c.Add("wheelUp", "鼠标功能", "滚轮上滚", "向上滚动", a => { InputSender.Wheel(ParseInt(a, 3)); return true; });
+        c.Add("wheelDown", "鼠标功能", "滚轮下滚", "向下滚动", a => { InputSender.Wheel(-ParseInt(a, 3)); return true; });
+        c.Add("wheelLeft", "鼠标功能", "滚轮左拨", "向左滚动（水平滚轮）",
+            a => { InputSender.Wheel(-Math.Abs(ParseInt(a, 3)), horizontal: true); return true; }, shortTitle: "左拨");
+        c.Add("wheelRight", "鼠标功能", "滚轮右拨", "向右滚动（水平滚轮）",
+            a => { InputSender.Wheel(Math.Abs(ParseInt(a, 3)), horizontal: true); return true; }, shortTitle: "右拨");
+        c.Add("mouseSpeedUp", "鼠标功能", "鼠标速度 +", "进入层并按住 LAlt 时的鼠标速度加一", _ => ctx.ChangeMouseSpeed(1), shortTitle: "鼠速+");
+        c.Add("mouseSpeedDown", "鼠标功能", "鼠标速度 -", "鼠标速度减一", _ => ctx.ChangeMouseSpeed(-1), shortTitle: "鼠速-");
+
+        // ---------------- 系统功能 ----------------
+        //
+        // 一整组"按一下就生效"的系统级操作：媒体控制、音量、亮度、
+        // 常用系统工具。集中在一个分类里，用户不必在「系统」里翻。
+        c.Add("mediaPrev", "系统功能", "上一首", "媒体键：跳到上一首", _ => Send(0xB1));
+        c.Add("mediaNext", "系统功能", "下一首", "媒体键：跳到下一首", _ => Send(0xB0));
+        c.Add("mediaPlayPause", "系统功能", "播放 / 暂停", "媒体键：播放或暂停", _ => Send(0xB3), shortTitle: "播放");
+        c.Add("mediaStop", "系统功能", "停止播放", "媒体键：停止", _ => Send(0xB2));
+        /* 音量：发**系统音量键**（VK_VOLUME_UP/DOWN）。
+         *
+         * 这样 Windows 自己调音量、自己弹那条横条 —— 用户要的就是系统那个，
+         * 自绘永远做不像。步进也就跟着系统的走（通常 2%），
+         * 参数不再控制步进，只在媒体键被吞时用作兜底的调整量。
+         * 按住会连续发，见 HotkeyEngine.IsContinuous。 */
+        c.Add("volumeUp", "系统功能", "音量 +",
+            "系统音量键：调高音量并弹出 Windows 自带的横条（可在下面单独填步进，留空用设置里的幅度；按住连续调）",
+            a => ctx.ChangeVolume(StepOr(a, ctx.VolumeStep)), shortTitle: "音量+");
+        c.Add("volumeDown", "系统功能", "音量 -",
+            "系统音量键：调低音量并弹出 Windows 自带的横条（可在下面单独填步进，留空用设置里的幅度；按住连续调）",
+            a => ctx.ChangeVolume(-StepOr(a, ctx.VolumeStep)), shortTitle: "音量-");
+        c.Add("volumeMute", "系统功能", "静音", "静音 / 取消静音（切换）",
+            _ => ctx.ToggleMute(), shortTitle: "静音");
+
+        c.Add("openCalculator", "系统功能", "打开计算器",
+            "打开 Windows 自带的计算器",
+            _ => { ctx.RunProgram("calc.exe"); return true; }, shortTitle: "计算器");
+
+        /* 亮度：WMI（内置屏）→ DDC/CI（外接屏）。两条都不通时给明确提示 ——
+         * 用户按了没反应会以为按键坏了。 */
+        c.Add("brightnessUp", "系统功能", "亮度 +",
+            "屏幕亮度提高（可在下面单独填步进，留空用设置里的幅度；横条会平滑爬升，"
+            + "按住越久每步越大，约 0.7 秒到满速 2.5 倍；外接屏需开启 DDC/CI）",
+            a => ctx.ChangeBrightness(StepOr(a, ctx.BrightnessStep), IsRepeat(a)),
+            shortTitle: "亮+");
+        c.Add("brightnessDown", "系统功能", "亮度 -",
+            "屏幕亮度降低（可在下面单独填步进，留空用设置里的幅度；横条会平滑爬升，"
+            + "按住越久每步越大，约 0.7 秒到满速 2.5 倍；外接屏需开启 DDC/CI）",
+            a => ctx.ChangeBrightness(-StepOr(a, ctx.BrightnessStep), IsRepeat(a)),
+            shortTitle: "亮-");
+
+        c.Add("openStartMenu", "系统功能", "开始菜单", "打开 Windows 开始菜单", _ =>
+        {
+            InputSender.Tap(VK.LWin);
+            return true;
+        }, shortTitle: "开始菜单");
+        c.Add("openQuickSettings", "系统功能", "快速设置", "Win+A 打开 Windows 快速设置", _ =>
+        {
+            InputSender.WithModifiers(new[] { VK.LWin }, () => InputSender.Tap(0x41));
+            return true;
+        }, shortTitle: "快速设置");
+        c.Add("openExplorer", "系统功能", "打开文件资源管理器",
+            "打开「此电脑」", _ => { ctx.RunProgram("explorer.exe"); return true; }, shortTitle: "资源");
+        c.Add("openTaskManager", "系统功能", "打开任务管理器",
+            "打开任务管理器", _ => { ctx.RunProgram("taskmgr.exe"); return true; }, shortTitle: "任务");
+        /* 运行程序 —— 老 id 不变，直接升级成正式可见动作。
+         *
+         * 以前它和「打开网址」一起被藏起来，理由是"直达链接能覆盖"。
+         * 但「直达链接」只能开 网址 / 文件夹 / 文件，**带参数的命令行**它做不到
+         * （notepad.exe D:\笔记.txt、cmd.exe /c …）。
+         * 藏起来之后，老配置里的「强制退出」「任务管理器」「休眠」这类手势
+         * 在下拉里只剩一条"旧功能，建议换掉"，用户又找不到等价的新功能。
+         * 现在放回「系统功能」并补上 needsArg —— 参数框会正常显示，
+         * 选它就能直接填命令行。 */
+        c.Add("runProgram", "系统功能", "运行程序 / 命令",
+            "运行参数里的程序或命令，可以带参数（例如 notepad.exe D:\\笔记.txt）",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("要运行的程序") : Run(() => ctx.RunProgram(a)),
+            needsArg: true, argHint: "例如 notepad.exe D:\\笔记.txt", shortTitle: "运行");
+        c.Add("lockScreen", "系统功能", "锁定屏幕", "立即锁定当前会话", _ =>
+        {
+            // Win+L 走 SendInput 会被系统当成注入组合键忽略；直接锁会话最可靠。
+            if (!LockWorkStation()) InputSender.Chord(VK.LWin, 0x4C);
+            return true;
+        });
+        c.Add("screenshot", "系统功能", "截图", "调用系统截图工具", _ => ctx.Screenshot());
+
+        /* 强制退出当前前台程序。
+         * 和「窗口功能 → 关闭窗口」不是一回事：那个发 WM_CLOSE（程序还能弹「要保存吗」），
+         * 这个直接结束进程 —— 卡死不动、关不掉弹窗、没有窗口的托盘程序都能收掉。
+         * 自己 / 桌面外壳 / 系统关键进程在 ForceKill 里挡掉，判定有自检覆盖。 */
+        c.Add("killApp", "系统功能", "强制退出当前应用",
+            "直接结束当前前台窗口所属的进程，不会询问是否保存；自己、桌面和系统关键进程会被跳过",
+            _ =>
+            {
+                var killed = ForceKill.Foreground();
+                if (killed.Message.Length > 0) ctx.Notify(killed.Message);
+                return killed.Ok;
+            }, shortTitle: "强退");
+
+        // ---------------- 兼容动作（不再显示，仅保留执行兼容） ----------------
+        //
+        // 「打开网址」从界面上撤掉了：它的用途已经被「直达链接」分类（预填网址）
+        // 和「智能直达」分类（选中什么就开什么）完整覆盖 —— 三个入口指向同一件事，
+        // 用户只会纠结"我该在哪个分类里填地址"。
+        //
+        // 但**不能直接删掉**：老配置里可能已经绑了它，
+        // 删掉后按键会变成"未知动作"，按下去毫无反应。
+        // 所以保留执行能力、标记 Hidden；启动时 LegacyActionMigration
+        // 会把老绑定换成「直达网址」（参数原样带走），界面上不会再出现这条。
+        c.Add("openUrl", "系统", "打开网址", "打开参数里的网址",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("网址") : Run(() => ctx.OpenUrl(a)),
+            hidden: true);
+
+        // ---------------- 智能直达 ----------------
+        //
+        // 这一类只有**一个**动作：目标来自当前选中的文字，按下才知道。
+        //
+        // 早先这里叫「系统」，下面并列着「打开网址」「运行程序」「直达链接」三项。
+        // 但前两项都要预先填好固定地址/程序，和「直达链接」分类里
+        // 预填的直达网址 / 直达文件夹 / 直达文件**语义完全重复** ——
+        // 用户看到两个地方都能填网址，不知道该用哪个。
+        //
+        // 现在是：预填的归「直达链接」分类（那里有专用面板、能写备注），
+        // 选中的归「智能直达」分类（这里一个动作就够）。
+        c.Add("smartOpen", "智能直达", "智能直达",
+            "先选中一段文字再按这个键：是网址就用浏览器打开，是文件夹就用资源管理器打开，是文件就用默认程序打开",
+            _ => ctx.SmartOpen(), shortTitle: "智能直达");
+
+        // ---------------- 直达链接 ----------------
+        //
+        // 这一类下面有三个动作：直达网址 / 直达文件夹 / 直达文件。
+        // 共同点：目标**预先填好**，按键时照单打开，不需要选区。
+        // 选了「直达链接」分类后，界面会换成"类型 + 目标 + 备注"的专用面板
+        // （见 KeysView），备注还能显示在键帽上。
+        //
+        // 与「系统 → 直达链接」的区别：
+        //   预填 = 常用地址一键直达（每天点的后台、常开的工作目录）
+        //   智能 = 眼前临时出现的东西，选中即开，不用配置
+        //
+        // 为什么单独建动作而不是复用「系统 → 打开网址」：
+        // 界面要根据分类切换到专用面板，复用的话用户在「系统」分类里
+        // 选「打开网址」就看不到备注框，也不会出现文件夹/文件那一套。
+        c.Add("webPage", "直达链接", "直达网址",
+            "用默认浏览器打开这个网址；可以加备注，备注会显示在键帽上",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("网址") : Run(() => ctx.OpenUrl(a)),
+            needsArg: true);
+
+        c.Add("openFolder", "直达链接", "直达文件夹",
+            "在文件资源管理器里打开这个文件夹；可以加备注，备注会显示在键帽上",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("文件夹路径") : Run(() => ctx.OpenFolder(a)),
+            needsArg: true);
+
+        c.Add("openFile", "直达链接", "直达文件",
+            "用系统默认程序打开这个文件（.docx 进 Word、.mp4 进播放器，跟双击一样）；可以加备注，备注会显示在键帽上",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("文件路径") : Run(() => ctx.OpenFile(a)),
+            needsArg: true);
+
+        // ---------------- 自定义按键 ----------------
+        //
+        // 这一类只有一个动作，参数全在 Arg 里的 JSON（见 CustomKeySpec）。
+        //
+        // 它解决的是"把某个键转发给某个常驻程序"这件事：
+        // 例如把 F13 绑给微信 —— 按下时先确认微信在跑（没跑就先拉起来），
+        // 再把 F13 发过去。以前这个能力散在「窗口绑定」里，
+        // 而窗口绑定只管"切过去"，管不了"切过去再按一下某个键"。
+        //
+        // 为什么不做成参数框里的纯文本：一个动作要记住"键 + 应用 + 两个开关"，
+        // 纯文本既不好解析也不好给用户编辑，所以给这一类配了专用面板（见 KeysView），
+        // Arg 只是它的序列化形式。
+        c.Add("customKey", "自定义按键", "发送按键（可绑定应用）",
+            "先确认绑定的应用在运行（没运行就先启动），再把设定的键发给它",
+            a =>
+            {
+                var spec = CustomKeySpec.FromArg(a);
+
+                /* 不绑定应用时只是向当前前台发一次键，必须同步、立即完成。
+                 * 绑定应用时可能要等冷启动窗口 6 秒 + 额外等待 10 秒；
+                 * 动作队列是单线程，不能让它把后续所有热键都堵住。
+                 * 放到后台执行，失败仍通过同一个 Toast 出口提示。 */
+                if (!spec.HasApp)
+                {
+                    var r = CustomKeyRunner.Run(spec);
+                    if (!string.IsNullOrWhiteSpace(r.Message)) ctx.Notify(r.Message);
+                    return r.Ok;
+                }
+
+                string inflightKey = a ?? "";
+                if (!CustomKeyInFlight.TryAdd(inflightKey, 0)) return true;
+                _ = System.Threading.Tasks.Task.Run(() =>
+                {
+                    try
+                    {
+                        var r = CustomKeyRunner.Run(spec);
+                        if (!string.IsNullOrWhiteSpace(r.Message)) ctx.Notify(r.Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        CoreLog.Warn("自定义按键后台执行失败：" + ex.Message);
+                        ctx.Notify(UiText.Failed("自定义按键", ex.Message));
+                    }
+                    finally
+                    {
+                        CustomKeyInFlight.TryRemove(inflightKey, out _);
+                    }
+                });
+                return true;
+            },
+            needsArg: false, shortTitle: "自定义");
+
+        // ---------------- 输入文本 ----------------
+        //
+        // 把一段预设文字直接打到**当前焦点所在的输入框**里。
+        // 适合邮箱、地址、常用签名这类反复要敲的内容。
+        //
+        // 逐字符用 Unicode 方式发送（不碰剪贴板），所以：
+        //   · 中文、emoji 都能发
+        //   · 不会覆盖用户剪贴板里的内容
+        //   · 走 IME 路径，输入法正常
+        c.Add("typeText", "输入文本", "输入一段文字",
+            "把这段文字直接输入到当前光标处（支持中文与 emoji）",
+            a => string.IsNullOrEmpty(a) ? ctx.MissingArg("要输入的文字") : ctx.TypeText(a),
+            needsArg: true);
+
+        // ---------------- 窗口绑定 ----------------
+        //
+        // 只有一个动作。用户在「分类」里选「窗口绑定」后，界面**不再显示功能下拉**，
+        // 而是直接给出两个按钮（点选窗口 / 选择程序文件）—— 因为"绑哪个窗口"
+        // 是去抓来的，不是从列表里选出来的。
+        //
+        // 旧的 10 个固定槽位动作已彻底移除：它们只会让下拉里多出 20 个
+        // 「激活窗口槽位 N / 绑定到窗口槽位 N」的噪声，与现在的用法重复。
+        //
+        // 第三个参数把设置传进去 —— 有它才播「唤出动画」（见 WindowSummonAnimator）。
+        c.Add("winBind", "窗口绑定", "切换窗口",
+            "选定一个程序后：按一下切过去，再按一次最小化；没开就自动启动",
+            a => ctx.WindowBindings.ActivateExe(a, "winBind:" + a, ctx.Settings()),
+            needsArg: true);
+
+        /* 唯一的槽位动作。Capslox 3.0 里 cx-alt-1..0 是「把当前窗口记到槽位 N」，
+         * 槽位本身又是 Caps+1~0 的切换目标。这里不新增 20 个槽位动作，
+         * 只留这一个带参数的捕获动作：它把前台窗口的 exe 写进
+         * WindowSlots，并把第 1 层的 caps_<N> 改成普通的 winBind 绑定 ——
+         * 于是切换、循环、没开就启动这些行为全部复用 ActivateExe，零重复实现。 */
+        c.Add("bindWindowSlot", "窗口绑定", "记住当前窗口到槽位",
+            "把当前前台窗口记到 1~10 号槽位，并把第 1 层的 Caps+数字 改成切换它",
+            a =>
+            {
+                int slot = WindowSlotBinder.ParseSlot(a);
+                if (slot == 0)
+                {
+                    ctx.Notify(Loc.F("槽位号必须是 1~{0}", WindowSlotBinder.SlotCount));
+                    return false;
+                }
+
+                var info = WindowService.ForegroundInfo();
+                string path = info?.ExePath ?? "";
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    ctx.Notify("前台没有可用的程序窗口，先切到要记住的那个窗口再按");
+                    return false;
+                }
+
+                var settings = ctx.Settings();
+                if (!WindowSlotBinder.TryBind(settings, slot, path, info!.ExeName, out string message))
+                {
+                    ctx.Notify(message);
+                    return false;
+                }
+
+                SettingsStore.RequestSave(settings);
+                ctx.Notify(message);
+                return true;
+            },
+            needsArg: true, argHint: "1~10", shortTitle: "记住槽位");
+
+        // ---------------- 宏 ----------------
+        // 宏动作 ID 形如 macro:<宏ID>，参数可覆盖重复次数。
+        // 每个宏一个动作，这样就能像普通动作一样绑到任意层的任意按键上。
+        foreach (var macro in ctx.Settings().Macros)
+        {
+            string id = macro.Id;
+            string name = macro.DisplayName;
+            int estMs = macro.EstimatedMs;
+            c.Add("macro:" + id, "宏", Loc.F("播放宏：{0}", name),
+                Loc.F("共 {0} 步，约 {1}ms", macro.Steps.Count, estMs),
+                a => ctx.PlayMacro(id, a));
+        }
+        c.Add("macroManager", "宏", "打开宏管理", "录制 / 编辑 / 绑定宏", _ => { ctx.RequestOpenMacros(); return true; });
+
+        return c;
+    }
+
+    /// <summary>
+    /// 执行一个"没有返回值"的动作，并按成功返回。
+    ///
+    /// 这些动作（打开网址 / 文件夹 / 文件 / 运行程序）内部已经处理了
+    /// 自己的失败与提示，这里只负责把它们变成 ActionCatalog 需要的 bool。
+    /// </summary>
+    private static bool Run(Action action)
+    {
+        action();
+        return true;
+    }
+
+    // ---------------- 小工具 ----------------
+    private const int VK_Back = 0x08, VK_Tab = 0x09, VK_Enter = 0x0D, VK_Esc = 0x1B, VK_Space = 0x20,
+                      VK_Home = 0x24, VK_End = 0x23, VK_Delete = 0x2E,
+                      VK_Middle = 0x04, VK_X1 = 0x05, VK_X2 = 0x06;
+
+    /// <summary>纯修饰键：单独"发一下"没有意义，不进「键盘按键」列表。</summary>
+    private static bool IsBareModifier(int vk)
+        => vk is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C
+            or >= 0xA0 and <= 0xA5;
+
+    /// <summary>
+    /// 键帽上最多放 5 个字（见 <see cref="ActionInfo.KeycapTitle"/>）。
+    /// 长键名给一个能认出原键的中文短名，剩下的按前 5 个字符截。
+    /// </summary>
+    private static string KeycapOf(string keyName, string label)
+    {
+        string? shortName = keyName switch
+        {
+            "backspace" => "退格",
+            "capslock" => "大写",
+            "printScreen" => "截屏",
+            "insert" => "插入",
+            "delete" => "删除",
+            "numLock" => "数字",
+            "scrollLock" => "滚动",
+            "pageUp" => "上页",
+            "pageDown" => "下页",
+            "space" => "空格",
+            "enter" => "回车",
+            "apps" => "菜单",
+            "pause" => "暂停",
+            _ => null,
+        };
+
+        if (shortName != null) return shortName;
+        return label.Length <= 5 ? label : label[..5];
+    }
+
+    private static bool Send(int vk) { InputSender.Tap(vk); return true; }
+    private static bool SendCtrl(int vk) { InputSender.Ctrl(vk); return true; }
+    private static bool SendShift(int vk) { InputSender.Shift(vk); return true; }
+    private static bool SendCtrlShift(int vk) { InputSender.CtrlShift(vk); return true; }
+    private static bool SendRepeat(int vk, string arg) { InputSender.Tap(vk, ParseInt(arg, 1)); return true; }
+    private static bool SendCtrlRepeat(int vk, string arg) { for (int i = 0; i < ParseInt(arg, 1); i++) InputSender.Ctrl(vk); return true; }
+    private static bool SendShiftRepeat(int vk, string arg) { for (int i = 0; i < ParseInt(arg, 1); i++) InputSender.Shift(vk); return true; }
+    private static bool SendCtrlShiftRepeat(int vk, string arg) { for (int i = 0; i < ParseInt(arg, 1); i++) InputSender.CtrlShift(vk); return true; }
+
+    /// <summary>音量步进：默认 5%，参数可以覆盖（允许 1~100）。</summary>
+    /// <summary>
+    /// 动作参数优先，没填就用设置里的幅度。
+    ///
+    /// 引擎按住连发时会传 "1" —— 那就是"这一步只走 1%"，
+    /// 不需要再靠时间窗口去猜是不是连发。
+    ///
+    /// 上限夹到 100：参数是手填的，写成 999 会让"按一下"直接跳到头。
+    /// </summary>
+    /// <summary>
+    /// 引擎连发时明确传 arg="1"（见 HotkeyEngine.RepeatState）。
+    /// 用它来区分"按住"和"按一下"—— 比按时间窗口猜稳得多。
+    /// </summary>
+    private static bool IsRepeat(string? arg) => string.Equals(arg, "1", StringComparison.Ordinal);
+
+    /// <summary>仅供自检：连发标记的判定规则。</summary>
+    internal static bool IsRepeatForTest(string? arg) => IsRepeat(arg);
+
+    private static int StepOr(string? arg, int fallback)
+        => int.TryParse(arg, out var v) && v > 0 ? Math.Clamp(v, 1, 100) : fallback;
+
+    /// <summary>仅供自检：步进参数的取值与夹取规则。</summary>
+    internal static int StepOrForTest(string? arg, int fallback) => StepOr(arg, fallback);
+
+    private static int VolumeStep(string? arg)
+        => int.TryParse(arg, out var v) ? Math.Clamp(v, 1, 100) : Core.Windows.VolumeService.DefaultStep;
+
+    internal static int ParseInt(string? s, int fallback)
+        => int.TryParse(s, out var v) ? Math.Clamp(v, 1, 200) : fallback;
+
+    private static void HotkeyEngineToggle() => HotkeyEngine.ToggleCapsLock();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool LockWorkStation();
+}

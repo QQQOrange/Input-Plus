@@ -1,11 +1,11 @@
-"""创建 GitHub Release 并上传发布产物（KeyboardEnhance.exe）。
+"""创建 GitHub Release 并上传发布产物（InputPlus.exe）。
 
 凭据来自 Windows 凭据管理器（git push 时已在用），无需额外授权。
 
 用法：
     set CLP_TAG=v4.5.18
-    set CLP_NAME=按键增强 v4.5.18 · ...
-    python tools/publish-release.py dist\\KeyboardEnhance.exe notes.md
+    set CLP_NAME=Input Plus v4.5.18 · ...
+    python tools/publish-release.py dist\\InputPlus.exe notes.md
 """
 import ctypes
 import ctypes.wintypes as w
@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-API = "https://api.github.com/repos/QQQOrange/Keyboard-enhance"
+API = "https://api.github.com/repos/QQQOrange/Input-Plus"
 TAG = os.environ.get("CLP_TAG", "v1.0.1")
 NAME = os.environ.get("CLP_NAME", "CapsLock+ 图形版 " + TAG)
 
@@ -52,7 +52,7 @@ def main():
     token = read_token()
     hdr = {
         "Authorization": "Bearer " + token,
-        "User-Agent": "CapsLockPlus-Release",
+        "User-Agent": "InputPlus-Release",
         "Accept": "application/vnd.github+json",
     }
 

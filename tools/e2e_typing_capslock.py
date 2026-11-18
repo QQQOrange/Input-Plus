@@ -96,8 +96,8 @@ def main():
     data = os.path.join(ROOT, f"out-e2e-caps-{stamp}")
     os.makedirs(data, exist_ok=True)
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = data
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = f"_e2e_caps_{stamp}"
+    env["INPUTPLUS_DATA"] = data
+    env["INPUTPLUS_MUTEX_SUFFIX"] = f"_e2e_caps_{stamp}"
 
     if not os.path.exists(EXE):
         print(f"找不到 exe：{EXE}")

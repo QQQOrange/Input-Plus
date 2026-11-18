@@ -1,0 +1,1187 @@
+using System;
+using System.Collections.Generic;
+using System.Management;
+using System.Runtime.InteropServices;
+using static InputPlus.Core.Interop.NativeMethods;
+
+namespace InputPlus.Core.Windows;
+
+/// <summary>亮度调节走的是哪条通道。</summary>
+public enum BrightnessBackend
+{
+    /// <summary>还没探测。</summary>
+    Unknown,
+
+    /// <summary>WMI（WmiMonitorBrightnessMethods）—— 笔记本内置屏。</summary>
+    Wmi,
+
+    /// <summary>DDC/CI（dxva2.dll，VCP 0x10）—— 台式机外接显示器。</summary>
+    Ddc,
+
+    /// <summary>两条都不通。</summary>
+    Unsupported,
+}
+
+/// <summary>
+/// 屏幕亮度调节。两条通道按顺序探测：
+///
+///   ① WMI（root\wmi → WmiMonitorBrightnessMethods）
+///      笔记本内置屏、少数驱动完整的外接屏支持。写入快（一次 30~80ms），
+///      不闪屏，是首选。
+///
+///   ② DDC/CI（dxva2.dll → SetVCPFeature，VCP 0x10）
+///      台式机外接显示器走这条：直接通过显示线缆跟显示器固件对话。
+///      绝大多数 2010 年后的显示器支持，但**需要在显示器菜单里打开 DDC/CI**
+///      （部分型号默认关闭）。代价是慢（一次 100~300ms），个别屏会闪一下。
+///
+/// 两条都不通 → <see cref="AddTarget"/> 返回 null，由上层明确提示"设备不支持"，
+/// 而不是静默失败 —— 按了没反应会被当成按键坏了。
+///
+/// ================== 线程模型（v4.3.0 重写） ==================
+///
+/// 上一版只有一把大盘锁 <c>Gate</c>，按键路径和后台推进线程抢同一把：
+/// 后台正在写 DDC（一次 100~250ms）时，用户的按键要排队等它；
+/// 而按住连发每 45ms 就来一次 —— 队列越积越长，等用户调完亮度、
+/// 手还按着触发键再去按音量键时，动作被前面几十条亮度任务堵住，
+/// 表现就是"按音量完全没反应"。这就是本次要修的根因。
+///
+/// 现在拆成两把锁，职责清清楚楚：
+///   · <see cref="TinyGate"/> —— 只保护 <c>_target</c> / <c>_last</c> 几个 int，
+///     按键路径只碰它，持锁时间以纳秒计，永不等待硬件；
+///   · <see cref="HwGate"/> —— 真实硬件读写（WMI / DDC），
+///     只允许后台推进线程和"第一次探测"持有，慢也没关系。
+///
+/// 锁顺序永远是 HwGate → TinyGate，不会反向，因此不会死锁。
+/// </summary>
+public static class BrightnessService
+{
+    private const string Scope = @"root\wmi";
+    private const string ClassMethods = "WmiMonitorBrightnessMethods";
+    private const string ClassState = "WmiMonitorBrightness";
+
+    /// <summary>DDC/CI 里"亮度"的 VCP 代码（VESA MCCS 标准）。</summary>
+    private const byte VcpBrightness = 0x10;
+
+    /// <summary>
+    /// 相邻两次 DDC/CI 写入的最小间隔（毫秒）。
+    ///
+    /// DDC/CI 走 I²C，显示器固件处理一条命令要几十毫秒，间隔太密会被**直接丢弃**，
+    /// 表现就是"连按几下只有第一下生效"。Twinkle Tray 也是按 VCP 码做节流的。
+    /// 35ms 是"不丢命令"和"按住时跟得上"之间的折中。
+    /// </summary>
+    private const int DdcMinGapMs = 35;
+
+    /// <summary>两次平滑推进之间让出 CPU 的时间（毫秒）。</summary>
+    private const int FastGapMs = 14;
+
+    /// <summary>
+    /// 单步最多走多少个百分点。
+    ///
+    /// 太小追不上按住的速度（目标每秒涨 20% 以上），
+    /// 太大会在画面上一跳一跳。
+    /// </summary>
+    private const int MaxStepPerTick = 6;
+
+    /// <summary>追上目标后隔多久回读一次，校正"命令被显示器丢了"的情况。</summary>
+    private const int SettleVerifyMs = 900;
+
+    /// <summary>目标值与硬件回读差多少才算需要重新对齐。</summary>
+    private const int SettleTolerance = 1;
+
+    /// <summary>连续多少次回读都对不上，就认为显示器有自己的想法，以实际值为准。</summary>
+    private const int SettleGiveUpTimes = 3;
+
+    /// <summary>
+    /// 刚调完的这段时间内，回读不一致视为"命令被丢了"，要纠正；
+    /// 超过这段时间就不再硬掰 —— 用户很可能是自己按了显示器上的按键。
+    /// </summary>
+    private const int SettleCorrectionWindowMs = 2500;
+
+    /* ---- 两把锁：按键路径 / 硬件路径 ---- */
+    private static readonly object TinyGate = new();
+    private static readonly object HwGate = new();
+
+    /// <summary>
+    /// 叫醒推进线程。
+    ///
+    /// 目标没变时推进线程在 WaitOne 上睡着（不占 CPU），
+    /// 用户一按键就 Set() 把它立刻叫起来 —— 既省电又不拖延迟。
+    /// </summary>
+    private static readonly AutoResetEvent Wake = new(false);
+
+    private static long _lastDdcWriteTick;
+
+    /// <summary>上一次写失败的目标值（同一个值只记一条日志，避免刷屏）。</summary>
+    private static int _lastDdcFailPercent = -1;
+
+    /// <summary>上次成功读写的亮度（-1 = 还不知道）。</summary>
+    private static int _last = -1;
+
+    /// <summary>上次同步 <see cref="_last"/> 的时刻。</summary>
+    private static long _lastSyncTick;
+
+    /// <summary>目标亮度（-1 = 还没建立）。按键只改这个值。</summary>
+    private static int _target = -1;
+
+    /// <summary>是否支持 software 调亮度：-1 未探测 / 0 不支持 / 1 支持。</summary>
+    private static int _supported = -1;
+
+    /// <summary>连续回读对不上的次数。</summary>
+    private static int _settleMisses;
+
+    /// <summary>
+    /// 用户上一次用按键 / 界面改目标的时刻。
+    ///
+    /// 用来区分两种"回读和目标不一致"：
+    ///   · 刚按完 → 很可能是命令被显示器丢了，要纠正；
+    ///   · 很久以后 → 用户多半自己按了显示器上的实体键，我们要让路。
+    /// </summary>
+    private static long _lastUserTouchTick;
+
+    private static BrightnessBackend _backend = BrightnessBackend.Unknown;
+
+    /// <summary>上次探测失败的时刻（用来决定什么时候再试一次）。</summary>
+    private static long _probeFailTick;
+
+    /// <summary>
+    /// 上次"按键时强制重探"的时刻（节流用）。
+    ///
+    /// _supported=0 只是"上一次探测失败"，不该让之后的每次按键都直接判失败 ——
+    /// DDC/CI 走 I2C，扩展坞、KVM、休眠唤醒都会让它偶发读不到，过几秒自己就好了。
+    /// 见 <see cref="RetryProbeNow"/>。
+    /// </summary>
+    private static long _forceProbeTick;
+
+    /// <summary>两次强制重探的最小间隔（毫秒）。用户连按时不必每次都枚举显示器。</summary>
+    private const int ForceProbeIntervalMs = 1000;
+
+    /// <summary>
+    /// 本次运行里这条通道**曾经**成功过。
+    /// 用来区分"这台机器从来就不支持"和"刚才那一下没读到"——
+    /// 后者不该让用户去看"你的显示器不支持 DDC/CI"这种话。
+    /// </summary>
+    private static bool _everWorked;
+
+    /* 同一条"设备不支持"只记一次日志：探测每 5 秒重试，逐次记会把 app.log 刷满
+     * （实测用户机器两周 100+ 条），真正的问题反而被淹掉。
+     * 恢复可用时（探测成功）会把这两个标志复位，下次再坏还能看到提示。 */
+    private static bool _wmiUnsupportedWarned;
+    private static bool _unsupportedWarned;
+
+    private static Thread? _pump;
+
+    /// <summary>
+    /// 干跑：不真的写硬件（自检用）。
+    ///
+    /// 自检要覆盖"目标 → 推进线程 → 写入"这条链路，但绝不能在测试里
+    /// 把用户屏幕的亮度改掉。打开这个开关后 WriteLocked 直接成功返回。
+    /// </summary>
+    internal static bool DryRun { get; set; }
+
+    /// <summary>推进线程是否还活着（自检用：确认它真的被启动了）。</summary>
+    internal static bool PumpRunning => _pump is { IsAlive: true };
+
+    /// <summary>当前目标值（自检用）。</summary>
+    internal static int TargetForTest
+    {
+        get { lock (TinyGate) return _target; }
+    }
+
+    /// <summary>
+    /// 仅供自检：把"目标已建立"的状态摆好，但**不**启动推进线程。
+    ///
+    /// 这样就能复现真实启动顺序 —— AppHost 在后台预热时调 IsSupported()，
+    /// 目标已建立、推进线程还没起，此时第一次按键必须把线程拉起来。
+    /// </summary>
+    internal static void PrimeTargetForTest(int target)
+    {
+        lock (TinyGate)
+        {
+            _supported = 1;
+            _target = Math.Clamp(target, 0, 100);
+            _last = _target;
+            _lastSyncTick = Environment.TickCount64;
+            _settleMisses = 0;
+        }
+    }
+
+    /// <summary>当前使用的通道（界面提示 / 自检用）。</summary>
+    public static BrightnessBackend Backend
+    {
+        get { lock (HwGate) { ProbeLocked(); return _backend; } }
+    }
+
+    /// <summary>通道的中文名，用于日志与提示。</summary>
+    public static string BackendName => Backend switch
+    {
+        BrightnessBackend.Wmi => "WMI（内置屏）",
+        BrightnessBackend.Ddc => "DDC/CI（外接屏）",
+        BrightnessBackend.Unsupported => "不支持",
+        _ => "未探测",
+    };
+
+    /// <summary>当前亮度（0~100）；两条通道都不通时返回 null。</summary>
+    public static int? Get()
+    {
+        lock (HwGate)
+        {
+            ProbeLocked();
+            return ReadLocked();
+        }
+    }
+
+    /// <summary>
+    /// 设置绝对亮度（0~100），**写完回读确认**。成功返回 true。
+    /// 这条路是给界面 / 自检用的"要准确"，慢一点没关系。
+    /// 按键调节不走这里 —— 见 <see cref="AddTarget"/>。
+    /// </summary>
+    public static bool Set(int percent)
+    {
+        percent = Math.Clamp(percent, 0, 100);
+
+        lock (HwGate)
+        {
+            ProbeLocked();
+            if (_backend == BrightnessBackend.Unsupported)
+            {
+                MarkUnsupported();
+                return false;
+            }
+
+            bool ok = WriteLocked(percent, verify: true);
+            if (ok) PublishLast(percent);
+            else CoreLog.Warn($"[亮度] 写入 {percent}% 失败（通道 {BackendName}）");
+            return ok;
+        }
+    }
+
+    /// <summary>
+    /// 在当前亮度上加减 <paramref name="delta"/> 个百分点（同步、要准确）。
+    /// 返回值：null = 这台设备两条通道都不通；否则是调整后的亮度。
+    ///
+    /// 按键**不走**这里：一次读 + 一次写 + 一次回读 250ms 起步，
+    /// 按住连发会互相排队。按键走 <see cref="AddTarget"/>。
+    /// </summary>
+    public static int? Step(int delta)
+    {
+        int? cur = Get();
+        if (cur == null) return null;
+
+        int target = Math.Clamp(cur.Value + delta, 0, 100);
+        if (target == cur.Value) return cur;
+
+        return Set(target) ? target : null;
+    }
+
+    /// <summary>当前目标亮度（-1 表示还没有建立）。</summary>
+    public static int Target
+    {
+        get { lock (TinyGate) return _target; }
+    }
+
+    /// <summary>
+    /// 在**目标亮度**上加减，立刻返回新目标（不等硬件）。
+    ///
+    /// 这是按键路径：**只改一个 int**，不碰硬件锁、不读寄存器，
+    /// 所以耗时是微秒级。真正的硬件写入交给后台线程
+    /// <see cref="PumpLoop"/> 一点点追上去。
+    ///
+    /// 返回 null = 这台设备不支持软件调亮度。
+    /// </summary>
+    public static int? AddTarget(int delta)
+    {
+        /* 快路径：目标已经建立 —— 全程只碰 TinyGate。
+         *
+         * 这里**绝对不能**调用任何硬件方法：后台线程正在写 DDC 时
+         * 会占着 HwGate 一百多毫秒，按键等它就会排队，
+         * 排到"调完亮度再按音量完全没反应"。 */
+        int? fast = null;
+        bool wasUnsupported;
+        lock (TinyGate)
+        {
+            wasUnsupported = _supported == 0;
+
+            /* 注意：这里**不能**再写 "if (_supported == 0) return null"。
+             *
+             * 那条老写法把"一次探测失败"永久化：DDC/CI 偶发丢一次读，
+             * _supported 就被置 0，之后每次按键都在这里直接返回 null，
+             * 界面弹「没找到能调亮度的显示器」，可十几秒后通道自己恢复、
+             * 亮度又照常能调 —— 用户看到的就是"说没有显示器，但亮度明明调了"。
+             * 现在改成：失败过就先强制重探一次（节流 1 秒），还是不行才报错。 */
+            if (!wasUnsupported && _target >= 0)
+            {
+                _target = Math.Clamp(_target + delta, 0, 100);
+                _lastUserTouchTick = Environment.TickCount64;
+                fast = _target;
+            }
+        }
+
+        if (fast is int ready)
+        {
+            /* 目标变了就要保证**推进线程真的在跑**，再叫醒它。
+             *
+             * 这里曾经漏掉 EnsurePump()，造成一个很隐蔽的回归：
+             * 启动时 AppHost 会在后台预热一次 IsSupported()，那一步就把
+             * _target 建好了；于是用户第一次按键直接走快路径 ——
+             * 目标从 13 一路涨到 47，日志里全是「目标 X%」，
+             * 但推进线程根本没启动过，硬件一个字节都没写。
+             * 表现就是"按键有反应（日志在动）、屏幕亮度一动不动"。
+             *
+             * EnsurePump 只在 _pump == null 时才建线程，已经跑起来时
+             * 就是一次空判断，不碰硬件，不会破坏"快路径不碰硬件"的约束。
+             * 锁在这里已经释放了，所以不必担心和 TinyGate 的嵌套。 */
+            EnsurePump();
+            Wake.Set();
+            return ready;
+        }
+
+        // 慢路径：第一次按键读一次真实亮度当起点；上次失败过的则强制重探
+        bool ok = wasUnsupported ? RetryProbeNow() : TryBootstrapTarget();
+        if (!ok) return null;
+
+        int result;
+        lock (TinyGate)
+        {
+            _target = Math.Clamp(_target + delta, 0, 100);
+            _lastUserTouchTick = Environment.TickCount64;
+            result = _target;
+        }
+
+        EnsurePump();
+        Wake.Set();
+        return result;
+    }
+
+    /// <summary>把目标直接设成某个绝对亮度（界面拖动 / 恢复时用）。</summary>
+    public static bool SetTarget(int percent)
+    {
+        if (!EnsureSupported()) return false;
+
+        lock (TinyGate)
+        {
+            _target = Math.Clamp(percent, 0, 100);
+            _lastUserTouchTick = Environment.TickCount64;
+        }
+        EnsurePump();
+        Wake.Set();
+        return true;
+    }
+
+    /// <summary>这台机器是否支持软件调亮度（用于界面提示 / 自检）。</summary>
+    public static bool IsSupported() => EnsureSupported();
+
+    /// <summary>确认设备可用；已确认过就直接返回，不再碰硬件。</summary>
+    private static bool EnsureSupported()
+    {
+        bool wasUnsupported;
+        lock (TinyGate)
+        {
+            if (_supported == 1) return true;
+            wasUnsupported = _supported == 0;
+        }
+        return wasUnsupported ? RetryProbeNow() : TryBootstrapTarget();
+    }
+
+    /// <summary>
+    /// 读一次真实亮度，把它同时当作起点（目标）和已知值。
+    /// 只在"本次启动的第一次调节"和界面查询支持情况时才会跑到。
+    /// </summary>
+    private static bool TryBootstrapTarget()
+    {
+        int? cur;
+        lock (HwGate)
+        {
+            ProbeLocked();
+            if (_backend == BrightnessBackend.Unsupported)
+            {
+                MarkUnsupported();
+                return false;
+            }
+            cur = ReadLocked();
+
+            /* 通道探测成功、读一次却失败 —— 这是 DDC/CI 最典型的偶发丢包
+             * （显示器切输入源、刚从休眠醒来、扩展坞重新握手）。
+             * 以前直接判"不支持"，现在重新枚举句柄再读一次，
+             * 做法和 DdcSet 失败后的重试完全一致。 */
+            if (cur is not int firstTry || firstTry < 0)
+            {
+                CoreLog.Info("[亮度] 第一次读取没响应，重新枚举显示器再读一次");
+                ReleaseDdcLocked();
+                _backend = BrightnessBackend.Unknown;
+                ProbeLocked();
+                if (_backend != BrightnessBackend.Unsupported) cur = ReadLocked();
+            }
+        }
+
+        if (cur is not int value || value < 0)
+        {
+            MarkUnsupported();
+            return false;
+        }
+
+        lock (TinyGate)
+        {
+            _target = value;
+            _last = value;
+            _lastSyncTick = Environment.TickCount64;
+            _supported = 1;
+            _settleMisses = 0;
+            _lastUserTouchTick = Environment.TickCount64;
+            _everWorked = true;
+        }
+        Wake.Set();
+        return true;
+    }
+
+    /// <summary>
+    /// 强制重探一次亮度通道（含丢弃并重新枚举显示器句柄），供"上次失败过"的按键路径用。
+    ///
+    /// <see cref="ProbeLocked"/> 自己也有 5 秒重试，但那条路要求调用方真的进来探测；
+    /// 老 <see cref="AddTarget"/> 在 <c>_supported == 0</c> 时根本不调用任何探测，
+    /// 于是"5 秒重试"永远等不到下一次机会 —— 只有重置或重启程序才能恢复。
+    /// 这里把 <c>_backend</c> 清成 Unknown 再探，等于跳过它的 5 秒闸门。
+    /// 用 <see cref="ForceProbeIntervalMs"/> 节流，避免用户连按时反复枚举显示器。
+    /// </summary>
+    private static bool RetryProbeNow()
+    {
+        long now = Environment.TickCount64;
+        lock (TinyGate)
+        {
+            if (now - _forceProbeTick < ForceProbeIntervalMs) return false;
+            _forceProbeTick = now;
+        }
+
+        lock (HwGate)
+        {
+            ReleaseDdcLocked();
+            _backend = BrightnessBackend.Unknown;
+        }
+
+        bool ok = TryBootstrapTarget();
+        if (ok && !DryRun) CoreLog.Info("[亮度] 重新探测成功，亮度通道已恢复");
+        return ok;
+    }
+
+    private static void MarkUnsupported()
+    {
+        lock (TinyGate) _supported = 0;
+    }
+
+    /// <summary>记下已知亮度（调用方已持有 TinyGate 时不要用这个）。</summary>
+    private static void PublishLast(int value)
+    {
+        lock (TinyGate)
+        {
+            _last = value;
+            _lastSyncTick = Environment.TickCount64;
+        }
+    }
+
+    private static void EnsurePump()
+    {
+        lock (TinyGate)
+        {
+            if (_pump != null) return;
+            _pump = new Thread(PumpLoop)
+            {
+                IsBackground = true,
+                Name = "brightness-pump",
+                Priority = ThreadPriority.BelowNormal,
+            };
+            _pump.Start();
+        }
+    }
+
+    /// <summary>
+    /// 后台把实际亮度一步步推向目标。
+    ///
+    /// 每步走多少由 <see cref="PlanStep"/> 决定：离目标远时步子大（追得上），
+    /// 快到时退到 1%（不跳变）。中间步只写不回读 —— 回读一次要多花
+    /// 50~100ms，那点时间足够再走两三步，手感就从"一格一格跳"变成"滑过去"。
+    ///
+    /// 追上目标后隔 <see cref="SettleVerifyMs"/> 回读一次，
+    /// 处理"命令被显示器丢了"的情况：以硬件为准重新对齐。
+    /// </summary>
+    private static void PumpLoop()
+    {
+        /* 整条循环外面必须有一层兜底。
+         *
+         * 里面逐处的 try/catch 只护住了"写"这一步，读硬件
+         * （WMI 查询 / DDC 句柄）同样可能抛 —— 一旦抛到这里没人接，
+         * 后台线程就静静死掉：之后目标照变、日志照打，硬件再也不会写。
+         * 这正是"按键有反应但亮度不动"最难查的一种形态。
+         *
+         * finally 里把 _pump 置空，是为了让下一次 EnsurePump 能重建线程 ——
+         * 否则 _pump != null 的判断会让它永远不再启动。 */
+        try
+        {
+            // 启动时记一条：以后"按键没反应"时，看一眼就知道线程到底起没起
+            CoreLog.Info($"[亮度] 推进线程已启动（supported={_supported} target={_target} last={_last}）");
+
+            while (true)
+            {
+                int target, cur, supported;
+                lock (TinyGate)
+                {
+                    target = _target;
+                    cur = _last;
+                    supported = _supported;
+                }
+
+                // 没活干就睡着等（不是轮询）：按键时 Wake.Set() 会立刻叫醒
+                if (supported != 1 || target < 0) { Wake.WaitOne(500); continue; }
+
+                if (cur < 0)
+                {
+                    int? read;
+                    lock (HwGate) read = ReadLocked();
+                    if (read is int r) PublishLast(r);
+                    else Wake.WaitOne(150);
+                    continue;
+                }
+
+                if (cur == target)
+                {
+                    /* 已经追上目标。这里**不能**继续 25ms 醒一次 ——
+                     * 那样即使没人调亮度，后台线程每秒也要醒 40 次，
+                     * 白白耗电（笔记本上尤其明显）。改成等事件，
+                     * 只有"目标变了"或"到点回读校验"才醒。 */
+                    SettleVerify(target);
+                    Wake.WaitOne(SettleVerifyMs);
+                    continue;
+                }
+
+                int next = Math.Clamp(cur + PlanStep(target - cur), 0, 100);
+
+                bool ok;
+                try
+                {
+                    lock (HwGate) ok = WriteLocked(next, verify: false);
+                }
+                catch (Exception e)
+                {
+                    CoreLog.Warn("[亮度] 平滑推进出错：" + e.Message);
+                    Wake.WaitOne(250);
+                    continue;
+                }
+
+                if (ok)
+                {
+                    PublishLast(next);
+                    lock (TinyGate) _settleMisses = 0;
+                    Wake.WaitOne(FastGapMs);
+                }
+                else
+                {
+                    // 写不进去：留给下一次探测 / 换通道，别死循环刷屏
+                    lock (TinyGate) _lastSyncTick = Environment.TickCount64;
+                    Wake.WaitOne(300);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("[亮度] 推进线程异常退出（下次按键会重新拉起）", ex);
+        }
+        finally
+        {
+            lock (TinyGate) _pump = null;
+        }
+    }
+
+    /// <summary>
+    /// 这一轮该走几个百分点：**按剩余距离成比例**。
+    ///
+    /// 匀速走会在最后"啪"地停住，而且离目标很远时显得温吞；
+    /// 按比例走则是先快后慢，最后几格都是 1%，视觉上是一条平滑的曲线 ——
+    /// 和按住 Windows 音量键看到的爬升一个感觉。
+    /// </summary>
+    internal static int PlanStep(int diff)
+    {
+        int mag = Math.Abs(diff);
+        if (mag <= 1) return Math.Sign(diff);
+
+        int step = (int)Math.Ceiling(mag / 4.0);
+        step = Math.Clamp(step, 1, MaxStepPerTick);
+        return Math.Sign(diff) * Math.Min(step, mag);
+    }
+
+    /// <summary>仅供自检。</summary>
+    internal static int PlanStepForTest(int diff) => PlanStep(diff);
+
+    /// <summary>追上目标后回读一次，确认显示器真的到了。</summary>
+    private static void SettleVerify(int target)
+    {
+        long since, touched;
+        lock (TinyGate)
+        {
+            since = Environment.TickCount64 - _lastSyncTick;
+            touched = _lastUserTouchTick;
+        }
+        if (since < SettleVerifyMs) return;
+
+        // 先盖时间戳：回读本身也要几十毫秒，否则它会被立刻再次触发
+        lock (TinyGate) _lastSyncTick = Environment.TickCount64;
+
+        int? read;
+        lock (HwGate) read = ReadLocked();
+        if (read is not int r) return;
+        if (Math.Abs(r - target) <= SettleTolerance) return;
+
+        /* 用户久没动过，值却变了 → 多半是他自己按了显示器上的实体键。
+         * 这时候**以硬件为准**，别把人家刚调好的亮度又推回去。 */
+        bool userRecentlyChanged = Environment.TickCount64 - touched < SettleCorrectionWindowMs;
+        if (!userRecentlyChanged)
+        {
+            lock (TinyGate)
+            {
+                _target = r;
+                _last = r;
+                _settleMisses = 0;
+            }
+            CoreLog.Info($"[亮度] 检测到显示器被外部调整，同步为 {r}%");
+            return;
+        }
+
+        bool giveUp;
+        lock (TinyGate)
+        {
+            _last = r;                       // 以硬件为准，让推进线程重新追
+            _settleMisses++;
+            giveUp = _settleMisses >= SettleGiveUpTimes;
+            if (giveUp) _target = r;
+        }
+
+        if (giveUp)
+            CoreLog.Warn($"[亮度] 回读一直是 {r}%，与目标 {target}% 对不上，改为以显示器实际值为准");
+        else
+            CoreLog.Info($"[亮度] 回读 {r}%，重新对齐到目标 {target}%");
+    }
+
+    /// <summary>
+    /// 调不动时给一句**能照着做**的说明。
+    ///
+    /// 泛泛一句"不支持"没有用：用户不知道是设备不行、设置没开，还是线材问题。
+    /// 这里按当前探测到的事实分类回答 —— 没找到屏 / 找到屏但没响应 / 命令被丢。
+    /// </summary>
+    public static string Diagnose()
+    {
+        lock (HwGate)
+        {
+            ProbeLocked();
+
+            if (_backend == BrightnessBackend.Unsupported)
+            {
+                /* 曾经成功过 = 这不是"不支持"，而是这一次没读到。
+                 * 老文案在这里说"你的显示器没有 DDC/CI"，用户当然不服 ——
+                 * 因为亮度随后还能调。文案必须说实话。 */
+                if (_everWorked)
+                    return "这次没读到显示器的亮度（DDC/CI 偶尔会丢一次，常见于扩展坞 / KVM / 显示器切输入源），已经自动重试过一次，再按一下多半就好了";
+                return "没找到能调亮度的显示器：外接屏要在显示器菜单里把 DDC/CI 打开（有的型号叫「显示器控制」），笔记本内置屏需要显卡驱动正常";
+            }
+
+            if (_backend == BrightnessBackend.Ddc)
+            {
+                int n = _ddc?.Count ?? 0;
+                if (n == 0) return "没找到支持 DDC/CI 的显示器，请确认显示器菜单里的 DDC/CI 已开启";
+                return Loc.F("显示器（{0}）没有响应亮度命令 —— 常见于 HDMI 转接器 / KVM / 扩展坞不透传 DDC，换直连试试", _ddc![0].Description);
+            }
+
+            return "亮度命令没有生效，请把日志里的「[亮度]」几行发出来";
+        }
+    }
+
+    /// <summary>
+    /// 列出探测到的通道与显示器，供 <c>--hwtest</c> 输出与问题排查。
+    /// 用户报"亮度调不了"时，这几行能直接说明是没找到屏、还是找到了写不进。
+    /// </summary>
+    public static IReadOnlyList<string> Describe()
+    {
+        lock (HwGate)
+        {
+            ProbeLocked();
+            var list = new List<string> { "通道：" + BackendName };
+            if (_backend == BrightnessBackend.Wmi) list.Add("WMI：内置屏");
+
+            if (_ddc != null)
+            {
+                for (int i = 0; i < _ddc.Count; i++)
+                    list.Add(Loc.F("DDC 屏{0}：{1}，量程 0~{2}", i + 1, _ddc[i].Description, _ddc[i].Max));
+            }
+            return list;
+        }
+    }
+
+    /// <summary>
+    /// 丢弃缓存、重新探测。切换显示器 / 重接扩展屏后调用。
+    /// 同时释放 DDC 物理显示器句柄（那是驱动资源，不释放会累积）。
+    /// </summary>
+    public static void Reset()
+    {
+        lock (HwGate)
+        {
+            ReleaseDdcLocked();
+            _backend = BrightnessBackend.Unknown;
+        }
+
+        lock (TinyGate)
+        {
+            _last = -1;
+            _target = -1;
+            _supported = -1;
+            _settleMisses = 0;
+        }
+
+        // 推进线程可能正睡在 WaitOne 上：叫醒它重新判断（不然要等超时）
+        Wake.Set();
+    }
+
+    // ================= 百分比 ↔ VCP 值换算（纯函数，自检直接断言） =================
+
+    /// <summary>
+    /// 显示器的原始亮度值 → 百分比。
+    /// 不同屏的量程不一样：多数是 0~100，也有 0~255 甚至 0~1000 的，
+    /// 所以必须按 max 换算，不能想当然当百分比用。
+    /// </summary>
+    public static int FromVcp(uint current, uint max)
+    {
+        if (max == 0) return -1;
+        return (int)Math.Clamp(Math.Round(current * 100.0 / max), 0, 100);
+    }
+
+    /// <summary>百分比 → 显示器的原始亮度值（同一套量程换算）。</summary>
+    public static uint ToVcp(int percent, uint max)
+    {
+        if (max == 0) return 0;
+        percent = Math.Clamp(percent, 0, 100);
+        return (uint)Math.Round(percent * (double)max / 100.0);
+    }
+
+    // ================= 探测 =================
+
+    private static void ProbeLocked()
+    {
+        /* 「不支持」这个结论**不能永久缓存**。
+         *
+         * 探测失败常常是暂时的：程序随开机自启时显示器还没初始化完、
+         * 显示器正在休眠、刚切完输入源、显卡驱动还没起来。
+         * 旧写法一旦探测失败就把 _backend 钉死在 Unsupported，
+         * 之后整个会话都返回"这台显示器不支持" —— 用户看到的就是
+         * "亮度功能压根没实现"，只有重启程序才可能好。
+         *
+         * 现在隔 5 秒允许重探一次，睡眠唤醒 / 重新插线之后能自己恢复。 */
+        if (_backend == BrightnessBackend.Unsupported)
+        {
+            if (Environment.TickCount64 - _probeFailTick < 5000) return;
+            ReleaseDdcLocked();
+            _backend = BrightnessBackend.Unknown;
+        }
+
+        if (_backend != BrightnessBackend.Unknown) return;
+
+        // WMI 读一次比 DDC 快，先试它
+        if (WmiGet() >= 0)
+        {
+            _backend = BrightnessBackend.Wmi;
+            lock (TinyGate) { _supported = 1; _everWorked = true; }
+            _wmiUnsupportedWarned = false;
+            _unsupportedWarned = false;
+            CoreLog.Info("[亮度] 使用 WMI 通道");
+            return;
+        }
+
+        if (DdcEnsureLocked() && DdcReadLocked() != null)
+        {
+            _backend = BrightnessBackend.Ddc;
+            lock (TinyGate) { _supported = 1; _everWorked = true; }
+            _unsupportedWarned = false;      // 通道恢复 → 下次再坏时重新提示一次
+            CoreLog.Info($"[亮度] 使用 DDC/CI 通道（{_ddc?.Count ?? 0} 台显示器）");
+            return;
+        }
+
+        _backend = BrightnessBackend.Unsupported;
+        _probeFailTick = Environment.TickCount64;
+        MarkUnsupported();
+        if (!_unsupportedWarned)
+        {
+            _unsupportedWarned = true;
+            CoreLog.Warn("[亮度] 两条通道都不可用（设备不支持或未开启 DDC/CI）；之后静默重试");
+        }
+    }
+
+    private static int? ReadLocked() => _backend switch
+    {
+        BrightnessBackend.Wmi => WmiGet() is int w && w >= 0 ? w : null,
+        BrightnessBackend.Ddc => DdcReadLocked(),
+        _ => null,
+    };
+
+    /// <summary>
+    /// 写一次亮度。主通道失败时切到另一条再试一次。
+    ///
+    /// 为什么需要兜底：WMI 那套接口存在"读得到、写不进"的机型
+    /// （驱动暴露了 CurrentBrightness 但 WmiSetBrightness 无效果），
+    /// 反过来 DDC/CI 也会在显示器从休眠唤醒后短暂失效。
+    /// 只试一条就放弃，用户看到的就是"按了没反应"。
+    /// </summary>
+    private static bool WriteLocked(int percent, bool verify)
+    {
+        // 自检用：不碰硬件，直接当成功（否则测试会把用户屏幕调暗）
+        if (DryRun)
+        {
+            PublishLast(percent);
+            return true;
+        }
+
+        return _backend switch
+        {
+            /* WMI 写完要**回读验证**再决定算不算成功。
+             *
+             * 有一类机器（驱动暴露了 CurrentBrightness，但 WmiSetBrightness 不生效）
+             * 调用不会抛异常、状态码也不报错，`WmiSet` 就返回 true ——
+             * 于是 `|| DdcSet(...)` 被短路，明明 DDC 能用却永远轮不到它，
+             * 用户看到的是"按亮度键，屏幕纹丝不动"。
+             * 只在 verify 打开（用户按键触发的真实调节）时多读一次；
+             * 预检/探测路径不读，避免多余的 WMI 往返。 */
+            BrightnessBackend.Wmi => WmiWriteVerified(percent, verify) || DdcSet(percent, verify),
+            BrightnessBackend.Ddc => DdcSet(percent, verify) || WmiSet(percent),
+            _ => false,
+        };
+    }
+
+    /// <summary>WMI 写入；启用校验时回读确认值真的变了。</summary>
+    private static bool WmiWriteVerified(int percent, bool verify)
+    {
+        if (!WmiSet(percent)) return false;
+        if (!verify) return true;
+
+        int after = WmiGet();
+        // 读不到就不敢断言失败（可能是"能写、读不回"的机型），按成功处理
+        if (after < 0) return true;
+        return Math.Abs(after - percent) <= 2;
+    }
+
+    // ================= 通道 ①：WMI =================
+
+    private static int WmiGet()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(Scope,
+                $"SELECT CurrentBrightness FROM {ClassState}");
+            foreach (ManagementObject item in searcher.Get())
+            {
+                using (item)
+                {
+                    object? v = item["CurrentBrightness"];
+                    if (v != null)
+                    {
+                        int val = Convert.ToInt32(v);
+                        PublishLast(val);
+                        return val;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            /* 只记一次：某些机器上 WMI 永远"不支持"，而探测每 5 秒重试一次 ——
+         * 逐次记日志会把 app.log 刷满（实测两周 100+ 条），排障时反而淹没真正的问题。 */
+        if (!_wmiUnsupportedWarned)
+        {
+            _wmiUnsupportedWarned = true;
+            CoreLog.Warn("[亮度] WMI 读取失败（后续同类失败不再重复记录）：" + ex.Message);
+        }
+        }
+        return -1;
+    }
+
+    private static bool WmiSet(int percent)
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher(Scope,
+                $"SELECT * FROM {ClassMethods}");
+
+            bool any = false;
+            foreach (ManagementObject item in searcher.Get())
+            {
+                using (item)
+                {
+                    try
+                    {
+                        // WmiSetBrightness(TimeoutSeconds, Brightness)
+                        item.InvokeMethod("WmiSetBrightness", new object[] { 1u, (byte)percent });
+                        any = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        CoreLog.Warn("[亮度] WMI 写入失败：" + ex.Message);
+                    }
+                }
+            }
+            return any;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("[亮度] WMI 不可用：" + ex.Message);
+            return false;
+        }
+    }
+
+    // ================= 通道 ②：DDC/CI =================
+
+    private sealed class DdcMonitor
+    {
+        public IntPtr Handle;
+        public uint Max;
+        public string Description = "";
+    }
+
+    private static List<DdcMonitor>? _ddc;
+
+    /// <summary>物理显示器句柄开出来就一直拿着：每次重新枚举要 100ms 以上。</summary>
+    private static bool DdcEnsureLocked()
+    {
+        /* 注意：空列表也算"已枚举过"，这里不重试 —— 重试由 ProbeLocked 负责
+         * （它会在 5 秒节流后 ReleaseDdcLocked 再重新枚举）。
+         * 如果哪天别处需要一个"强制重探"的入口，请走 Reset()，不要把这里改成
+         * 每次调用都枚举：每次枚举要开一遍物理显示器句柄，代价是几十毫秒。 */
+        if (_ddc != null) return _ddc.Count > 0;
+
+        _ddc = new List<DdcMonitor>();
+        try
+        {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMon, IntPtr hdc, IntPtr rect, IntPtr data) =>
+            {
+                if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMon, out uint count) || count == 0)
+                    return true;
+
+                /* PHYSICAL_MONITOR 是 { HANDLE; WCHAR szDescription[128]; }。
+                 * 不用 Marshal 的结构体数组：里面有字符串字段，marshaler 需要
+                 * 预先分配好的缓冲区，默认的 null 字符串会直接崩。
+                 * 手工按偏移取更稳，x64 是 8+256、x86 是 4+256。 */
+                int stride = IntPtr.Size + 128 * 2;
+                IntPtr buf = Marshal.AllocHGlobal(stride * (int)count);
+                try
+                {
+                    if (GetPhysicalMonitorsFromHMONITOR(hMon, count, buf))
+                    {
+                        for (int i = 0; i < count; i++)
+                        {
+                            IntPtr h = Marshal.ReadIntPtr(buf, i * stride);
+                            if (h == IntPtr.Zero) continue;
+
+                            /* 描述紧跟在句柄后面，是 128 个 wchar 的定长字段。
+                             *
+                             * 必须按长度读再手工截到第一个 \0：PtrToStringUni 带长度
+                             * 的版本不会在 \0 处停下，会把字段后面的堆垃圾一起读进来，
+                             * 日志里就变成「Generic PnP Monitor 紈ጲ翽…」这种乱码。 */
+                            string desc = "";
+                            try
+                            {
+                                string raw = Marshal.PtrToStringUni(
+                                    IntPtr.Add(buf, i * stride + IntPtr.Size), 128) ?? "";
+                                int z = raw.IndexOf('\0');
+                                desc = (z >= 0 ? raw[..z] : raw).Trim();
+                            }
+                            catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+
+                            // 读一次亮度：能读出 max 才说明这台屏支持 VCP 0x10
+                            if (GetVCPFeatureAndVCPFeatureReply(h, VcpBrightness, out _, out uint cur, out uint max)
+                                && max > 0)
+                            {
+                                _ddc.Add(new DdcMonitor { Handle = h, Max = max, Description = desc });
+                                CoreLog.Info($"[亮度] 发现 DDC 屏：{desc}，量程 0~{max}，当前 {cur}（{FromVcp(cur, max)}%）");
+                            }
+                            else
+                            {
+                                CoreLog.Info($"[亮度] 跳过 {desc}：不支持 VCP 0x10 亮度");
+                                DestroyPhysicalMonitor(h);   // 不支持亮度，立刻还回去
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buf);
+                }
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("[亮度] 枚举显示器失败：" + ex.Message);
+        }
+
+        return _ddc.Count > 0;
+    }
+
+    private static int? DdcReadLocked()
+    {
+        if (!DdcEnsureLocked()) return null;
+        var monitors = _ddc!;
+
+        // 取第一台能读的：多屏时按显示器顺序，通常主屏在前
+        foreach (var m in monitors)
+        {
+            if (GetVCPFeatureAndVCPFeatureReply(m.Handle, VcpBrightness, out _, out uint cur, out uint max)
+                && max > 0)
+            {
+                int pct = FromVcp(cur, max);
+                if (pct >= 0) { PublishLast(pct); return pct; }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 写 DDC。
+    ///
+    /// <paramref name="verify"/> = true（单次调节 / 界面设置）：
+    ///   写完**回读确认**，失败时重建句柄再试 —— <c>SetVCPFeature</c> 返回 TRUE
+    ///   只代表命令交给了驱动，显示器固件完全可能把这条命令丢掉。
+    ///
+    /// <paramref name="verify"/> = false（按住平滑推进的中间步）：
+    ///   只写不回读。回读一次 50~100ms，比写入本身还贵；
+    ///   追上目标后 <see cref="SettleVerify"/> 会统一校验一次。
+    /// </summary>
+    private static bool DdcSet(int percent, bool verify)
+    {
+        if (!DdcEnsureLocked()) return false;
+        if (!verify) return DdcWriteFast(percent);
+
+        if (DdcWriteVerified(percent)) return true;
+
+        CoreLog.Warn("[亮度] DDC 写入未生效，重新枚举显示器后重试一次");
+        ReleaseDdcLocked();
+        return DdcEnsureLocked() && DdcWriteVerified(percent);
+    }
+
+    /// <summary>只写不回读（平滑推进用）。</summary>
+    private static bool DdcWriteFast(int percent)
+    {
+        var monitors = _ddc!;
+        ThrottleDdcLocked();
+
+        bool any = false;
+        foreach (var m in monitors)
+        {
+            try
+            {
+                if (SetVCPFeature(m.Handle, VcpBrightness, ToVcp(percent, m.Max))) any = true;
+            }
+            catch (Exception ex)
+            {
+                CoreLog.Warn("[亮度] DDC 写入失败：" + ex.Message);
+            }
+        }
+
+        /* 写不进去要留痕。
+         *
+         * SetVCPFeature 返回 false 是**最容易被忽略**的失败：没有异常、没有日志，
+         * 上层只看到"返回 false"，而 pump 会静静重试 —— 用户那边就是
+         * "目标一路涨、屏幕一动不动"，日志里干干净净，根本查不出问题。
+         * 同一个目标只记一次（pump 会反复重试同一个值，别刷屏）。 */
+        if (!any && percent != _lastDdcFailPercent)
+        {
+            _lastDdcFailPercent = percent;
+            CoreLog.Warn($"[亮度] DDC 写入 {percent}% 没有被显示器接受（SetVCPFeature 返回 false）");
+        }
+        else if (any)
+        {
+            _lastDdcFailPercent = -1;
+        }
+
+        return any;
+    }
+
+    /// <summary>
+    /// 写 DDC 并回读确认，失败重试（最多 3 次）。
+    ///
+    /// 句柄什么时候会失效：显示器休眠/唤醒、切输入源、拔插线缆、
+    /// 显卡驱动重启。表现为之后所有写入都返回 false —— 而用户那边的感受
+    /// 只是"亮度键忽然不管用了"。重建一次就能恢复，不必重启程序。
+    /// </summary>
+    private static bool DdcWriteVerified(int percent)
+    {
+        var monitors = _ddc!;
+
+        int before = DdcReadLocked() ?? -1;
+
+        /* 已经就是这个亮度：不必再写。
+         * 少了这个短路，回读值不会变，会被下面的逻辑误判成"写入被丢弃"，
+         * 白重试三次还报失败。 */
+        if (before == percent) { PublishLast(percent); return true; }
+
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            // 相邻命令留出间隔，否则显示器固件会丢掉后面几条
+            ThrottleDdcLocked();
+
+            bool any = false;
+            for (int i = 0; i < monitors.Count; i++)
+            {
+                var m = monitors[i];
+                try
+                {
+                    uint value = ToVcp(percent, m.Max);
+                    bool ok = SetVCPFeature(m.Handle, VcpBrightness, value);
+                    if (ok) any = true;
+                    CoreLog.Info($"[亮度] DDC 屏{i + 1}（{m.Description}）写 {percent}%，" +
+                                 $"VCP={value}/{m.Max} → {(ok ? "已发送" : "失败")}");
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("[亮度] DDC 写入失败：" + ex.Message);
+                }
+            }
+            if (!any) return false;
+
+            // 显示器处理命令要时间，读太早会读到旧值
+            System.Threading.Thread.Sleep(60);
+
+            int after = DdcReadLocked() ?? -1;
+            if (after >= 0 && after != before)
+            {
+                PublishLast(after);
+                if (attempt > 1) CoreLog.Info($"[亮度] 第 {attempt} 次写入才真正生效");
+                return true;
+            }
+
+            CoreLog.Warn($"[亮度] 写完回读仍是 {after}%，命令被显示器丢弃，重试 {attempt}/3");
+        }
+
+        return false;
+    }
+
+    /// <summary>把两次 DDC 写入拉开到 <see cref="DdcMinGapMs"/> 以上。</summary>
+    private static void ThrottleDdcLocked()
+    {
+        if (_lastDdcWriteTick == 0) { _lastDdcWriteTick = Environment.TickCount64; return; }
+
+        long gap = Environment.TickCount64 - _lastDdcWriteTick;
+        if (gap < DdcMinGapMs) System.Threading.Thread.Sleep((int)(DdcMinGapMs - gap));
+        _lastDdcWriteTick = Environment.TickCount64;
+    }
+
+    private static void ReleaseDdcLocked()
+    {
+        if (_ddc == null) return;
+        foreach (var m in _ddc)
+        {
+            try { DestroyPhysicalMonitor(m.Handle); } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+        }
+        _ddc = null;
+    }
+
+    // ================= dxva2 / user32 互操作 =================
+
+    private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, IntPtr rect, IntPtr data);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip,
+        MonitorEnumProc proc, IntPtr data);
+
+}

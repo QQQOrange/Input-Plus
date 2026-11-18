@@ -5,12 +5,12 @@
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if ([string]::IsNullOrEmpty($Exe)) {
-    $Exe = Join-Path $root "src\CapsLockPlus\bin\Release\net10.0-windows\win-x64\publish\CapsLockPlus.exe"
-    if (-not (Test-Path $Exe)) { $Exe = Join-Path $root "src\CapsLockPlus\bin\Debug\net10.0-windows\CapsLockPlus.exe" }
+    $Exe = Join-Path $root "src\InputPlus\bin\Release\net10.0-windows\win-x64\publish\InputPlus.exe"
+    if (-not (Test-Path $Exe)) { $Exe = Join-Path $root "src\InputPlus\bin\Debug\net10.0-windows\InputPlus.exe" }
 }
-$env:CAPSLOCKPLUS_DATA = Join-Path $env:TEMP "clp_bench"
+$env:INPUTPLUS_DATA = Join-Path $env:TEMP "clp_bench"
 
-Get-Process CapsLockPlus -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process InputPlus -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 700
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -50,4 +50,4 @@ Write-Output "private bytes : $priv1 MB"
 Write-Output "total CPU     : $cpu ms"
 Write-Output "idle CPU 5s   : $idleCpu ms"
 
-Get-Process CapsLockPlus -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process InputPlus -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

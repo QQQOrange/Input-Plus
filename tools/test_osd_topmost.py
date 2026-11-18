@@ -13,7 +13,7 @@
 
 修好之前第 4 步是 False（连发一秒都没变化），修好之后是 True。
 
-用法：python tools/test_osd_topmost.py <KeyboardEnhance.exe>
+用法：python tools/test_osd_topmost.py <InputPlus.exe>
 任务栏的"自动隐藏"要**关掉**（始终显示），否则它本来就不在屏幕上，测不出东西。
 """
 import ctypes
@@ -25,7 +25,7 @@ import tempfile
 import time
 
 EXE = sys.argv[1]
-TITLE = "按键增强 横条"
+TITLE = "Input Plus 横条"
 
 u = ctypes.windll.user32
 u.SetProcessDPIAware()
@@ -86,8 +86,8 @@ if state & 1:
     print("提示：任务栏是自动隐藏，测不出遮挡（本脚本建议任务栏始终显示）")
 
 env = os.environ.copy()
-env["CAPSLOCKPLUS_DATA"] = tempfile.mkdtemp(prefix="osdtop_")
-env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "_top%d" % int(time.time())
+env["INPUTPLUS_DATA"] = tempfile.mkdtemp(prefix="osdtop_")
+env["INPUTPLUS_MUTEX_SUFFIX"] = "_top%d" % int(time.time())
 
 proc = subprocess.Popen([EXE, "--osd", "50", "--osd-hold", "12000"], env=env)
 try:

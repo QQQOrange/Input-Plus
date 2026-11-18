@@ -1,0 +1,257 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using InputPlus.Core.Settings;
+
+namespace InputPlus.Core.Sync;
+
+/// <summary>
+/// 「合并恢复」的实现。
+///
+/// 为什么需要它：覆盖恢复等于把当前配置整份扔掉 ——
+/// 用户在 A 电脑上添了几个宏、又在 B 电脑上改了键位，
+/// 直接覆盖必然丢掉一边。合并是把两边的**并集**留下来。
+///
+/// 规则（按各实体天然的主键对齐）：
+///   * 按键绑定 → 层内按 Combo；同一个 Combo 远端覆盖，本地独有的保留；
+///   * 层 / 宏 / 触发键 → 按 Id / Key；
+///   * 搜索项、启动项、网址、热字串 → 按 Key；
+///   * 窗口绑定 → 按 Slot；
+///   * **全局 / Qbar / 同步设置这类单值配置，一律保留本机** ——
+///     尤其是 Sync：远端备份里存着别人的网盘密码和备份密码，
+///     合并时把它灌进来，等于把同步目标换成别人的服务器。
+///
+/// 在 JSON 层做而不是逐个类写 Merge：实体字段以后会加，
+/// 逐个实现必然漏字段（漏了就"合并完少半条配置"），
+/// 这里只认主键，其余字段整体搬运。
+/// </summary>
+public static class BackupMerge
+{
+    /// <summary>「数组 + 主键」的清单表。</summary>
+    private static readonly (string Prop, string Key)[] Lists =
+    {
+        ("Triggers", "Key"),
+        ("Macros", "Id"),
+        ("Search", "Key"),
+        ("Run", "Key"),
+        ("Web", "Key"),
+        ("HotStrings", "Key"),
+        ("Bindings", "Slot"),
+    };
+
+    /// <summary>合并一份备份进当前设置。返回合并结果（不修改入参）。</summary>
+    /// <returns>
+    /// Merged = 合并后的设置；Added/Replaced = 新增与覆盖的条目数；
+    /// TokenAdopted = 是否采用了备份里的 GitHub 令牌（本机原本没有时才会）。
+    /// </returns>
+    public static (AppSettings Merged, int Added, int Replaced, bool TokenAdopted) Merge(
+        AppSettings local, AppSettings remote)
+    {
+        var ln = JsonSerializer.SerializeToNode(local, SettingsStore.JsonOptions)!.AsObject();
+        var rn = JsonSerializer.SerializeToNode(remote, SettingsStore.JsonOptions)!.AsObject();
+
+        int added = 0, replaced = 0;
+
+        foreach (var (prop, key) in Lists)
+            MergeArray(ln, rn, prop, key, ref added, ref replaced);
+
+        MergeLayers(ln, rn, ref added, ref replaced);
+
+        /* Global 里嵌着的两个数组也要合：
+         *   · Snippets —— 文本片段（触发词是天然主键）；
+         *   · AppLayers —— 按应用自动启用层（进程名是主键）。
+         * 以前漏了这两个，表现是"合并恢复之后片段和按应用层全没了"。 */
+        MergeNestedArray(ln, rn, "Global", "Snippets", "Trigger", ref added, ref replaced);
+        MergeNestedArray(ln, rn, "Global", "AppLayers", "Process", ref added, ref replaced);
+
+        /* GitHub 令牌：**本机没有才取备份的**。
+         *
+         * 方向和其它字段相反，是刻意的：合并的语义是"本地独有的保留"，
+         * 而令牌是"这台机器当前能用的那把" —— 多台机器各存各的令牌时，
+         * 互相覆盖只会让人莫名 401；反过来，新机器（本机为空）恢复备份时
+         * 又确实希望把它带过来，省一次重新贴。
+         * 两边都有值 → 保留本机，在恢复结果里说明"没动你的令牌"。 */
+        bool tokenAdopted = false;
+        if (ln["Global"] is JsonObject lg && rn["Global"] is JsonObject rg)
+        {
+            string localToken = Text(lg["GitHubToken"]);
+            string remoteToken = Text(rg["GitHubToken"]);
+            if (localToken.Length == 0 && remoteToken.Length > 0)
+            {
+                lg["GitHubToken"] = remoteToken;
+                tokenAdopted = true;
+            }
+        }
+
+        var merged = JsonSerializer.Deserialize<AppSettings>(
+            ln.ToJsonString(), SettingsStore.JsonOptions)
+            ?? throw new InvalidOperationException("合并后的配置解析失败");
+
+        SettingsStore.Normalize(merged);
+        return (merged, added, replaced, tokenAdopted);
+    }
+
+    // ---------------- 通用数组合并 ----------------
+
+    private static void MergeArray(JsonObject local, JsonObject remote, string prop,
+        string key, ref int added, ref int replaced)
+    {
+        if (remote[prop] is not JsonArray ra) return;
+
+        if (local[prop] is not JsonArray la)
+        {
+            local[prop] = JsonNodeTool.DeepClone(ra);
+            added += ra.Count;
+            return;
+        }
+
+        MergeKeyed(la, ra, key, ref added, ref replaced);
+    }
+
+    /// <summary>合并 <c>root[outer][inner]</c> 这种嵌一层数组。</summary>
+    private static void MergeNestedArray(JsonObject local, JsonObject remote,
+        string outer, string inner, string key, ref int added, ref int replaced)
+    {
+        if (remote[outer] is not JsonObject ro || ro[inner] is not JsonArray) return;
+
+        if (local[outer] is not JsonObject lo)
+        {
+            local[outer] = JsonNodeTool.DeepClone(ro);
+            return;
+        }
+
+        MergeArray(lo, ro, inner, key, ref added, ref replaced);
+    }
+
+    /// <summary>按主键把远端数组合进本地数组。</summary>
+    private static void MergeKeyed(JsonArray local, JsonArray remote, string key,
+        ref int added, ref int replaced)
+    {
+        foreach (var rv in remote)
+        {
+            if (rv is not JsonObject ro) continue;
+            string k = Text(ro[key]);
+            if (k.Length == 0) continue;
+
+            int idx = IndexOf(local, key, k);
+            if (idx < 0)
+            {
+                local.Add(JsonNodeTool.DeepClone(rv));
+                added++;
+            }
+            else
+            {
+                /* 内容完全一样就不算"覆盖"，直接跳过。
+                 *
+                 * 两边的默认配置有几百条相同的内置项，全算成"覆盖"的话，
+                 * 用户会看到"合并完成：覆盖 326 项"，以为配置被改得面目全非，
+                 * 实际上一条都没变。计数得反映真实的改动量。 */
+                if (JsonNodeTool.DeepEquals(local[idx], rv)) continue;
+                local[idx] = JsonNodeTool.DeepClone(rv);
+                replaced++;
+            }
+        }
+    }
+
+    private static int IndexOf(JsonArray arr, string key, string value)
+    {
+        for (int i = 0; i < arr.Count; i++)
+        {
+            if (arr[i] is JsonObject o && Same(Text(o[key]), value)) return i;
+        }
+        return -1;
+    }
+
+    private static string Text(JsonNode? node)
+    {
+        try { return node?.ToString()?.Trim() ?? ""; }
+        catch { return ""; }
+    }
+
+    private static bool Same(string a, string b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    // ---------------- 层（带嵌套按键） ----------------
+
+    private static void MergeLayers(JsonObject local, JsonObject remote,
+        ref int added, ref int replaced)
+    {
+        if (remote["Layers"] is not JsonArray ra) return;
+
+        if (local["Layers"] is not JsonArray la)
+        {
+            local["Layers"] = JsonNodeTool.DeepClone(ra);
+            added += ra.Count;
+            return;
+        }
+
+        foreach (var rv in ra)
+        {
+            if (rv is not JsonObject ro) continue;
+            string id = Text(ro["Id"]);
+            if (id.Length == 0) continue;
+
+            int idx = IndexOf(la, "Id", id);
+            if (idx < 0)
+            {
+                la.Add(JsonNodeTool.DeepClone(rv));
+                added++;
+                continue;
+            }
+
+            if (la[idx] is not JsonObject lo) continue;
+
+            // 层名：远端空名不覆盖本地（远端常是老版本导出的无名层）
+            string name = Text(ro["Name"]);
+            if (name.Length > 0 && !Same(name, Text(lo["Name"])))
+            {
+                lo["Name"] = name;
+                replaced++;
+            }
+            if (ro["Enabled"] != null && !JsonNodeTool.DeepEquals(lo["Enabled"], ro["Enabled"]))
+            {
+                lo["Enabled"] = JsonNodeTool.DeepClone(ro["Enabled"]!);
+                replaced++;
+            }
+
+            /* 子层定义一起合并。
+             *
+             * 只搬 Keys 不搬 SubLayers 会造出"永远不生效"的绑定：
+             * 备份里第 4 层用 Tab 做子层，绑了 caps_tab_q；合并到一台
+             * 本地第 4 层只有 ctrl/shift/alt/win 的机器上，caps_tab_q 照样被搬过去，
+             * 但 IsSubLayerKey 认不出 tab —— 那个键按下去毫无反应，
+             * 而界面上显示的仍是默认的四个子层，用户根本查不出原因。 */
+            if (ro["SubLayers"] is JsonArray rs)
+            {
+                if (lo["SubLayers"] is JsonArray ls)
+                {
+                    MergeKeyed(ls, rs, "Key", ref added, ref replaced);
+                }
+                else
+                {
+                    lo["SubLayers"] = JsonNodeTool.DeepClone(rs);
+                    added += rs.Count;
+                }
+            }
+            if (ro["SubLayerModifiers"] is JsonArray rm)
+            {
+                // 修饰键型子层：整份替换（它是"层的一个属性"，逐条合并没有意义）
+                if (!JsonNodeTool.DeepEquals(lo["SubLayerModifiers"], rm))
+                {
+                    lo["SubLayerModifiers"] = JsonNodeTool.DeepClone(rm);
+                    replaced++;
+                }
+            }
+
+            if (ro["Keys"] is JsonArray rk)
+            {
+                if (lo["Keys"] is JsonArray lk)
+                    MergeKeyed(lk, rk, "Combo", ref added, ref replaced);
+                else
+                {
+                    lo["Keys"] = JsonNodeTool.DeepClone(rk);
+                    added += rk.Count;
+                }
+            }
+        }
+    }
+}

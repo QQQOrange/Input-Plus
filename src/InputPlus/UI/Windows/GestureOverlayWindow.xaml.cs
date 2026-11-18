@@ -1,0 +1,334 @@
+using System;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
+using InputPlus.Core.Gestures;
+using InputPlus.Core.Localization;
+
+namespace InputPlus.UI.Windows;
+
+/// <summary>
+/// 手势轨迹覆盖层：铺满整个虚拟屏幕的一张透明画布。
+///
+/// 三条硬约束（少一条就会毁掉手感）：
+/// <list type="number">
+/// <item>**不能抢焦点** —— 画手势时前台窗口必须保持原样，否则右键菜单、
+/// 输入焦点全会丢。靠 WS_EX_NOACTIVATE + ShowActivated=false 保证。</item>
+/// <item>**不能挡点击** —— 它盖在所有窗口上面，必须 WS_EX_TRANSPARENT 点击穿透，
+/// 否则用户画完手势、下一次点击就点在覆盖层上了。</item>
+/// <item>**坐标要按像素换算** —— 钩子给的是物理像素，WPF 用的是 DIP；
+/// 高分屏下不换算，轨迹会缩到左上角四分之一。</item>
+/// </list>
+///
+/// 轨迹与名称的画法照搬 WGestures 2：三层笔（阴影 / 描边 / 主线，见
+/// <c>YingDev.WGApp.Views\PathView.xaml.cs</c>：描边粗细 = 线宽 + 2×BorderWidth、
+/// 透明度 = 主色 ×0.75，阴影 = ×0.075）、颜色只在"已识别 / 未识别"之间切换一次
+/// （<c>A/T.cs:130</c>）、名称位置由 GestureNamePos 决定（<c>A/T.cs:387-393</c>：
+/// y = area.Top + (area.Height - labelH) × (1 - pos)，水平居中）、执行后按
+/// FadeOutExecuted 淡出（<c>A/T.cs:141-150</c>：勾了→停 100ms 后 1ms 消失；
+/// 没勾→停 250ms 后 250ms CubicEaseIn 淡出）。
+/// </summary>
+public sealed partial class GestureOverlayWindow : Window
+{
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TRANSPARENT = 0x00000020;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int WS_EX_NOACTIVATE = 0x08000000;
+
+    private double _scale = 1;
+    private GestureOptions _opts = new();
+    private string? _button;
+    private bool _labelExecuted;
+
+    public GestureOverlayWindow()
+    {
+        InitializeComponent();
+        SourceInitialized += OnSourceInitialized;
+        Left = SystemParameters.VirtualScreenLeft;
+        Top = SystemParameters.VirtualScreenTop;
+        Width = SystemParameters.VirtualScreenWidth;
+        Height = SystemParameters.VirtualScreenHeight;
+    }
+
+    private void OnSourceInitialized(object? sender, EventArgs e)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+        SetWindowLong(hwnd, GWL_EXSTYLE,
+            ex | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        _scale = GetDpiForWindow(hwnd) / 96.0;
+        if (_scale <= 0.1) _scale = 1;
+    }
+
+    /* DPI 比例不能只靠 SourceInitialized 那次取：窗口没显示时
+     * GetDpiForWindow 可能返回 0，于是 _scale 落到 1，
+     * 200% 缩放下轨迹会画到两倍远的地方。每帧按当前视觉树再问一次最稳。 */
+    private double Scale
+    {
+        get
+        {
+            try
+            {
+                double s = VisualTreeHelper.GetDpi(this).DpiScaleX;
+                return s > 0.1 ? s : 1;
+            }
+            catch { return 1; }
+        }
+    }
+
+    /// <summary>物理像素 → 画布坐标（DIP，相对虚拟屏幕左上角）。</summary>
+    private Point ToCanvas(double px, double py)
+    {
+        double scale = Scale;
+        return new(px / scale - SystemParameters.VirtualScreenLeft,
+                   py / scale - SystemParameters.VirtualScreenTop);
+    }
+
+    // ───────────────── 轨迹颜色（照 WGestures 2 的两色模型） ─────────────────
+
+    /// <summary>未识别时的颜色：分键自定义优先（老功能），否则用 WG2 的 PathColorNormal。</summary>
+    private Color NormalColor()
+    {
+        string? custom = null;
+        if (!string.IsNullOrEmpty(_button) && _opts.ButtonTrailColors != null &&
+            _opts.ButtonTrailColors.TryGetValue(_button!, out string? value) &&
+            !string.IsNullOrWhiteSpace(value))
+            custom = value;
+        return Wg2Color.Parse(custom, Wg2Color.Parse(_opts.PathColorNormal, Colors.Black));
+    }
+
+    private Color RecognizedColor()
+        => Wg2Color.Parse(_opts.PathColorRecognized, Color.FromRgb(0x59, 0x00, 0xFF));
+
+    /* 描边和阴影不是独立的配置项，而是主色的两个派生：
+     * 描边把主色的 RGB 提亮成白、只留 75% 的透明度，阴影 7.5%，
+     * 所以换色时三支笔必须一起换，只改主线会留下"彩色线 + 灰描边"。 */
+    private void ApplyPathColor(Color color)
+    {
+        double opacity = Math.Clamp(_opts.TrailOpacity, 0.05, 1.0);
+        double width = Math.Clamp(_opts.PathLineWidth, 0.5, 12.0);
+
+        byte A(double factor)
+            => (byte)Math.Clamp(Math.Round(color.A * factor * opacity), 0, 255);
+
+        TrailMainSet(color, A(1.0), width);
+        TrailBorder.Stroke = new SolidColorBrush(Color.FromArgb(A(0.75), 0xFF, 0xFF, 0xFF));
+        // 描边画在主线两侧各 1px：粗细 = 线宽 + 2×BorderWidth（WG2 BorderWidth = 勾选?1:0）
+        TrailBorder.StrokeThickness = _opts.ShowPathBorder ? width + 2 : 0;
+        TrailBorder.Visibility = _opts.ShowPathBorder ? Visibility.Visible : Visibility.Collapsed;
+        TrailShadow.Stroke = new SolidColorBrush(Color.FromArgb(A(0.075), 0, 0, 0));
+        TrailShadow.StrokeThickness = width + 4;
+    }
+
+    private void TrailMainSet(Color color, byte alpha, double width)
+    {
+        Trail.Stroke = new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
+        Trail.StrokeThickness = width;
+    }
+
+    // ───────────────── 名称框（照 WGestures 2 的 GestureLabelView） ─────────────────
+
+    private void ApplyLabelStyle(bool executed)
+    {
+        _labelExecuted = executed;
+        var color = Wg2Color.Parse(
+            executed ? _opts.LabelColorExecuted : _opts.LabelColorNormal,
+            executed ? Color.FromRgb(0x59, 0x00, 0xFF) : Color.FromArgb(0x55, 0, 0, 0));
+
+        LabelBox.Background = new SolidColorBrush(color);
+        /* 白字 + 黑晕：配置里的底色可能很淡（出厂 #00000030），
+         * 光靠底色在浅色窗口上会看不清白字，加一圈黑影兜住可读性。 */
+        LabelText.Foreground = Brushes.White;
+        LabelText.Effect = new DropShadowEffect
+        {
+            Color = Colors.Black,
+            BlurRadius = 8,
+            ShadowDepth = 0,
+            Opacity = 0.55
+        };
+        LabelBox.Effect = new DropShadowEffect
+        {
+            Color = Colors.Black,
+            BlurRadius = 16,
+            ShadowDepth = 0,
+            Opacity = 0.45
+        };
+        LabelBox.CornerRadius = new CornerRadius(16);
+        double border = _opts.ShowLabelBorder
+            ? Math.Max(1.0, _opts.LabelBorderWidth) * 2
+            : 0;
+        LabelBox.BorderThickness = new Thickness(border);
+        LabelBox.BorderBrush = border > 0
+            ? new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF))
+            : Brushes.Transparent;
+    }
+
+    // ───────────────── 起手 ─────────────────
+
+    /// <summary>一次手势开始时调用：清干净上一笔，按配置铺好"未识别"配色。</summary>
+    public void Begin(GestureOptions opts, string? button = null)
+    {
+        _opts = opts ?? new GestureOptions();
+        _button = button;
+        TrailsReset();
+        TimeoutDot.Visibility = Visibility.Collapsed;
+        LabelBox.Visibility = Visibility.Collapsed;
+        ApplyPathColor(NormalColor());
+        ApplyLabelStyle(executed: false);
+        LabelBox.Opacity = 1.0;
+        LabelBox.BeginAnimation(OpacityProperty, null);
+    }
+
+    private void TrailsReset()
+    {
+        Trail.Points.Clear();
+        TrailBorder.Points.Clear();
+        TrailShadow.Points.Clear();
+    }
+
+    public void AddPoint(double px, double py)
+    {
+        var p = ToCanvas(px, py);
+        Trail.Points.Add(p);
+        TrailBorder.Points.Add(p);
+        TrailShadow.Points.Add(p);
+    }
+
+    public void ReplaceLast(double px, double py)
+    {
+        if (Trail.Points.Count == 0) { AddPoint(px, py); return; }
+        var p = ToCanvas(px, py);
+        Trail.Points[^1] = p;
+        TrailBorder.Points[^1] = p;
+        TrailShadow.Points[^1] = p;
+    }
+
+    /// <summary>
+    /// 认出来了：三支笔一起换成「已识别」色。WG2 只在命中这一刻换一次色，
+    /// 之后哪怕继续画也不回退（<c>A/T.cs:130</c>）。
+    /// </summary>
+    public void MarkRecognized() => ApplyPathColor(RecognizedColor());
+
+    // ───────────────── 结果 ─────────────────
+
+    /// <summary>没有匹配规则时：轨迹保持「未识别」色，并显示「未识别」。</summary>
+    public void ShowUnrecognized(double px, double py)
+    {
+        ApplyPathColor(NormalColor());
+        ShowLabel(Loc.T("未识别"), px, py, keepTrail: true);
+    }
+
+    /// <summary>起始超时：鼠标尖端一个红色实心圆。只画圆，不显示文字和轨迹。</summary>
+    public void ShowTimeoutDot(double px, double py)
+    {
+        TrailsReset();
+        LabelBox.Visibility = Visibility.Collapsed;
+
+        var p = ToCanvas(px, py);
+        const double size = 16;
+        Canvas.SetLeft(TimeoutDot, p.X - size / 2);
+        Canvas.SetTop(TimeoutDot, p.Y - size / 2);
+        TimeoutDot.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// 显示手势名称。位置按 WG2 的 GestureNamePos：
+    /// <c>y = area.Top + (area.Height - labelH) × (1 - pos)</c>，pos=0 贴底、1 贴顶，
+    /// 水平居中（<c>A/T.cs:387-393</c>）。
+    /// <paramref name="keepTrail"/> 为 false 时顺手清掉轨迹。
+    /// <paramref name="executed"/> 用「已执行」配色（LabelColorExecuted）。
+    /// </summary>
+    public void ShowLabel(string text, double px, double py, bool keepTrail = false, bool executed = false)
+    {
+        if (!keepTrail) TrailsReset();
+        TimeoutDot.Visibility = Visibility.Collapsed;
+
+        ApplyLabelStyle(executed);
+        LabelText.Text = text;
+        LabelBox.Visibility = Visibility.Visible;
+        LabelBox.Opacity = 1.0;
+        LabelBox.BeginAnimation(OpacityProperty, null);
+        LabelBox.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var size = LabelBox.DesiredSize;
+
+        double x, y;
+        try
+        {
+            var area = System.Windows.Forms.Screen
+                .FromPoint(new System.Drawing.Point((int)px, (int)py)).WorkingArea;
+            var topLeft = ToCanvas(area.Left, area.Top);
+            var bottomRight = ToCanvas(area.Right, area.Bottom);
+            double w = bottomRight.X - topLeft.X;
+            double h = bottomRight.Y - topLeft.Y;
+            double pos = Math.Clamp(_opts.GestureNamePos, 0.0, 1.0);
+            x = topLeft.X + Math.Max(0, (w - size.Width) / 2);
+            y = topLeft.Y + Math.Max(0, (h - size.Height) * (1.0 - pos));
+        }
+        catch
+        {
+            double pos = Math.Clamp(_opts.GestureNamePos, 0.0, 1.0);
+            x = Math.Max(0, (Width - size.Width) / 2);
+            y = Math.Max(0, (Height - size.Height) * (1.0 - pos));
+        }
+        Canvas.SetLeft(LabelBox, x);
+        Canvas.SetTop(LabelBox, y);
+    }
+
+    /// <summary>
+    /// 名称框淡出（WG2 的「执行后淡出」语义）：勾了 FadeOutExecuted → 停 100ms 后
+    /// 1ms 直接消失；没勾 → 停 250ms 再花 250ms 缓入淡出。
+    /// 返回还需要多少毫秒才能彻底看不见（0 = 没有名称框，可以立刻清）。
+    /// </summary>
+    public int FadeOutLabel()
+    {
+        if (LabelBox.Visibility != Visibility.Visible) return 0;
+
+        bool fast = _opts.FadeOutExecuted;
+        double delay = fast ? 100 : 250;
+        double duration = fast ? 1 : 250;
+
+        var fade = new DoubleAnimation(1.0, 0.0, new Duration(TimeSpan.FromMilliseconds(duration)))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(delay)
+        };
+        if (!fast)
+            fade.EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn };
+        LabelBox.BeginAnimation(OpacityProperty, fade);
+        return (int)Math.Ceiling(delay + duration) + 30;
+    }
+
+    /// <summary>只收起名称框，保留正在画的轨迹（实时预览换名时用）。</summary>
+    public void HideLabelOnly() => LabelBox.Visibility = Visibility.Collapsed;
+
+    public void Clear()
+    {
+        LabelBox.BeginAnimation(OpacityProperty, null);
+        LabelBox.Opacity = 1.0;
+        _labelExecuted = false;
+        TrailsReset();
+        TimeoutDot.Visibility = Visibility.Collapsed;
+        LabelBox.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>让窗口"存在但不打扰"：不激活、不进 Alt+Tab、不抢鼠标。</summary>
+    public void ShowPassive()
+    {
+        if (!IsVisible) Show();
+        // 每次显示都重新压到最上层：别的程序可能刚好也置顶了。
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != IntPtr.Zero)
+            SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0,
+                0x0001 | 0x0002 | 0x0010); // NOSIZE | NOMOVE | NOACTIVATE
+    }
+
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+}

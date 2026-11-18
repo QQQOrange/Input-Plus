@@ -48,11 +48,11 @@ def try_band(hwnd, band, insert_after=HWND_TOP):
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    exe = os.path.join(root, "dist", "KeyboardEnhance.exe")
+    exe = os.path.join(root, "dist", "InputPlus.exe")
 
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = os.path.join(root, ".probeband")
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "-probe-band"
+    env["INPUTPLUS_DATA"] = os.path.join(root, ".probeband")
+    env["INPUTPLUS_MUTEX_SUFFIX"] = "-probe-band"
 
     print(f"启动 {exe} --osd 50 --osd-hold 120000")
     p = subprocess.Popen([exe, "--osd", "50", "--osd-hold", "120000"], env=env)

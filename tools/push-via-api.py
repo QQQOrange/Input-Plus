@@ -22,7 +22,7 @@ import sys
 import urllib.error
 import urllib.request
 
-REPO = "QQQOrange/Keyboard-enhance"
+REPO = "QQQOrange/Input-Plus"
 API = "https://api.github.com"
 
 

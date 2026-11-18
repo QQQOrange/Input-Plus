@@ -11,7 +11,7 @@
 "像素不变"就是最干净的判据。
 
 用法：
-    python tools/test_osd_start_menu.py <KeyboardEnhance.exe>
+    python tools/test_osd_start_menu.py <InputPlus.exe>
 
 退出码 0 = 通过，1 = 失败。脚本结束会把开始菜单收起来。
 """
@@ -23,8 +23,8 @@ import subprocess
 import sys
 import time
 
-EXE = sys.argv[1] if len(sys.argv) > 1 else os.path.join("dist", "KeyboardEnhance.exe")
-TITLE = "按键增强 横条"
+EXE = sys.argv[1] if len(sys.argv) > 1 else os.path.join("dist", "InputPlus.exe")
+TITLE = "Input Plus 横条"
 
 u = ctypes.WinDLL("user32", use_last_error=True)
 g = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -157,8 +157,8 @@ def close_start_menu() -> None:
 
 def main():
     env = dict(os.environ)
-    env["CAPSLOCKPLUS_DATA"] = os.path.join(os.getcwd(), ".e2e-start-menu")
-    env["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "-e2e-start-menu"
+    env["INPUTPLUS_DATA"] = os.path.join(os.getcwd(), ".e2e-start-menu")
+    env["INPUTPLUS_MUTEX_SUFFIX"] = "-e2e-start-menu"
 
     print(f"启动 {EXE}")
     p = subprocess.Popen([EXE, "--osd", "100", "--osd-hold", "20000"], env=env)
@@ -210,7 +210,7 @@ def main():
 
         if blueness(base_avg) < 40:
             print("✘ 横条本身就没画在任务栏/开始菜单之上（采样点看不到强调蓝）")
-            print("  常见原因：窗口落回 band 1，被任务栏压住 —— 用 CAPSLOCKPLUS_OSD_BAND=0 可复现")
+            print("  常见原因：窗口落回 band 1，被任务栏压住 —— 用 INPUTPLUS_OSD_BAND=0 可复现")
             return 1
 
         close_start_menu()
@@ -244,7 +244,7 @@ def main():
             print(f"开始菜单前台 band={band_of(u.GetForegroundWindow())}")
 
             env2 = dict(env)
-            env2["CAPSLOCKPLUS_MUTEX_SUFFIX"] = "-e2e-start-menu-2"
+            env2["INPUTPLUS_MUTEX_SUFFIX"] = "-e2e-start-menu-2"
             p2 = subprocess.Popen([EXE, "--osd", "100", "--osd-hold", "8000"], env=env2)
             try:
                 hwnd2 = None

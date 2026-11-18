@@ -1,0 +1,17 @@
+﻿<Window x:Class="InputPlus.UI.Windows.OsdWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+        xmlns:local="clr-namespace:InputPlus.UI.Windows"
+        Width="216" Height="72"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
+        Topmost="True" Focusable="False" IsHitTestVisible="False"
+        SnapsToDevicePixels="True" UseLayoutRounding="True"
+        Title="{loc:T 'Input Plus 横条'}">
+
+    <!-- 视觉本体在 OsdCard 里 —— 同一个控件还要供 band 16 的分层宿主
+         离屏渲染用，两边必须是**同一份**定义，否则两条路径会慢慢长歪。
+         尺寸/圆角/贴底距离的实测依据见 OsdWindow 的注释。 -->
+    <local:OsdCard x:Name="CardView" />
+</Window>
