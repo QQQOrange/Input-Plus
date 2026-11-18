@@ -166,7 +166,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0">
                             <TextBlock Text="{loc:T '当前版本'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock x:Name="CurrentVersionText" Text="1.1.0"
+                            <TextBlock x:Name="CurrentVersionText" Text="1.2.1"
                                        Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" />
                             <!-- 上次检查更新的时间：自动更新默认每天要检查，
                                  用户需要知道"到底查过没有、什么时候查的" -->
