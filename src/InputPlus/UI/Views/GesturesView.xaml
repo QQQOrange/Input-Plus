@@ -589,11 +589,18 @@
                 <ColumnDefinition Width="400" />
             </Grid.ColumnDefinitions>
 
-            <!-- 左：边缘手势 + 作用目标（全局 / 各个应用程序） -->
-            <StackPanel Grid.Column="0" Margin="0,0,14,0">
+            <!-- 左：边缘手势 + 作用目标（全局 / 各个应用程序）
+                 这一列必须是 Grid，不能是 StackPanel：StackPanel 给子项无限高，
+                 「作用目标」卡里那行 * （手势列表的滚动区）就永远量不到边界，
+                 卡片会长到窗口外面 —— 底下没有圆角，也不滚动。 -->
+            <Grid Grid.Column="0" Margin="0,0,14,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
                 <!-- 边缘手势单独一栏：四角悬停 + 贴边滚轮不针对某个程序，
                      混在“作用目标”里会被误认为是一个应用。 -->
-                <Border Style="{StaticResource Card}" Padding="10,12" Margin="0,0,0,10">
+                <Border Grid.Row="0" Style="{StaticResource Card}" Padding="10,12" Margin="0,0,0,10">
                     <StackPanel>
                         <TextBlock Text="{loc:T '边缘手势'}" Style="{StaticResource Text.Secondary}"
                                    FontWeight="SemiBold" Margin="6,0,0,8" />
@@ -636,7 +643,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Padding="10,12" Margin="0">
+                <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10,12" Margin="0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -773,7 +780,7 @@
                                Text="{loc:T '选中一个目标，只显示它自己的手势；应用手势优先于全局。'}" />
                 </Grid>
                 </Border>
-            </StackPanel>
+            </Grid>
 
             <!-- 中：该目标下的手势列表 -->
             <Border Grid.Column="1" Style="{StaticResource Card}" Margin="0,0,14,0" Padding="16,14">

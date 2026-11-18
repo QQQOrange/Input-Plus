@@ -62,10 +62,13 @@ internal static class FrameStyles
 	/// <summary>四角圆点：四个角各一个实心圆点，配合细线或不配。</summary>
 	public const string Dots = "Dots";
 
-	// 精简后的样式表：#43 起只保留经得起看的 5 种。
-	// 旧的 Flat / Solid / Double / Aurora / Neon / Halo / Corners / Underline / Brackets 全部删除
-	// （用户反馈：丑、不明显、不实用），虚线环是唯一日常在用的，留作默认。
-	public static readonly string[] All = new string[11] { "Aurora", "Neon", "Dashed", "Hairline", "Focus", "Glow", "Shadow", "Corners", "Brackets", "Underline", "Dots" };
+	// 样式表：只留三套。
+	//   Dashed   虚线环 —— 唯一日常在用的，留作默认
+	//   Hairline 细线环 —— 一根线，最不打扰界面
+	//   Aurora   流光边 —— 想显眼一点时用
+	// 其余（Focus / Glow / Shadow / Corners / Brackets / Underline / Dots / Neon 等）全部删掉：
+	// 老配置里如果还留着这些 id，IsValid 会判 false，ConfigStore 读进来时自动回落默认样式。
+	public static readonly string[] All = new string[3] { "Dashed", "Hairline", "Aurora" };
 
 	public static string DefaultId => "Dashed";
 

@@ -27,7 +27,7 @@ public static partial class SelfTest
         Check("按住拖拽：空配置解析得出默认值", cfg != null);
         if (cfg is null) cfg = new AppConfig();
         CheckEqual("按住拖拽：默认触发键是 Enter", cfg.TriggerKeyId, "K:0x0D");
-        Check("按住拖拽：默认长按时长是 600ms", cfg.HoldMs == 600, cfg.HoldMs.ToString());
+        Check("按住拖拽：默认长按时长是 300ms", cfg.HoldMs == 300, cfg.HoldMs.ToString());
         CheckEqual("按住拖拽：左键默认拖", cfg.ActionLeft, Actions.Move);
         CheckEqual("按住拖拽：右键默认缩放", cfg.ActionRight, Actions.Resize);
         CheckEqual("按住拖拽：中键默认最大化", cfg.ActionMiddle, Actions.Maximize);
@@ -36,7 +36,7 @@ public static partial class SelfTest
         cfg.TriggerKeyId = "K:0x20";
         cfg.TriggerMode = "Toggle";
         cfg.HoldMs = 450;
-        cfg.FrameStyleId = "Glow";
+        cfg.FrameStyleId = "Aurora";
         cfg.FrameColorId = "Accent";
         cfg.SnapThreshold = 12;
         cfg.Blacklist = "game.exe";
@@ -45,7 +45,7 @@ public static partial class SelfTest
         CheckEqual("按住拖拽：往返保住触发键", back.TriggerKeyId, "K:0x20");
         CheckEqual("按住拖拽：往返保住触发方式", back.TriggerMode, "Toggle");
         Check("按住拖拽：往返保住长按时长", back.HoldMs == 450, back.HoldMs.ToString());
-        CheckEqual("按住拖拽：往返保住外框样式", back.FrameStyleId, "Glow");
+        CheckEqual("按住拖拽：往返保住外框样式", back.FrameStyleId, "Aurora");
         CheckEqual("按住拖拽：往返保住外框颜色", back.FrameColorId, "Accent");
         Check("按住拖拽：往返保住吸附阈值", back.SnapThreshold == 12, back.SnapThreshold.ToString());
         CheckEqual("按住拖拽：往返保住黑名单", back.Blacklist, "game.exe");
@@ -69,6 +69,18 @@ public static partial class SelfTest
             string.Equals(fixedUp.FrameStyleId, FrameStyles.DefaultId, StringComparison.Ordinal), fixedUp.FrameStyleId);
         CheckEqual("按住拖拽：无效动作回落拖动", fixedUp.ActionLeft, Actions.Move);
 
+        // ---- 外框样式只留三套：细线环、虚线环、流光边 ----
+        Check("按住拖拽：外框样式只剩三套", FrameStyles.All.Length == 3, FrameStyles.All.Length.ToString());
+        CheckEqual("按住拖拽：三套样式是 虚线环/细线环/流光边",
+            string.Join("|", FrameStyles.All), "Dashed|Hairline|Aurora");
+        Check("按住拖拽：细线环还在", FrameStyles.IsValid("Hairline"));
+        Check("按住拖拽：流光边还在", FrameStyles.IsValid("Aurora"));
+        Check("按住拖拽：旧样式 柔光 已经删掉", !FrameStyles.IsValid("Glow"));
+        Check("按住拖拽：旧样式 霓虹 已经删掉", !FrameStyles.IsValid("Neon"));
+        Check("按住拖拽：旧样式 底部条 已经删掉", !FrameStyles.IsValid("Underline"));
+        var legacyStyle = ConfigStore.Parse("{\"FrameStyleId\":\"Glow\"}");
+        CheckEqual("按住拖拽：老配置里的旧样式自动回落虚线环", legacyStyle.FrameStyleId, FrameStyles.DefaultId);
+
         // ---- 关着的时候：装配一次也不许装钩子 ----
         var settings = new AppSettings();
         using (var service = new HoldDragService(() => settings))
@@ -78,7 +90,7 @@ public static partial class SelfTest
             Check("按住拖拽：关着时也不报错", string.IsNullOrEmpty(service.LastError), service.LastError);
 
             var editable = service.EditableConfig();
-            Check("按住拖拽：没配置时也能给出可编辑的默认值", editable != null && editable.HoldMs == 600);
+            Check("按住拖拽：没配置时也能给出可编辑的默认值", editable != null && editable.HoldMs == 300);
             if (editable is null) editable = new AppConfig();
 
             editable.HoldMs = 520;
@@ -128,5 +140,24 @@ public static partial class SelfTest
             "wps.exe=Ignore\ncode.exe=NoFrame");
         CheckEqual("按程序规则：行为留空按完全不接管算",
             UI.Views.HoldDragView.UpsertRule("", "game.exe", ""), "game.exe=Ignore");
+        // 手打用分号（引擎自己的写法）也得拆开，不能把 "; code.exe=MoveOnly" 当成行为名
+        CheckEqual("按程序规则：分号分隔的清单也拆得开",
+            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore; code.exe=MoveOnly", "code.exe", "NoFrame"),
+            "wps.exe=Ignore\ncode.exe=NoFrame");
+
+        // ---- 清单是配置的视图：删掉一条就等于把它从配置里拿掉 ----
+        CheckEqual("程序例外：删一条不影响别的", UI.Views.HoldDragView.RemoveToken("a.exe\nb.exe", "b.exe"), "a.exe");
+        CheckEqual("程序例外：删不存在的条目什么都不变",
+            UI.Views.HoldDragView.RemoveToken("a.exe", "zz.exe"), "a.exe");
+        CheckEqual("按程序规则：删规则按程序名匹配",
+            UI.Views.HoldDragView.RemoveRule("wps.exe=Ignore; code.exe=MoveOnly", "wps.exe"), "code.exe=MoveOnly");
+
+        // ---- 拖动不再按屏幕刷新率节流（AltDrag 那套：每个鼠标移动事件立刻落位） ----
+        // 这两个配置字段和节流 API 已经删掉，留着的话就会有人"顺手"再把它接回移动路径。
+        Check("按住拖拽：配置里已经没有「跟随刷新率」",
+            typeof(AppConfig).GetProperty("DragRefreshMode") is null && typeof(AppConfig).GetProperty("DragRefreshHz") is null);
+        Check("按住拖拽：拖动线程没有帧间隔节流",
+            typeof(DragWorker).GetProperty("FrameIntervalMs") is null
+            && typeof(AppConfig).GetMethod("FrameIntervalMs") is null);
     }
 }

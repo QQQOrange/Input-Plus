@@ -48,8 +48,6 @@ internal sealed class DragWorker : IDisposable
 
 	private readonly ManualResetEventSlim _ready = new ManualResetEventSlim(initialState: false);
 
-	private volatile int _frameIntervalMs;
-
 	public static long MaxMoveMs;
 
 	public static long MaxIdleMs;
@@ -57,18 +55,6 @@ internal sealed class DragWorker : IDisposable
 	public static int MaxDrained;
 
 	private volatile bool _disposed;
-
-	public int FrameIntervalMs
-	{
-		get
-		{
-			return _frameIntervalMs;
-		}
-		set
-		{
-			_frameIntervalMs = ((value >= 0) ? value : 0);
-		}
-	}
 
 	public bool IsRunning
 	{
@@ -215,19 +201,6 @@ internal sealed class DragWorker : IDisposable
 					if (num3 > MaxMoveMs)
 					{
 						MaxMoveMs = num3;
-					}
-					int frameIntervalMs = _frameIntervalMs;
-					if (frameIntervalMs > 0)
-					{
-						long num4 = frameIntervalMs - (Environment.TickCount64 - tickCount2);
-						if (num4 > 1)
-						{
-							Thread.Sleep((int)num4);
-						}
-						else if (num4 == 1)
-						{
-							Thread.Sleep(1);
-						}
 					}
 				}
 			}

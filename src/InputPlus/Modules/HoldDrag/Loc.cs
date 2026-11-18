@@ -423,7 +423,7 @@ namespace InputPlus.Modules.HoldDrag
 			["换 Windows 主题色时外框一起变；优先级高于自定义颜色"] = "The frame follows Windows theme color changes; takes precedence over custom colors",
 			["自定义颜色"] = "Custom color",
 			["打开系统取色器，可以选任意颜色"] = "Opens the system color picker — any color you like",
-			["外框长什么样：虚线、细线、焦点、柔光、投影"] = "How the frame looks: dashes, hairline, focus, glow, shadow",
+			["外框长什么样：虚线环、细线环、流光边"] = "How the frame looks: dashes, hairline, focus, glow, shadow",
 			["选一种画法；下面的缩略图也可以直接点"] = "Choose a drawing style; the thumbnails below are clickable too",
 			["缩略图"] = "Thumbnails",
 			["粗细"] = "Thickness",

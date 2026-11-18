@@ -63,8 +63,6 @@ internal sealed class DragEngine : IDisposable
 
 	private static readonly int OwnPid = Process.GetCurrentProcess().Id;
 
-	private static int _detectedHz;
-
 	private readonly object _gate = new object();
 
 	private Session _session;
@@ -109,8 +107,6 @@ internal sealed class DragEngine : IDisposable
 	private volatile bool _sizeMoveActive;
 
 	/// <summary>本次拖动是否成功把系统定时器精度提到 1ms（结束时要还回去，别让整个系统陪着耗电）。</summary>
-	private bool _timerResolutionRaised;
-
 	internal static int DiagFrameUpdates;
 
 	internal static int DiagWindowSkipped;
@@ -124,21 +120,6 @@ internal sealed class DragEngine : IDisposable
 	private volatile bool _dragWait;
 
 	private bool _frameInside;
-
-	internal static int DetectedRefreshHz
-	{
-		get
-		{
-			int detectedHz = _detectedHz;
-			if (detectedHz > 0)
-			{
-				return detectedHz;
-			}
-			detectedHz = (_detectedHz = Native.GetRefreshRate());
-			Log.Info("实测屏幕刷新率：" + detectedHz + " Hz");
-			return detectedHz;
-		}
-	}
 
 	public bool IsDragging => _dragging;
 
@@ -409,22 +390,8 @@ internal sealed class DragEngine : IDisposable
 		WindowActions.ResetSessionKickCache();
 		DiagReset();
 		_frameInside = false;
-		// 一次拖动期间把系统定时器精度提到 1ms：帧间隔 7ms（144Hz）这类设置在默认 15.6ms 精度下根本达不到，
-		// 而且每次 Thread.Sleep 都会连带推迟合并队列里的鼠标移动。拖动结束立刻还回去（见 Cleanup）。
-		if (!_timerResolutionRaised)
-		{
-			try
-			{
-				_timerResolutionRaised = Native.TimeBeginPeriod(1u) == 0;
-			}
-			catch (Exception ex2)
-			{
-				Log.Error(ex2);
-			}
-		}
 		WindowActions.NotifySizeMove(hwnd, start: true);
 		_sizeMoveActive = true;
-		_worker.FrameIntervalMs = appConfig.FrameIntervalMs(DetectedRefreshHz);
 		try
 		{
 			GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
@@ -458,7 +425,7 @@ internal sealed class DragEngine : IDisposable
 			Native.RECT rECT = FrameRectOf(lpRect, appConfig, out var inset2);
 			Log.Info("[诊断] 拖动框已请求显示 开关=" + appConfig.ShowActivationFrame + " 就绪=" + _overlaysReady + " 目标矩形=" + lpRect.Left + "," + lpRect.Top + " " + lpRect.Width + "x" + lpRect.Height + " 可见缩进=" + _inset.Left + "/" + _inset.Top + "/" + _inset.Right + "/" + _inset.Bottom + " 外框矩形=" + rECT.Left + "," + rECT.Top + " " + rECT.Width + "x" + rECT.Height + (inset2 ? " 模式=内缩" : " 模式=外扩") + " 抬到最顶=" + _frame.RaiseAboveAll + " 显示=" + _frame.IsShown + " 请求=" + (_frame.ShowRequestedForTest ? "已投递" : "未投递"));
 		}
-		Log.Info((move ? "开始移动" : "开始缩放") + " 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X") + " 刷新率=" + DetectedRefreshHz + "Hz");
+		Log.Info((move ? "开始移动" : "开始缩放") + " 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X"));
 		Interlocked.Increment(ref _sessionCount);
 		return true;
 	}
@@ -744,6 +711,22 @@ internal sealed class DragEngine : IDisposable
 				SnapEngine.Result snap = (s.Move ? SnapEngine.SnapMove(rECT, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)) : SnapEngine.SnapResize(rECT, s.Zone == ResizeZone.Left, s.Zone == ResizeZone.Right, s.Zone == ResizeZone.Top, s.Zone == ResizeZone.Bottom, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)));
 				rECT = snap.Rect;
 			}
+			// 先把窗口挪过去，再画 HUD 和外框 —— 顺序照 AltDrag：一个鼠标移动事件进来，
+			// 第一件事就是让窗口跟上光标。装饰晚一帧看不出来，可它们若排在前面，
+			// 那份开销就直接变成用户手上的延迟。
+			if (forceWrite)
+			{
+				WindowActions.SetDragRect(s.Hwnd, rECT);
+			}
+			else if (WindowActions.SetDragRectFrame(s.Hwnd, rECT, s.Move))
+			{
+				DiagWindowWritten++;
+			}
+			else
+			{
+				DiagWindowSkipped++;
+			}
+
 			if (appConfig.ShowDragHud)
 			{
 				string text = rECT.Width + " × " + rECT.Height;
@@ -769,18 +752,6 @@ internal sealed class DragEngine : IDisposable
 						}
 					}
 				}
-			}
-			if (forceWrite)
-			{
-				WindowActions.SetDragRect(s.Hwnd, rECT);
-			}
-			else if (WindowActions.SetDragRectFrame(s.Hwnd, rECT, s.Move))
-			{
-				DiagWindowWritten++;
-			}
-			else
-			{
-				DiagWindowSkipped++;
 			}
 			if (Log.Verbose)
 			{
@@ -1000,22 +971,10 @@ internal sealed class DragEngine : IDisposable
 				}
 				WindowActions.NotifySizeMove(hwnd, start: false);
 			}
-			if (_timerResolutionRaised)
-			{
-				_timerResolutionRaised = false;
-				try
-				{
-					Native.TimeEndPeriod(1u);
-				}
-				catch (Exception ex0)
-				{
-					Log.Error(ex0);
-				}
-			}
 			if (_overlaysReady)
 			{
 				_frame.HideNowSync();
-			_hud.Hide();
+				_hud.Hide();
 			}
 			try
 			{

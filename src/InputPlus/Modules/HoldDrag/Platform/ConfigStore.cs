@@ -117,10 +117,6 @@ internal sealed class AppConfig
 
 	public string Blacklist { get; set; }
 
-	public string DragRefreshMode { get; set; }
-
-	public int DragRefreshHz { get; set; }
-
 	public int MoveRate { get; set; }
 
 	public int ResizeRate { get; set; }
@@ -168,7 +164,7 @@ internal sealed class AppConfig
 		TriggerKeyId = "K:0x0D";
 		RequireHold = true;
 		TriggerMode = "Hold";
-		HoldMs = 600;
+		HoldMs = 300;
 		ActionLeft = "Move";
 		ActionRight = "Resize";
 		ActionMiddle = "Maximize";
@@ -199,8 +195,6 @@ internal sealed class AppConfig
 		AppRules = string.Empty;
 		CornerPercent = 26;
 		Blacklist = string.Empty;
-		DragRefreshMode = "Auto";
-		DragRefreshHz = 0;
 		MoveRate = 1;
 		ResizeRate = 1;
 		DragThreshold = 1;
@@ -330,22 +324,6 @@ internal sealed class AppConfig
 		{
 			Blacklist = Blacklist.Substring(0, 2000);
 		}
-		if (DragRefreshMode != "Auto" && DragRefreshMode != "Custom")
-		{
-			DragRefreshMode = "Auto";
-		}
-		if (DragRefreshHz < 0)
-		{
-			DragRefreshHz = 0;
-		}
-		if (DragRefreshHz != 0 && DragRefreshHz < 20)
-		{
-			DragRefreshHz = 20;
-		}
-		if (DragRefreshHz > 500)
-		{
-			DragRefreshHz = 500;
-		}
 		MoveRate = 1;
 		ResizeRate = 1;
 		if (DragThreshold < 0)
@@ -428,41 +406,6 @@ internal sealed class AppConfig
 		return 2400;
 	}
 
-	public int FrameIntervalMs(int detectedHz)
-	{
-		if (DragRefreshMode == "Custom")
-		{
-			int num = DragRefreshHz;
-			if (num <= 0)
-			{
-				return 0;
-			}
-			if (num < 20)
-			{
-				num = 20;
-			}
-			if (num > 500)
-			{
-				num = 500;
-			}
-			return (int)Math.Round(1000.0 / (double)num);
-		}
-		if (detectedHz <= 0)
-		{
-			return 0;
-		}
-		if (detectedHz > 500)
-		{
-			detectedHz = 500;
-		}
-		return (int)Math.Round(1000.0 / (double)detectedHz);
-	}
-}
-internal static class RefreshModes
-{
-	public const string Auto = "Auto";
-
-	public const string Custom = "Custom";
 }
 internal static class AutoStartModes
 {

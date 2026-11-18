@@ -91,11 +91,6 @@ internal partial class HoldDragView : UserControl
         foreach (var c in FrameColors.All) colors.Add(new HoldDragPick(c.Id, Loc.T(c.Name)));
         Fill(ColorBox, colors);
 
-        Fill(RefreshModeBox, new List<HoldDragPick>
-        {
-            new("Auto", Loc.T("自动")),
-            new("Custom", Loc.T("自定义")),
-        });
     }
 
     private static void Fill(ComboBox box, List<HoldDragPick> picks)
@@ -171,14 +166,13 @@ internal partial class HoldDragView : UserControl
             OwnBox.IsChecked = _cfg.AllowDragOwnWindows;
             UndoBox.IsChecked = _cfg.UndoEnabled;
 
-            Select(RefreshModeBox, _cfg.DragRefreshMode);
-            RefreshHzBox.Text = Num(_cfg.DragRefreshHz);
             DragThresholdBox.Text = Num(_cfg.DragThreshold);
             DragOutBox.Text = Num(_cfg.DragOutThresholdPx);
             CornerBox.Text = Num(_cfg.CornerPercent);
 
             BlacklistBox.Text = _cfg.Blacklist ?? "";
             RulesBox.Text = _cfg.AppRules ?? "";
+            BuildLists();
         }
         finally { _sync = false; }
 
@@ -272,7 +266,6 @@ internal partial class HoldDragView : UserControl
             case "ActionMiddle": _cfg.ActionMiddle = value; break;
             case "FrameStyleId": _cfg.FrameStyleId = value; break;
             case "FrameColorId": _cfg.FrameColorId = value; break;
-            case "DragRefreshMode": _cfg.DragRefreshMode = value; break;
             default: return;
         }
         ScheduleCommit();
@@ -292,7 +285,6 @@ internal partial class HoldDragView : UserControl
             case "FrameRadius": _cfg.FrameRadius = v; break;
             case "FrameOpacity": _cfg.FrameOpacity = v; break;
             case "SnapThreshold": _cfg.SnapThreshold = v; break;
-            case "DragRefreshHz": _cfg.DragRefreshHz = v; break;
             case "DragThreshold": _cfg.DragThreshold = v; break;
             case "DragOutThresholdPx": _cfg.DragOutThresholdPx = v; break;
             case "CornerPercent": _cfg.CornerPercent = v; break;
@@ -307,6 +299,7 @@ internal partial class HoldDragView : UserControl
         if (ReferenceEquals(sender, BlacklistBox)) _cfg.Blacklist = BlacklistBox.Text ?? "";
         else if (ReferenceEquals(sender, RulesBox)) _cfg.AppRules = RulesBox.Text ?? "";
         else return;
+        BuildLists();      // 右栏清单是这两个框现算出来的，手打一行也要立刻反映过去
         ScheduleCommit();
     }
 
@@ -345,8 +338,13 @@ internal partial class HoldDragView : UserControl
         return string.Join("\n", lines);
     }
 
+    /// <summary>
+    /// 拆「一行一条」：换行和分号都算分隔符。
+    /// 分号是 HoldDrag 引擎自己的写法（<c>wps.exe=Ignore; code.exe=MoveOnly</c>），
+    /// 所以手打用分号、页面上一条一行，两边都认。
+    /// </summary>
     private static List<string> SplitTokens(string? text) =>
-        (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n')
+        (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Replace(';', '\n')
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(s => s.Trim())
             .Where(s => s.Length > 0)
@@ -404,11 +402,11 @@ internal partial class HoldDragView : UserControl
         string merged = AppendToken(BlacklistBox.Text, name);
         if (string.Equals(merged, BlacklistBox.Text ?? "", StringComparison.Ordinal))
         {
-            _host?.Notify(Loc.F("{0} 已经在黑名单里了", name));
+            _host?.Notify(Loc.F("{0} 已经在程序例外里了", name));
             return;
         }
         BlacklistBox.Text = merged;     // TextChanged 会写进 _cfg 并安排一次落盘
-        _host?.Notify(Loc.F("已加入黑名单：{0}", name));
+        _host?.Notify(Loc.F("已加入程序例外：{0}", name));
     }
 
     private void OnRulePickFile(object sender, RoutedEventArgs e) => AddToRules(PickProgramName(false));
@@ -429,27 +427,93 @@ internal partial class HoldDragView : UserControl
         _host?.Notify(Loc.F("已加入规则：{0}", name + "=" + mode));
     }
 
+    // ---------------- 右栏清单：程序例外 / 按程序规则 ----------------
+    // 配置里这两块都是「一行一条」的纯文本，清单只是它的视图：
+    // 挑程序、手打、点「恢复 / 删除」都改同一份文本，改完立刻重建行，
+    // 所以不会出现「清单和文本框各说一套」的状态。
+
+    private void BuildLists()
+    {
+        if (ExceptionList == null || RuleList == null) return;
+
+        var exceptions = SplitTokens(_cfg?.Blacklist);
+        var exRows = new List<HoldDragListRow>(exceptions.Count);
+        foreach (string name in exceptions)
+            exRows.Add(new HoldDragListRow(name, Loc.T("完全不接管"), name));
+        ExceptionList.ItemsSource = exRows;
+        ExceptionEmpty.Visibility = exRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        var ruleRows = new List<HoldDragListRow>();
+        foreach (string entry in SplitTokens(_cfg?.AppRules))
+        {
+            int eq = entry.IndexOf('=');
+            string name = (eq < 0 ? entry : entry[..eq]).Trim();
+            string mode = (eq < 0 ? "" : entry[(eq + 1)..]).Trim();
+            if (name.Length == 0) continue;
+            ruleRows.Add(new HoldDragListRow(name, AppRules.DisplayName(mode.Length == 0 ? "Ignore" : mode), entry));
+        }
+        RuleList.ItemsSource = ruleRows;
+        RuleEmpty.Visibility = ruleRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>从「一行一条」的清单里删掉某一条（忽略大小写、忽略首尾空白）。</summary>
+    internal static string RemoveToken(string? existing, string? token)
+    {
+        string drop = (token ?? "").Trim();
+        var lines = SplitTokens(existing);
+        if (drop.Length == 0) return string.Join("\n", lines);
+        lines.RemoveAll(s => string.Equals(s, drop, StringComparison.OrdinalIgnoreCase));
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>从「按程序规则」里删掉某条（比对 = 前面那段程序名）。</summary>
+    internal static string RemoveRule(string? existing, string? token)
+    {
+        int eq = (token ?? "").IndexOf('=');
+        string name = (eq < 0 ? (token ?? "") : token![..eq]).Trim();
+        var lines = SplitTokens(existing);
+        if (name.Length == 0) return string.Join("\n", lines);
+        lines.RemoveAll(s =>
+        {
+            int at = s.IndexOf('=');
+            string key = (at < 0 ? s : s[..at]).Trim();
+            return string.Equals(key, name, StringComparison.OrdinalIgnoreCase);
+        });
+        return string.Join("\n", lines);
+    }
+
+    private void OnRemoveException(object sender, RoutedEventArgs e)
+    {
+        if (_cfg == null) return;
+        string? value = (sender as FrameworkElement)?.Tag as string;
+        if (string.IsNullOrWhiteSpace(value)) return;
+
+        _cfg.Blacklist = RemoveToken(_cfg.Blacklist, value);
+        BlacklistBox.Text = _cfg.Blacklist;     // TextChanged 会再写一次 _cfg 并安排落盘
+        BuildLists();
+        _host?.Notify(Loc.F("已从程序例外里拿掉：{0}", value));
+    }
+
+    private void OnRemoveRule(object sender, RoutedEventArgs e)
+    {
+        if (_cfg == null) return;
+        string? value = (sender as FrameworkElement)?.Tag as string;
+        if (string.IsNullOrWhiteSpace(value)) return;
+
+        _cfg.AppRules = RemoveRule(_cfg.AppRules, value);
+        RulesBox.Text = _cfg.AppRules;
+        BuildLists();
+        _host?.Notify(Loc.F("已删掉规则：{0}", value));
+    }
+
     /// <summary>
-    /// 出图用：把左栏滚到最下面，好拍「黑名单」与「按程序规则」那两块
-    /// （它们在这页最底下，默认视口里看不见）。
+    /// 出图用：把右栏（程序例外 / 按程序规则）滚到最下面，好拍清单末尾与「怎么用」那几段。
+    /// 必须点名 RightScroll —— 按视觉树找「第一个」ScrollViewer 会先撞上左栏那个，
+    /// 结果右栏没动、清单第二条被视口裁掉。
     /// </summary>
     internal void ScrollListsForRender()
     {
-        FindScroll(this)?.ScrollToEnd();
-    }
-
-    private static System.Windows.Controls.ScrollViewer? FindScroll(System.Windows.DependencyObject? node)
-    {
-        if (node == null) return null;
-        int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(node);
-        for (int i = 0; i < n; i++)
-        {
-            var child = System.Windows.Media.VisualTreeHelper.GetChild(node, i);
-            if (child is System.Windows.Controls.ScrollViewer sv) return sv;
-            var deep = FindScroll(child);
-            if (deep != null) return deep;
-        }
-        return null;
+        RightScroll?.ScrollToEnd();
     }
 
     private void OnResetDefaults(object sender, RoutedEventArgs e)
@@ -505,13 +569,14 @@ internal partial class HoldDragView : UserControl
                截图也照实拍关的样子。 */
             EnabledBox.IsChecked = false;
             _cfg.TriggerKeyId = "K:0x0D";
-            _cfg.HoldMs = 500;
+            _cfg.HoldMs = 300;
             _cfg.ActionLeft = "Move";
             _cfg.ActionRight = "Resize";
             _cfg.ActionMiddle = "Maximize";
-            _cfg.FrameStyleId = "Glow";
+            _cfg.FrameStyleId = "Dashed";
             _cfg.FrameColorId = "Accent";
             _cfg.Blacklist = "game.exe\nobs64.exe";
+            _cfg.AppRules = "wps.exe=Ignore; code.exe=MoveOnly";
         }
         finally { _sync = false; }
 
@@ -528,3 +593,9 @@ internal partial class HoldDragView : UserControl
 /// ComboBoxItem（Content=Title、Tag=Id），界面永远只看到字符串。
 /// </summary>
 public sealed record HoldDragPick(string Id, string Title);
+
+/// <summary>
+/// 右栏清单的一行：Name 是程序名，StateText 是行为说明，
+/// Value 是配置里原样的那一条（点「恢复 / 删除」时按它定位，手打的多余空格也不会错删）。
+/// </summary>
+public sealed record HoldDragListRow(string Name, string StateText, string Value);

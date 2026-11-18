@@ -177,7 +177,7 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
                             <TextBlock Text="{loc:T '外框样式'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '十一种画法：虚线环、柔光、霓虹、四角标……'}"
+                            <TextBlock Text="{loc:T '三套画法：虚线环、细线环、流光边'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" x:Name="StyleBox" Style="{StaticResource ComboBox.Base}"
@@ -434,27 +434,9 @@
 
                     <TextBlock Text="{loc:T '高级'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
                                Margin="0,10,0,2" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '跟随刷新率'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '自动 = 按显示器刷新率走；自定义 = 用下面的频率。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <ComboBox x:Name="RefreshModeBox" Style="{StaticResource ComboBox.Base}" Width="110"
-                                      SelectionChanged="OnComboChanged" Tag="DragRefreshMode" />
-                            <TextBox x:Name="RefreshHzBox" Style="{StaticResource TextBox.Base}" Width="54"
-                                     MinHeight="30" Padding="6,2" VerticalContentAlignment="Center" Margin="10,0,0,0"
-                                     TextChanged="OnNumberChanged" Tag="DragRefreshHz" />
-                        </StackPanel>
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
+                    <!-- 原来这里有一个「跟随刷新率 / 自定义频率」的下拉 + 数字框。
+                         现在已经去掉：拖动的实现改成 AltDrag 那套——每来一个鼠标移动事件就立刻
+                         把窗口挪到新位置，不再按刷新率节流，所以也就没有可调的东西了。 -->
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -480,42 +462,89 @@
                         </StackPanel>
                     </Grid>
 
-                    <Border Style="{StaticResource Divider}" />
 
-                    <StackPanel Margin="0,10,0,6">
-                        <TextBlock Text="{loc:T '黑名单'}" Style="{StaticResource Text.Body}" />
-                        <TextBlock Text="{loc:T '一行一个进程名，这些程序完全不接管。支持 * 通配（例如 game*.exe）。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,6" />
-                        <TextBox x:Name="BlacklistBox" Style="{StaticResource TextBox.Base}" MinHeight="64"
-                                 MaxHeight="110" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 VerticalContentAlignment="Top" Padding="8,6"
-                                 TextChanged="OnTextChanged" />
-                        <!-- 和别的页一样用「选择程序… / 点选窗口」这两个入口：
-                             挑完直接往上面那个框里追加一行，手打与挑选走同一条校验。 -->
-                        <controls:AppPickButtons x:Name="BlacklistPicker" Margin="0,8,0,0"
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- 右：程序例外 + 按程序规则 + 状态 + 用法 + 恢复默认
+             版式照「平滑滚动」右栏：两个挑程序的按钮 + 一行一条的清单。
+             这两块原来在左栏最底下，得自己往下翻才看得见，现在挪到右边常驻栏里。 -->
+        <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="18,16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0">
+                    <TextBlock Text="{loc:T '当前状态'}" Style="{StaticResource Text.Secondary}"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                               Margin="0,8,0,0" />
+                </StackPanel>
+
+                <ScrollViewer x:Name="RightScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <StackPanel Margin="0,0,10,0">
+
+                        <TextBlock Text="{loc:T '程序例外'}" Style="{StaticResource Text.Secondary}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:T '列表里的程序完全不接管；没列出来的都按左边的参数接管。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <controls:AppPickButtons x:Name="ExceptionPicker" Margin="0,8,0,0"
                                                  Width="304" HorizontalAlignment="Left"
                                                  PickFile="OnBlacklistPickFile"
                                                  PickWindow="OnBlacklistPickWindow" />
-                        <TextBlock Text="{loc:T '点这两个按钮挑程序就行，认得的是程序名（例如 obs64.exe）；要写通配符时再手打。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                    </StackPanel>
 
-                    <Border Style="{StaticResource Divider}" />
+                        <ItemsControl x:Name="ExceptionList" Margin="0,4,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                                            Padding="0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource Text.Tertiary}"
+                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="{loc:T '恢复'}" Tag="{Binding Value}"
+                                                    Click="OnRemoveException"
+                                                    Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="8,0,0,0"
+                                                    ToolTip="{loc:T '把它从程序例外里拿掉，恢复接管。'}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="ExceptionEmpty" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                                   Margin="0,8,0,0"
+                                   Text="{loc:T '还没有例外程序：所有程序都按左边的参数接管。'}" />
 
-                    <StackPanel Margin="0,10,0,6">
-                        <TextBlock Text="{loc:T '按程序规则'}" Style="{StaticResource Text.Body}" />
-                        <TextBlock Text="{loc:T '比黑名单细一档，写法：wps.exe=Ignore; code.exe=MoveOnly; game.exe=NoFrame（分号分隔，大小写不限）。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,6" />
-                        <TextBox x:Name="RulesBox" Style="{StaticResource TextBox.Base}" MinHeight="52"
-                                 MaxHeight="100" AcceptsReturn="True" TextWrapping="NoWrap"
+                        <TextBlock Text="{loc:T '手动输入（一行一个程序名，支持 * 通配）'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,4" />
+                        <TextBox x:Name="BlacklistBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
+                                 MaxHeight="64" AcceptsReturn="True" TextWrapping="NoWrap"
                                  VerticalScrollBarVisibility="Auto"
                                  VerticalContentAlignment="Top" Padding="8,6"
                                  TextChanged="OnTextChanged" />
+
+                        <Border Style="{StaticResource Divider}" Margin="0,12,0,0" />
+
+                        <TextBlock Text="{loc:T '按程序规则'}" Style="{StaticResource Text.Secondary}"
+                                   FontWeight="SemiBold" Margin="0,12,0,0" />
+                        <TextBlock Text="{loc:T '比程序例外细一档：wps.exe=Ignore; code.exe=MoveOnly; game.exe=NoFrame（分号分隔，大小写不限）。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <TextBlock Text="{loc:T '新加的规则是'}" Style="{StaticResource Text.Tertiary}"
                                        VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <ComboBox x:Name="RuleModeBox" Style="{StaticResource ComboBox.Base}" Width="168"
+                            <ComboBox x:Name="RuleModeBox" Style="{StaticResource ComboBox.Base}" Width="148"
                                       SelectedIndex="0">
                                 <ComboBoxItem Content="{loc:T '完全不接管'}" Tag="Ignore" />
                                 <ComboBoxItem Content="{loc:T '只允许移动'}" Tag="MoveOnly" />
@@ -527,38 +556,47 @@
                                                  Width="304" HorizontalAlignment="Left"
                                                  PickFile="OnRulePickFile"
                                                  PickWindow="OnRulePickWindow" />
-                        <TextBlock Text="{loc:T '先在上面选一种行为，再点按钮挑程序：挑完会写成 程序名=行为 追加到框里。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                    </StackPanel>
 
-                </StackPanel>
-            </ScrollViewer>
-        </Border>
+                        <ItemsControl x:Name="RuleList" Margin="0,4,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                                            Padding="0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource Text.Tertiary}"
+                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="{loc:T '删除'}" Tag="{Binding Value}"
+                                                    Click="OnRemoveRule"
+                                                    Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="8,0,0,0" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="RuleEmpty" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                                   Margin="0,8,0,0"
+                                   Text="{loc:T '还没有按程序规则：所有程序都用同一套拖动方式。'}" />
 
-        <!-- 右：状态 + 用法 + 恢复默认 -->
-        <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="18,16">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+                        <TextBlock Text="{loc:T '手动输入（wps.exe=Ignore; code.exe=MoveOnly）'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,4" />
+                        <TextBox x:Name="RulesBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
+                                 MaxHeight="64" AcceptsReturn="True" TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 VerticalContentAlignment="Top" Padding="8,6"
+                                 TextChanged="OnTextChanged" />
 
-                <StackPanel Grid.Row="0">
-                    <TextBlock Text="{loc:T '当前状态'}" Style="{StaticResource Text.Secondary}"
-                               FontWeight="SemiBold" />
-                    <TextBlock x:Name="StatusText" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
-                               Margin="0,8,0,0" />
-                </StackPanel>
+                        <Border Style="{StaticResource Divider}" Margin="0,12,0,0" />
 
-                <Border Grid.Row="1" Style="{StaticResource Divider}" Margin="0,12,0,0" />
-
-                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                              Margin="0,12,0,0">
-                    <StackPanel>
-                        <TextBlock Text="{loc:T '怎么用'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold" />
+                        <TextBlock Text="{loc:T '怎么用'}" Style="{StaticResource Text.Secondary}"
+                                   FontWeight="SemiBold" Margin="0,12,0,0" />
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
                                    Text="{loc:T '按住触发键 → 在目标窗口上按左键拖动（移动）、按右键拖动（改大小）、按中键（最大化 / 还原）→ 松手完成。'}" />
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
@@ -567,15 +605,15 @@
                                    Text="{loc:T '和外接屏幕配合：拖到屏幕边缘停住，会自动贴边；拖动时按方向键可以分屏。'}" />
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
                                    Text="{loc:T '和鼠标手势互不干扰：手势要按住起始键画笔画，按住拖拽要按住触发键按鼠标键，两套钩子各认各的事件。'}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,4"
                                    Text="{loc:T '如果某个程序拖不动，先看它的窗口是不是管理员权限运行（提权窗口普通权限的钩子接管不了）。'}" />
                     </StackPanel>
                 </ScrollViewer>
 
-                <Border Grid.Row="3" Style="{StaticResource Divider}" Margin="0,10,0,0" />
-
-                <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,10,0,0">
+                <StackPanel Grid.Row="2">
+                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
                     <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Padding="9,4"
+                            Margin="0,10,0,0" HorizontalAlignment="Left"
                             Click="OnResetDefaults" />
                 </StackPanel>
             </Grid>

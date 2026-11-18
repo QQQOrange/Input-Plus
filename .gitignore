@@ -82,6 +82,7 @@ tools/__pycache__/
 selftest-stderr.txt
 
 # 临时自检/渲染数据目录
+ip-selftest*/
 .rd*/
 .st5*/
 .render5*/
