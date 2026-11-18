@@ -76,6 +76,7 @@ public static partial class SelfTest
         TestGestureEngine();
         TestWGesturesEngine();
         TestWg2Layer();
+        TestGestureListOrder();
 
         Section("平滑滚动");
         TestSmoothScroll();

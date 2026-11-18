@@ -335,6 +335,15 @@ public sealed class GestureOptions
     public int BuiltinsVersion { get; set; }
 
     /// <summary>
+    /// 手势列表的排序方式（见 <see cref="GestureListOrder"/>）：
+    /// custom = 自定义顺序（表里的物理顺序，可以拖动手柄改）、name / trigger / action = 三种只读排序。
+    ///
+    /// 存字符串不存枚举：配置里写了不认识的词就退回自定义顺序，不至于让整份设置反序列化失败。
+    /// 三种只读排序不改动表本身，切回 custom 还是用户拖出来的那个顺序。
+    /// </summary>
+    public string ListSort { get; set; } = GestureListOrder.Custom;
+
+    /// <summary>
     /// 上一次从 WGestures 自动导入的配置路径。
     /// 空 = 还没导过；非空 = 只导一次，用户删光手势也不会被重新塞回来。
     /// </summary>

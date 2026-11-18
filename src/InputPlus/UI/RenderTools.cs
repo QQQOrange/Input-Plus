@@ -206,6 +206,33 @@ public static class RenderTools
                 Pump(120);
             }
 
+            /* 列表排序：四档不只是"下拉里有字"，还得看行序真的变了、手柄只在自定义顺序里出现。
+             * 下拉本身弹窗截不到，所以同时写一份 txt 记录行数/手柄数/前四行。 */
+            if (page == "gestures" &&
+                Environment.GetEnvironmentVariable("INPUTPLUS_RENDER_SORT") == "1" &&
+                main.GetPage("gestures") is InputPlus.UI.Views.GesturesView gs)
+            {
+                try
+                {
+                    var lines = new List<string>();
+                    lines.AddRange(gs.SetSortForRender(InputPlus.Core.Gestures.GestureListOrder.Custom));
+                    Pump(200);
+                    Save(main, Path.Combine(outDir, "gestures-sort-custom.png"));
+                    lines.Add("");
+                    lines.AddRange(gs.SetSortForRender(InputPlus.Core.Gestures.GestureListOrder.ByName));
+                    Pump(200);
+                    Save(main, Path.Combine(outDir, "gestures-sort-name.png"));
+                    lines.Add("");
+                    lines.AddRange(gs.SetSortForRender(InputPlus.Core.Gestures.GestureListOrder.ByTrigger));
+                    lines.Add("");
+                    lines.AddRange(gs.SetSortForRender(InputPlus.Core.Gestures.GestureListOrder.ByAction));
+                    File.WriteAllLines(Path.Combine(outDir, "gestures-sort.txt"), lines);
+                    gs.SetSortForRender(InputPlus.Core.Gestures.GestureListOrder.Custom);
+                    Pump(120);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染手势排序失败：" + ex.Message); }
+            }
+
             /* 「（旧功能，建议换掉）」这类补偿文案已经删掉了，改由启动时的迁移
              * 换成正式动作。这里拍一条原本会撞上它的手势（runProgram），
              * 确认分类自己跳到「系统功能」、功能显示「运行程序 / 命令」、

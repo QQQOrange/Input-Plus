@@ -21,8 +21,11 @@ public static class GestureDefaults
     /* 10 = 5.13.0：把只有方向串的存量手势合成为轨迹（<see cref="GesturePattern.Sketch"/>），
      * 识别统一走 WGestures 笔画引擎，方向串不再参与判定。
      * 11 = 1.0：内置一整套调好的鼠标手势（<see cref="BuiltinGestures"/>），
-     * 新装或把手势表清空之后自动铺一份，不用再去找 WGestures 导配置。 */
-    public const int Version = 11;
+     * 新装或把手势表清空之后自动铺一份，不用再去找 WGestures 导配置。
+     * 12 = 1.2：整表导入 WGestures 配置会把 BuiltinsVersion=11 一起带过来，
+     * 于是下面那一段四角热角 / 贴边滚轮一次都没跑过 —— 左上角热角就是这么丢的。
+     * 升到 12 让升级（和整表导入之后）重跑一次补种；已经有的角/边自带占位判断，不会叠出来。 */
+    public const int Version = 12;
 
     /// <summary>补齐默认边角手势；返回是否改动了设置（调用方负责保存）。</summary>
     public static bool Ensure(AppSettings settings)
@@ -536,9 +539,12 @@ public static class GestureDefaults
 
     private static void AddHotCorner(AppSettings settings, int corner, string action, string name)
     {
-        // "corner" 是 WGestures 导入和内置手势库用的写法，"hotcorner" 是这套默认值用的，
-        // 两者在引擎里等价，占位判断必须都算上，不然会在同一个角上叠出两条。
-        if (settings.Gestures.Any(g => (g.Kind is "hotcorner" or "corner") && g.Corner == corner)) return;
+        /* 占位只看 hotcorner（悬停）。以前把 WGestures 导进来的 "corner"（到角上点一下）
+         * 也算作占位 —— 整套 WGestures 配置导进来之后（左上角被「静音」占着），
+         * 悬停热角永远补不回来，边缘手势栏里就只剩一条角落点击。
+         * 两者在引擎里是两条不同的触发路径（悬停 vs 按下），同一个角上可以各留一条：
+         * 指针进角先出悬停热角，再点一下才走 corner 手势。 */
+        if (settings.Gestures.Any(g => g.Kind == "hotcorner" && g.Corner == corner)) return;
         settings.Gestures.Add(new MouseGesture
         {
             Id = MouseGesture.NewId(),

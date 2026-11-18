@@ -4,6 +4,11 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+/* 只挑拖动要用的几个输入类型做别名：整条 using System.Windows.Input 会带进来
+ * WPF 自己的 MouseGesture，和手势模型 MouseGesture 撞名（CS0104）。 */
+using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using MouseButtonState = System.Windows.Input.MouseButtonState;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using System.Windows.Shapes;
 using InputPlus.Core;
 using InputPlus.Core.Actions;
@@ -23,6 +28,12 @@ public partial class GesturesView
 {
     private AppHost? _host;
     private readonly List<GestureRow> _rows = new();
+
+    /// <summary>
+    /// 列表排序方式（<see cref="GestureListOrder"/> 的四档之一）。
+    /// 和 <c>GestureOptions.ListSort</c> 同步存盘；只有 custom 档允许拖动改顺序。
+    /// </summary>
+    private string _sortMode = GestureListOrder.Custom;
     private readonly List<TargetRow> _targetRows = new();
     private MouseGesture _current = new();
     private string _scope = "";
@@ -117,6 +128,8 @@ public partial class GesturesView
             UpdateTargetModeHint(opts);
             UpdateColorSwatches();
             SyncWg2Controls(opts);
+            _sortMode = GestureListOrder.Normalize(opts.ListSort);
+            SelectTag(SortBox, _sortMode);
             BuildTargets();
             LoadList(selectId: _current.Id);
         }
@@ -436,7 +449,9 @@ public partial class GesturesView
                     : Loc.F("{0} 的手势", ScopeTitle(_scope));
         TriggerHeader.Text = Loc.F("{0} 允许的触发方式", ScopeTitle(_scope));
 
-        _rows.Clear();
+        /* 先收集"这一档该显示哪些"，再套排序 —— 排序只影响显示顺序，
+         * settings.Gestures 本身按兵不动，切回「自定义顺序」还是用户拖出来的那个顺序。 */
+        var candidates = new List<MouseGesture>();
         foreach (var g in settings.Gestures)
         {
             if (edgeScope)
@@ -459,6 +474,19 @@ public partial class GesturesView
             if (buttonFilter.Length > 0 &&
                 !string.Equals(g.Button ?? "", buttonFilter, StringComparison.OrdinalIgnoreCase))
                 continue;
+            candidates.Add(g);
+        }
+
+        if (_sortMode != GestureListOrder.Custom)
+            candidates = GestureListOrder.Sort(candidates, _sortMode, SortTitle);
+
+        /* 手柄只在「自定义顺序 + 没在筛选」时露出来：其余三档拖了也不算数，
+         * 摆一根拖不动的把手比不摆更让人困惑。 */
+        bool canDrag = _sortMode == GestureListOrder.Custom && filter.Length == 0 && candidates.Count > 1;
+
+        _rows.Clear();
+        foreach (var g in candidates)
+        {
             string actionTitle = ActionCatalog.TitleOf(g.Action) ?? "";
             string title = "", subtitle = "";
             if (IsEdgeGesture(g))
@@ -500,6 +528,7 @@ public partial class GesturesView
                 hasIcon || hasEdgeIcon ? Visibility.Collapsed : Visibility.Visible,
                 showStroke ? Visibility.Visible : Visibility.Collapsed,
                 hasEdgeIcon ? Visibility.Visible : Visibility.Collapsed,
+                canDrag ? Visibility.Visible : Visibility.Collapsed,
                 disabled ? 0.48 : 1.0,
                 disabled ? Loc.T("已停用") : "",
                 disabled ? Visibility.Visible : Visibility.Collapsed));
@@ -520,6 +549,7 @@ public partial class GesturesView
         SummaryText.Text = _rows.Count == 0
             ? Loc.T("这个目标下还没有手势")
             : Loc.F("这个目标 {0} 条 · 全部 {1} 条", _rows.Count, settings.Gestures.Count);
+        if (canDrag) SummaryText.Text += Loc.T(" · 按住左侧的手柄可以拖动排序");
 
         var pick = _rows.FirstOrDefault(r => r.Gesture.Id == selectId) ?? _rows.FirstOrDefault();
         if (pick != null)
@@ -548,6 +578,17 @@ public partial class GesturesView
 
         // 左边换了作用目标，「允许的触发方式」整栏跟着换一套三态。
         BuildTriggers();
+    }
+
+    /// <summary>
+    /// 排序用的标题：和列表里那一行同一套说法（边缘手势的标题是「左上角」「上边缘 · 滚轮向上」，
+    /// 模型里没有这个字段），否则"按名称"排出来的顺序和肉眼看到的标题对不上。
+    /// </summary>
+    private string SortTitle(MouseGesture g)
+    {
+        if (g.Kind == "hotcorner") return CornerName(g.Corner);
+        if (g.Kind == "edgewheel") return Loc.F("{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
+        return g.Title(ActionCatalog.TitleOf(g.Action) ?? "");
     }
 
     private void LoadEditor()
@@ -917,6 +958,18 @@ public partial class GesturesView
         ButtonFilterBox.SelectedValuePath = "Value";
         SelectTag(ButtonFilterBox, "");
 
+        /* 排序下拉：只有「自定义顺序」允许拖动手柄改表，其余三档只影响显示。 */
+        SortBox.ItemsSource = new List<Choice>
+        {
+            new(GestureListOrder.Custom, Loc.T("自定义顺序")),
+            new(GestureListOrder.ByName, Loc.T("按名称")),
+            new(GestureListOrder.ByTrigger, Loc.T("按触发方式")),
+            new(GestureListOrder.ByAction, Loc.T("按动作"))
+        };
+        SortBox.DisplayMemberPath = "Text";
+        SortBox.SelectedValuePath = "Value";
+        SelectTag(SortBox, GestureListOrder.Custom);
+
         ChordBox.ItemsSource = new List<Choice> { new("", Loc.T("不组合")) }
             .Concat(GestureButtons.All.Select(b => new Choice(b, Loc.T(GestureButtons.Display(b)))))
             .ToList();
@@ -1069,6 +1122,178 @@ public partial class GesturesView
     {
         if (_loading || ButtonFilterBox.SelectedItem == null) return;
         LoadList(selectId: _current.Id);
+    }
+
+    private void OnSortChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        string mode = GestureListOrder.Normalize(SelectedValue(SortBox));
+        if (string.Equals(mode, _sortMode, StringComparison.Ordinal)) return;
+        _sortMode = mode;
+        _host!.Settings.GestureOptions.ListSort = mode;
+        _host.SaveSettings();
+        LoadList(selectId: _current.Id);
+    }
+
+    /* ─────────────────── 拖动排序（只在「自定义顺序」下） ───────────────────
+     *
+     * 手柄在每行最左边，按下之后鼠标交给 GestureList 捕获：
+     * 行的 Button 就收不到抬起事件，拖动过程不会顺手把那一行"选中"（右侧编辑器不跳）。
+     *
+     * 落点是"插到第几条之前"——每一行的上半/下半分界当插入位，
+     * 松手时交给 GestureListOrder.MoveWithin 只重排看得见的这几条，
+     * 别的应用/分组的手势在整表里的位置一点不动。 */
+
+    private MouseGesture? _dragItem;
+    private int _dragFrom = -1;
+    private int _dropIndex = -1;
+    private Point _dragStart;
+
+    private void OnGripDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_loading || !GestureListOrder.IsCustom(_sortMode)) return;
+        if ((sender as FrameworkElement)?.DataContext is not GestureRow row) return;
+        int from = _rows.IndexOf(row);
+        if (from < 0) return;
+        _dragItem = row.Gesture;
+        _dragFrom = from;
+        _dropIndex = -1;
+        _dragStart = e.GetPosition(ListScroll);
+        GestureList.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnGripMove(object sender, MouseEventArgs e)
+    {
+        if (_dragItem == null) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            // 抬起丢了（切了窗口）也要把拖动收干净
+            FinishDrag(null);
+            return;
+        }
+        var p = e.GetPosition(ListScroll);
+        if (_dropIndex < 0 && Math.Abs(p.Y - _dragStart.Y) < 4) return;   // 手抖不算拖动
+
+        // 拖到上下边缘先滚一截：列表长的目标（全局 60 多条）不然根本拖不到头
+        if (p.Y < 26) ListScroll.ScrollToVerticalOffset(Math.Max(0, ListScroll.VerticalOffset - 16));
+        else if (p.Y > ListScroll.ActualHeight - 26)
+            ListScroll.ScrollToVerticalOffset(ListScroll.VerticalOffset + 16);
+
+        ShowDropLine(DropIndexAt(e.GetPosition(ListScroll)));
+    }
+
+    private void OnGripUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_dragItem == null) return;
+        FinishDrag(e.GetPosition(ListScroll));
+        e.Handled = true;
+    }
+
+    private void OnGripLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_dragItem != null) FinishDrag(null);
+    }
+
+    /// <summary>指针落在哪两行之间：返回"插到第几条之前"，等于行数就是插到最末尾。</summary>
+    private int DropIndexAt(Point p)
+    {
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            if (GestureList.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement c) continue;
+            double top;
+            try { top = c.TransformToAncestor(ListScroll).Transform(new Point(0, 0)).Y; }
+            catch (InvalidOperationException) { continue; }   // 行不在可视树里（被虚拟化掉了）
+            if (p.Y < top + c.ActualHeight / 2) return i;
+        }
+        return _rows.Count;
+    }
+
+    private void ShowDropLine(int index)
+    {
+        _dropIndex = index;
+        if (_rows.Count == 0)
+        {
+            DropLine.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        int probe = Math.Min(index, _rows.Count - 1);
+        double y = 0;
+        if (GestureList.ItemContainerGenerator.ContainerFromIndex(probe) is FrameworkElement c)
+        {
+            try
+            {
+                var corner = c.TransformToAncestor(ListScroll).Transform(new Point(0, 0));
+                y = index >= _rows.Count ? corner.Y + c.ActualHeight : corner.Y;
+            }
+            catch (InvalidOperationException) { y = 0; }
+        }
+
+        DropLine.Width = Math.Max(0, ListScroll.ViewportWidth - 6);
+        Canvas.SetLeft(DropLine, 0);
+        Canvas.SetTop(DropLine, Math.Max(0, y - 1));
+        DropLine.Visibility = Visibility.Visible;
+    }
+
+    private void FinishDrag(Point? dropAt)
+    {
+        var item = _dragItem;
+        int from = _dragFrom;
+        int insertBefore = dropAt.HasValue ? DropIndexAt(dropAt.Value) : _dropIndex;
+        ResetDragState();
+
+        if (item == null || from < 0 || insertBefore < 0) return;
+        // 插到自己前面、或者紧跟在自己后面 = 位置没变，不用动表也不用重画
+        if (insertBefore == from || insertBefore == from + 1) return;
+
+        var visible = _rows.Select(r => r.Gesture).ToList();
+        int landed = GestureListOrder.MoveWithin(_host!.Settings.Gestures, visible, from, insertBefore);
+        if (landed < 0) return;
+
+        double offset = ListScroll.VerticalOffset;
+        _host.SaveSettings();
+        LoadList(selectId: item.Id);
+        // LoadList 会回到顶部（列表整块重建），拖完还站在原地才不晕
+        ListScroll.ScrollToVerticalOffset(offset);
+    }
+
+    private void ResetDragState()
+    {
+        _dragItem = null;
+        _dragFrom = -1;
+        _dropIndex = -1;
+        DropLine.Visibility = Visibility.Collapsed;
+        if (GestureList.IsMouseCaptured) GestureList.ReleaseMouseCapture();
+    }
+
+    /// <summary>出图用：切到某一档排序并回报行数/手柄可见数（渲染时不动设置）。</summary>
+    internal string[] SetSortForRender(string mode)
+    {
+        _loading = true;
+        try
+        {
+            _sortMode = GestureListOrder.Normalize(mode);
+            SelectTag(SortBox, _sortMode);
+        }
+        finally { _loading = false; }
+
+        LoadList(selectId: _current.Id);
+        return new[]
+        {
+            "排序：" + (SelectedValue(SortBox) ?? "?"),
+            "这一档行数：" + _rows.Count + "（全表 " + _host!.Settings.Gestures.Count + " 条）",
+            "手柄可见：" + _rows.Count(r => r.GripVisibility == Visibility.Visible) + " 行",
+            "前四行：" + string.Join(" | ", _rows.Take(4).Select(r => r.Title)),
+            // 边缘手势那一栏的账也顺手报一遍：整表导入会把四角悬停/贴边滚轮冲掉，
+            // 只看全局行数是发现不了的（它们不在这一档里）。
+            "边角：" + string.Join(" / ", _host!.Settings.Gestures
+                .GroupBy(g => g.Kind)
+                .OrderBy(x => x.Key, StringComparer.Ordinal)
+                .Select(x => x.Key + " " + x.Count())),
+            "四角悬停：" + string.Join(" ", _host.Settings.Gestures
+                .Where(g => g.Kind == "hotcorner").Select(g => g.Corner).OrderBy(c => c)),
+        };
     }
 
     private void OnPickGesture(object sender, RoutedEventArgs e)
@@ -1992,10 +2217,15 @@ public partial class GesturesView
         public override string ToString() => Text;
     }
 
+    /// <summary>
+    /// 手势列表的一行。<see cref="GripVisibility"/> 决定最左边那根拖动手柄露不露出来
+    /// （只有「自定义顺序」+ 没在筛选时才给拖）。
+    /// </summary>
     private sealed record GestureRow(
         MouseGesture Gesture, string Title, string Subtitle, string Badge, string Glyph,
         PointCollection? IconPoints, ImageSource? EdgeIcon,
         Visibility GlyphVisibility, Visibility StrokeVisibility, Visibility EdgeIconVisibility,
+        Visibility GripVisibility,
         double RowOpacity, string StateText, Visibility StateVisibility);
 
     /// <summary>

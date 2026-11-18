@@ -3422,5 +3422,10 @@
   "{0} 已经在黑名单里了": "{0} is already in the ignore list",
   "已加入黑名单：{0}": "Added to the ignore list: {0}",
   "已加入规则：{0}": "Added to the rules: {0}",
-  "「程序例外」右栏是「选择程序…」和「点选窗口」两个按钮：前者挑 exe，后者直接点屏幕上的那个窗口（认它背后运行的 exe）。挑出来的程序点「禁用」= 它在这整个程序里不平滑、滚轮原样交给系统（游戏、修图这类要精确一格一格滚的），点「恢复」就跟着全局；也可以只给它单独设步长和动画时长。没列出来的程序都跟随左边的全局参数。": "The right-hand column of Program exceptions has two buttons: Pick a program… chooses an exe, Pick a window… lets you click a window on screen (its backing exe is used). For a picked program, Off means it is not smoothed at all and the wheel goes straight to the system (games, image editors, anything needing exact one-notch steps); Restore makes it follow the global settings; you can also give it its own step length and animation duration. Programs not listed follow the global settings on the left."
+  "「程序例外」右栏是「选择程序…」和「点选窗口」两个按钮：前者挑 exe，后者直接点屏幕上的那个窗口（认它背后运行的 exe）。挑出来的程序点「禁用」= 它在这整个程序里不平滑、滚轮原样交给系统（游戏、修图这类要精确一格一格滚的），点「恢复」就跟着全局；也可以只给它单独设步长和动画时长。没列出来的程序都跟随左边的全局参数。": "The right-hand column of Program exceptions has two buttons: Pick a program… chooses an exe, Pick a window… lets you click a window on screen (its backing exe is used). For a picked program, Off means it is not smoothed at all and the wheel goes straight to the system (games, image editors, anything needing exact one-notch steps); Restore makes it follow the global settings; you can also give it its own step length and animation duration. Programs not listed follow the global settings on the left.",
+  "按触发方式": "By trigger",
+  "按动作": "By action",
+  " · 按住左侧的手柄可以拖动排序": " · drag the handle on the left to reorder",
+  "手势列表的排序方式": "How the gesture list is sorted",
+  "按住上下拖动，调整这条手势的顺序": "Drag up or down to reorder this gesture"
 }

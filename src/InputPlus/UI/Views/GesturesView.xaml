@@ -853,6 +853,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="FilterBox" Style="{StaticResource TextBox.Base}" MinHeight="32"
                                  Padding="32,4,10,4" VerticalContentAlignment="Center"
@@ -879,11 +880,22 @@
                                   DisplayMemberPath="Text" SelectedValuePath="Value"
                                   SelectionChanged="OnButtonFilterChanged"
                                   ToolTip="{loc:T '按鼠标按键筛选'}" />
+                        <!-- 排序方式：自定义顺序（可拖手柄）之外三档都只影响显示，不改表本身。
+                             宽度定死是因为这一行左边还要留筛选框，"按触发方式"这五个字才不会被切。 -->
+                        <ComboBox x:Name="SortBox" Grid.Column="2" Width="118" MinHeight="32"
+                                  Margin="8,0,0,0" Style="{StaticResource ComboBox.Base}"
+                                  DisplayMemberPath="Text" SelectedValuePath="Value"
+                                  SelectionChanged="OnSortChanged"
+                                  ToolTip="{loc:T '手势列表的排序方式'}" />
                     </Grid>
 
                     <ScrollViewer x:Name="ListScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl x:Name="GestureList" HorizontalAlignment="Stretch">
+                        <!-- 拖动排序的收尾挂在列表上：按下手柄后鼠标被列表捕获，
+                             后续的移动/抬起都只有列表收得到（行里的 Button 收不到，自然也不会误触发"选中"） -->
+                        <ItemsControl x:Name="GestureList" HorizontalAlignment="Stretch"
+                                      MouseMove="OnGripMove" MouseLeftButtonUp="OnGripUp"
+                                      LostMouseCapture="OnGripLostCapture">
                             <ItemsControl.ItemContainerStyle>
                                 <Style TargetType="ContentPresenter">
                                     <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -897,11 +909,24 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
 
-                                            <Border Grid.Column="0" Width="34" Height="34" CornerRadius="9"
+                                            <!-- 拖动手柄：只在「自定义顺序」且没在筛选时露出来。
+                                                 其它三档是只读排序，给手柄反而会让人以为那样也能改。 -->
+                                            <Border Grid.Column="0" Width="14" Margin="0,0,2,0"
+                                                    Background="Transparent" Cursor="SizeNS"
+                                                    Visibility="{Binding GripVisibility}"
+                                                    ToolTip="{loc:T '按住上下拖动，调整这条手势的顺序'}"
+                                                    PreviewMouseLeftButtonDown="OnGripDown">
+                                                <TextBlock Text="&#xE76F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                           FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource Brush.TextTertiary}" />
+                                            </Border>
+
+                                            <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9"
                                                     Background="{DynamicResource Brush.AccentSoft}">
                                                 <Grid>
                                                     <TextBlock Text="{Binding Glyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol"
@@ -927,14 +952,14 @@
                                                 </Grid>
                                             </Border>
 
-                                            <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+                                            <StackPanel Grid.Column="2" Margin="10,0,8,0" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding Title}" Style="{StaticResource Text.Body}"
                                                            FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Text.Tertiary}"
                                                            Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
 
-                                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <Border Background="{DynamicResource Brush.AccentSoft}"
                                                         CornerRadius="5" Padding="6,2" Margin="0,0,6,0"
                                                         Visibility="{Binding StateVisibility}">
@@ -950,6 +975,13 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>
+
+                    <!-- 插入位置提示线：和列表占同一格、画在它上面。
+                         只做视觉提示，不吃鼠标（IsHitTestVisible=False），拖动时鼠标仍在列表手里。 -->
+                    <Canvas Grid.Row="3" x:Name="DropLayer" IsHitTestVisible="False" ClipToBounds="True">
+                        <Rectangle x:Name="DropLine" Height="2" Width="0" RadiusX="1" RadiusY="1"
+                                   Fill="{DynamicResource Brush.Accent}" Visibility="Collapsed" />
+                    </Canvas>
 
                     <TextBlock Grid.Row="4" x:Name="EmptyHint" Margin="0,16,0,4"
                                Text="{loc:T '还没有手势。点右上角「录制新手势」画一笔。'}"
