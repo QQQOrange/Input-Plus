@@ -148,6 +148,9 @@ internal sealed class DragEngine : IDisposable
 
 	private int _tailDriftMax;
 
+	/// <summary>本次拖动里"写完回读"的最大偏差：目标程序咬着不给位时会很大（诊断用）。</summary>
+	private int _applyDriftMax;
+
 	internal static int DiagFrameUpdates;
 
 	internal static int DiagWindowSkipped;
@@ -441,6 +444,7 @@ internal sealed class DragEngine : IDisposable
 		_lastTargetValid = false;
 		_tailFixes = 0;
 		_tailDriftMax = 0;
+		_applyDriftMax = 0;
 		_frameInside = false;
 		WindowActions.NotifySizeMove(hwnd, start: true);
 		_sizeMoveActive = true;
@@ -787,6 +791,16 @@ internal sealed class DragEngine : IDisposable
 				WindowActions.MoveWindowDrag(s.Hwnd, rECT);
 				DiagWindowWritten++;
 			}
+			// 落点偏差：写完立刻回读一次。差得越多，说明目标程序越跟不上我们的帧
+			//（钳制尺寸、卡在重排里）——用户看到的"窗口比手慢"就是它，和链路积压无关。
+			if (_dragging && !alreadyWritten && Native.GetWindowRect(s.Hwnd, out var appliedRect))
+			{
+				int appliedDrift = Math.Max(Math.Max(Math.Abs(appliedRect.Left - rECT.Left), Math.Abs(appliedRect.Top - rECT.Top)), Math.Max(Math.Abs(appliedRect.Width - rECT.Width), Math.Abs(appliedRect.Height - rECT.Height)));
+				if (appliedDrift > _applyDriftMax)
+				{
+					_applyDriftMax = appliedDrift;
+				}
+			}
 
 			if (appConfig.ShowDragHud)
 			{
@@ -867,28 +881,10 @@ internal sealed class DragEngine : IDisposable
 			}
 			if (cursorPos && hwnd != IntPtr.Zero)
 			{
-				// 最后一帧几何写入与"退出尺寸移动"通知必须在同一个工作项里，且顺序固定：
+				// 最后一帧几何写入与"退出尺寸移动"通知必须在同一处、且顺序固定：
 				// 很多程序是在 WM_EXITSIZEMOVE 里保存窗口位置的，通知先到就会把"松手前"的矩形存下来。
 				_sizeMoveActive = false;
-				// 收尾要用的东西在这一刻定下来：这条工作项排到队列里之后，
-				// 万一用户马上又开始下一次拖动，这些字段会被下一次重置。
-				long startedAt = _dragStartedAt;
-				bool moveMode = s.Move;
-				_worker.Post(() =>
-				{
-					// 最后一帧先写，再拿"这一帧请求的矩形"跟窗口对账。
-					// want 必须在 Step 之后取：Step 会刷新 _lastTarget，提前取会拿到上一帧的旧值，
-					// 松手那一瞬间就会把窗口往后退一帧。
-					Step(pt, s, forceWrite: true);
-					Native.RECT want = _lastTarget;
-					bool wantValid = _lastTargetValid;
-					// 最后一帧写完先对账，再通知"尺寸移动结束" —— 顺序反了的话，
-					// 程序会在 WM_EXITSIZEMOVE 里把偏掉的那一版矩形存下来，下次打开就是错的。
-					int residual = ReconcileTail(hwnd, want, wantValid);
-					WindowActions.NotifySizeMove(hwnd, start: false);
-					NoteDragDiag(moveMode, startedAt, residual);
-					_hud.Hide();
-				});
+				FinishTail(hwnd, s, pt, s.Move, _dragStartedAt);
 				_undoHwnd = hwnd;
 				_undoRect = s.StartRect;
 				_undoAt = Environment.TickCount64;
@@ -955,6 +951,100 @@ internal sealed class DragEngine : IDisposable
 		}
 	}
 
+	/// <summary>
+	/// 收尾帧：就地把窗口摆到"松手这一瞬间"的光标位置，再跟真实矩形对一次账。
+	///
+	/// 这件活以前是丢给工作线程做的，可 End() 的 finally 里 Cleanup() 会立刻把 _session.Hwnd
+	/// 清成 0 —— 那条工作项醒来时 Step() 读到的是 0，IsWindow(0) 把它半路饿死：最后一帧根本
+	/// 没写下去，_lastTarget 还停在上一次成功的那帧上，紧接着的 ReconcileTail 拿着这份旧矩形去
+	/// "纠正"窗口，于是松手的一瞬间窗口会被拽回几帧之前的位置。
+	/// AltDrag 在钩子里同步写窗口，压根没有这条时间差，这里照它的样子在钩子线程上写完再发
+	/// WM_EXITSIZEMOVE。一次拖动只多这几毫秒，换的是"松手即落位"。
+	/// </summary>
+	private void FinishTail(nint hwnd, Session session, Native.POINT pt, bool moveMode, long startedAt)
+	{
+		int residual = 0;
+		try
+		{
+			Step(pt, session, forceWrite: true);
+			residual = ReconcileTail(hwnd, _lastTarget, _lastTargetValid);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+		WindowActions.NotifySizeMove(hwnd, start: false);
+		NoteDragDiag(moveMode, startedAt, residual);
+		_hud.Hide();
+		TraceTail(hwnd, moveMode);
+	}
+
+	/// <summary>
+	/// 松手后的 400ms 里盯着目标窗口的矩形：只要它还在变，就说明"手停了窗口还在跑"是真的，
+	/// 而且能把每一次变化的时间、落点、当时的光标一起记下来 —— 光标不动而矩形在动，责任在我们；
+	/// 两者一起动，那是输入还在来。没有变化就一行都不写，账本保持干净。
+	/// </summary>
+	private void TraceTail(nint hwnd, bool moveMode)
+	{
+		try
+		{
+			int gen;
+			lock (_gate)
+			{
+				gen = _generation;
+			}
+			ThreadPool.QueueUserWorkItem(delegate
+			{
+				try
+				{
+					if (!Native.GetWindowRect(hwnd, out var prev))
+					{
+						return;
+					}
+					Stopwatch sw = Stopwatch.StartNew();
+					List<string> list = new List<string>();
+					long framesAtStart = WindowActions.FramesWritten;
+					while (sw.ElapsedMilliseconds < 400L)
+					{
+						Thread.Sleep(8);
+						lock (_gate)
+						{
+							if (gen != _generation)
+							{
+								return;
+							}
+						}
+						if (!Native.GetWindowRect(hwnd, out var now))
+						{
+							return;
+						}
+						if (now.Left != prev.Left || now.Top != prev.Top || now.Width != prev.Width || now.Height != prev.Height)
+						{
+							Native.GetCursorPos(out var cur);
+							list.Add("    +" + sw.ElapsedMilliseconds + "ms → " + now.Left + "," + now.Top + " " + now.Width + "x" + now.Height + " 光标=" + cur.X + "," + cur.Y);
+							prev = now;
+						}
+					}
+					// 责任划分：这 400ms 里我们一帧都没写，矩形却变了，那就是目标程序自己在动；
+					// 我们还在写，才是拖拽核的问题。光看"窗口动了"分不出来，得看谁在写。
+					long writtenDuring = WindowActions.FramesWritten - framesAtStart;
+					if (list.Count > 0)
+					{
+						DragDiag.Note((moveMode ? "移动" : "缩放") + " 尾迹：松手后又动了 " + list.Count + " 次（400ms 采样，同期我们写了 " + writtenDuring + " 帧）" + Environment.NewLine + string.Join(Environment.NewLine, list));
+					}
+				}
+				catch (Exception ex2)
+				{
+					Log.Error(ex2);
+				}
+			});
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
 	/// <summary>请求的矩形和窗口真实矩形差在哪（四个分量各自带符号）。</summary>
 	internal static bool TailMismatch(Native.RECT want, Native.RECT actual, out int dx, out int dy, out int dw, out int dh)
 	{
@@ -989,6 +1079,7 @@ internal sealed class DragEngine : IDisposable
 				+ " | 滞后 最大=" + DragWorker.MaxLagMs + "ms 平均=" + ((DragWorker.LagCount > 0) ? (DragWorker.LagSumMs / (double)DragWorker.LagCount).ToString("0.0") : "0.0") + "ms"
 				+ " | 合并峰值=" + DragWorker.MaxDrained
 				+ " | 收尾补写=" + _tailFixes + " 残余偏差=" + residual + "px 最大=" + _tailDriftMax + "px"
+				+ " | 落点 最大偏差=" + _applyDriftMax + "px"
 				+ " | 钩子 最大=" + Coordinator.HookMaxMsForTest.ToString("0.0") + "ms 慢=" + Coordinator.SlowHookCountForTest + "次";
 			DragDiag.Note(text);
 		}

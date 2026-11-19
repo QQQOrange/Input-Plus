@@ -315,6 +315,27 @@ public static partial class SelfTest
             }
             Check("按住拖拽：拖动结束会往 drag-diag.txt 记一笔明文账", wrote, diagPath);
 
+            // ⑦ 收尾必须是同步的：松手那一帧以前是排给工作线程的，而 End 的 finally 立刻 Cleanup，
+            //    把 _session.Hwnd 清成 0 —— 工作项醒来时 IsWindow(0) 把它饿死，最后一帧没写下去，
+            //    ReconcileTail 拿着上一帧的旧矩形去"纠正"，松手瞬间窗口就被拽回去一截。
+            //    现在 End() 返回时那一帧已经落地：这里连 sleep 都不给，第一次 GetWindowRect 就得是终值。
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
+            fx = 1000;
+            fy = 800;
+            Check("按住拖拽收尾同步：能开始第二次拖动", engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800)));
+            System.Threading.Thread.Sleep(40);
+            fx = 1180;
+            fy = 940;
+            engine.DeliverCursor(new Native.POINT(fx, fy));
+            System.Threading.Thread.Sleep(120);
+            fx = 1220;
+            fy = 970;
+            engine.DeliverCursor(new Native.POINT(fx, fy));
+            engine.End();
+            Native.GetWindowRect(hwnd, out Native.RECT r7);
+            Check("按住拖拽收尾同步：End() 一返回，窗口就已经停在最后一次光标位置",
+                Math.Abs(r7.Left - (fx - 900)) <= 1 && Math.Abs(r7.Top - (fy - 700)) <= 1, r7.Left + "," + r7.Top);
+
             // ⑤ AltDrag 的 MOVE_TIMER（hooks.c:1849-1854、1999-2008）：抽帧开着的时候，
             //    如果低层鼠标钩子被系统掐掉（光标还在动、钩子不再来事件），源码靠一个 100ms 定时器补一帧。
             //    这里把 MoveRate 调成 2（每两个事件才写一次），然后只挪假光标、不喂事件：
