@@ -176,6 +176,18 @@ public static partial class SelfTest
             dflt.MoveRate == 2 && dflt.ResizeRate == 5, dflt.MoveRate + "/" + dflt.ResizeRate);
         Check("按住拖拽：AutoRemaximize 默认按 ini 的 1（一秒还原关着）",
             dflt.AutoRemaximize && !dflt.AutoRemaximizeRestore);
+        // ---- 延迟优化：吸附目标缓存 + 拖动期间定时器精度 1ms ----
+        // 少了这两样，一帧里光"重新枚举所有顶层窗口"就要 20~40ms，写窗口永远比光标晚一帧以上。
+        Check("按住拖拽：吸附目标带缓存（不是每帧 EnumWindows）",
+            typeof(SnapEngine).GetMethod("CollectIfStale", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) != null);
+        Check("按住拖拽：拖动期间把系统定时器精度提到 1ms",
+            typeof(DragEngine).GetField("_timerPeriodRaised", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null);
+
+        // ---- 拖动轨迹账本：只为"手停了窗口还在动"这种反馈留下逐帧证据（Core/DragTrace.cs） ----
+        // 它不是功能，是证据链：删掉它，下一次同样的反馈就只剩猜。
+        Check("按住拖拽：逐帧轨迹账本还在（drag-trace.txt）",
+            typeof(DragEngine).GetMethod("SampleForTrace", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null
+            && DragTrace.PathFor(System.IO.Path.Combine("x", "drag-diag.txt")).EndsWith("drag-trace.txt", StringComparison.Ordinal));
 
         // ---- 拖动跟手：「手停了窗口还在跑」的病根 ----
         TestHoldDragTailMath();

@@ -38,6 +38,17 @@ internal static class SnapEngine
 
 	private static int _ownPid;
 
+	// 吸附目标缓存：EnumWindows + 每窗 GetWindowRect 在窗口多的机器上一帧要 20~40ms，
+	// 而拖动时相邻两帧间隔只有几毫秒 —— 目标集合（屏幕/任务栏/其它窗口）不可能在这个
+	// 尺度上变化，所以同一档位、同一个被拖窗口时**每 50ms 才重新枚举一次**。
+	private const int CacheMs = 50;
+
+	private static long _collectedAt;
+
+	private static int _collectedSnap = -1;
+
+	private static nint _collectedDragged;
+
 	private static int OwnPid
 	{
 		get
@@ -61,7 +72,7 @@ internal static class SnapEngine
 		}
 		lock (Gate)
 		{
-			Collect(snap, dragged);
+			CollectIfStale(snap, dragged);
 			int thresholdx = threshold;
 			int thresholdy = threshold;
 			bool stuckx = false;
@@ -169,7 +180,7 @@ internal static class SnapEngine
 		}
 		lock (Gate)
 		{
-			Collect(snap, dragged);
+			CollectIfStale(snap, dragged);
 			int thresholdx = threshold;
 			int thresholdy = threshold;
 			bool stuckleft = false;
@@ -274,6 +285,23 @@ internal static class SnapEngine
 				wndheight = stickbottom - posy;
 			}
 		}
+	}
+
+	/// <summary>
+	/// 只在"档位换了 / 被拖窗口换了 / 距上次枚举超过 CacheMs 毫秒"时重新枚举。
+	/// 调用方必须已经持有 Gate。
+	/// </summary>
+	private static void CollectIfStale(int snap, nint dragged)
+	{
+		long now = Environment.TickCount64;
+		if (_collectedSnap == snap && _collectedDragged == dragged && now - _collectedAt < CacheMs)
+		{
+			return;
+		}
+		Collect(snap, dragged);
+		_collectedSnap = snap;
+		_collectedDragged = dragged;
+		_collectedAt = now;
 	}
 
 	/// <summary>hooks.c:342-385 的 Enum()。</summary>

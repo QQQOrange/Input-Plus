@@ -151,6 +151,29 @@ internal sealed class DragEngine : IDisposable
 	/// <summary>本次拖动里"写完回读"的最大偏差：目标程序咬着不给位时会很大（诊断用）。</summary>
 	private int _applyDriftMax;
 
+	/// <summary>本帧序号：写完回读（落点偏差）每 8 帧做一次，省掉 7/8 的跨线程往返。</summary>
+	private int _frameNo;
+
+	/// <summary>拖动期间是否已经把系统定时器精度提到 1ms（必须成对 timeEndPeriod）。</summary>
+	private bool _timerPeriodRaised;
+
+	/// <summary>轨迹账本里的"我们写了几次"还要算上 Aero 那几帧（SetWindowPlacement / SW_MAXIMIZE 不走 MoveWindowDrag）。</summary>
+	private long _traceAeroWrites;
+		/// <summary>拖动轨迹（Core/DragTrace.cs）用的累计计数与上一帧快照 —— 只写不读，出问题才有人看。</summary>
+		private long _traceEvents;
+
+		private long _traceTimerFrames;
+
+		private Native.RECT _traceRequest;
+
+		private bool _traceRequestValid;
+
+		private int _traceOffsetX;
+
+		private int _traceOffsetY;
+
+		private bool _traceLocked;
+
 	internal static int DiagFrameUpdates;
 
 	internal static int DiagWindowSkipped;
@@ -244,6 +267,7 @@ internal sealed class DragEngine : IDisposable
 			return;
 		}
 		_lastEventPt = pt;
+		Interlocked.Increment(ref _traceEvents);
 		// 抽帧（照 AltDrag 的 MoveRate / ResizeRate）：不是省性能，是让"写窗口"这一步
 		// 永远有空档。每来一个鼠标事件就排一帧进去，队列只会在目标程序慢的时候越积越长，
 		// 表现出来就是"手停了窗口还在挪"。
@@ -431,6 +455,12 @@ internal sealed class DragEngine : IDisposable
 		// hooks.c:1849-1854：抽帧时源码另起一个 100ms 的 MOVE_TIMER 兜底 ——
 		// 钩子被系统掐掉/消息没送到时，只要光标动过就补一帧。
 		StartMovePollTimer(move);
+		// 我们把"排进队列 → 开始写窗口"这段延迟压下来的两个前提：定时器精度 1ms + 吸附目标缓存。
+		// 默认 15.6ms 的 tick 会把这段延迟反复抹到 15/31ms，看上去就是窗口总比手慢半拍。
+		if (!_timerPeriodRaised)
+		{
+			_timerPeriodRaised = Native.TimeBeginPeriod(1) == 0u;
+		}
 		// 吸附级别照 AltDrag 的 sharedstate.snap：0 = 关、1 = 只吸屏幕、2 = 再吸窗口外侧、3 = 再吸窗口内侧。
 		// Input-Plus 只有一个"贴边吸附"开关，打开就按 3 走（这是 AltDrag 的完整行为）。
 		_snapBase = (appConfig.SnapToEdges ? Math.Clamp(appConfig.SnapLevel, 1, 3) : 0);
@@ -445,6 +475,17 @@ internal sealed class DragEngine : IDisposable
 		_tailFixes = 0;
 		_tailDriftMax = 0;
 		_applyDriftMax = 0;
+		_frameNo = 0;
+		_traceAeroWrites = 0L;
+		_traceEvents = 0L;
+		_traceTimerFrames = 0L;
+		_traceRequestValid = false;
+		_traceRequest = default(Native.RECT);
+		_traceLocked = false;
+		_lastEventPt = pt;
+		// 轨迹账本：只在数据目录里留最近一次拖动的逐帧快照（Core/DragTrace.cs）。
+		string traceHeader = (move ? "移动" : "缩放") + " 起手=" + (wasMaximized ? "最大化" : "普通") + " 抽帧=" + (move ? _moveRate : _resizeRate) + " 吸附基线=" + _snapBase + " 起点=" + startWnd.Left + "," + startWnd.Top + " " + startWnd.Width + "x" + startWnd.Height + " 光标=" + pt.X + "," + pt.Y + " 类名=" + Native.GetClassName(hwnd) + " 进程=" + DescribeProcess(hwnd) + " DPI=" + Native.DpiOfWindow(hwnd) + DescribeMonitor(pt);
+		DragTrace.Begin(DragTrace.PathFor(DragDiag.Path), hwnd, SampleForTrace, traceHeader);
 		_frameInside = false;
 		WindowActions.NotifySizeMove(hwnd, start: true);
 		_sizeMoveActive = true;
@@ -701,6 +742,7 @@ internal sealed class DragEngine : IDisposable
 			{
 				return;
 			}
+			_traceLocked = alt.Locked;
 			// hooks.c:663-706：AutoRemaximize 的优先级高于 locked —— 原本最大化的窗口被拖到另一块显示器上时，
 			// 在新显示器里按 origin 尺寸居中、重新最大化，然后锁住本次拖动。
 			if (s.Move && appConfig.AutoRemaximize && AltDragCore.AutoRemaximize(alt, s.Hwnd, pt))
@@ -739,6 +781,9 @@ internal sealed class DragEngine : IDisposable
 				{
 					// 上边 = 最大化：AltDrag 在这里直接 return，这一帧不写窗口
 					rECT = (Native.GetWindowRect(s.Hwnd, out var maxed) ? maxed : wnd);
+					// 这一帧是真的把窗口写成最大化了（MoveAero 里 SetWindowPlacement / SW_MAXIMIZE），
+					// 计入轨迹的"写"，否则下一行会误标成"矩形动了但我们没写"。
+					Interlocked.Increment(ref _traceAeroWrites);
 					alreadyWritten = true;
 				}
 				else if (aeroOutcome == AltDragCore.AeroOutcome.Written)
@@ -775,6 +820,10 @@ internal sealed class DragEngine : IDisposable
 			// 记下"这一帧请求的是哪儿"：收尾时用它跟窗口的真实矩形对一次账（ReconcileTail）。
 			_lastTarget = rECT;
 			_lastTargetValid = true;
+			_traceRequest = rECT;
+			_traceRequestValid = true;
+			_traceOffsetX = alt.OffsetX;
+			_traceOffsetY = alt.OffsetY;
 			// 先把窗口挪过去，再画 HUD 和外框 —— 顺序照 AltDrag：一个鼠标移动事件进来，
 			// 第一件事就是让窗口跟上光标。装饰晚一帧看不出来，可它们若排在前面，
 			// 那份开销就直接变成用户手上的延迟。
@@ -793,7 +842,11 @@ internal sealed class DragEngine : IDisposable
 			}
 			// 落点偏差：写完立刻回读一次。差得越多，说明目标程序越跟不上我们的帧
 			//（钳制尺寸、卡在重排里）——用户看到的"窗口比手慢"就是它，和链路积压无关。
-			if (_dragging && !alreadyWritten && Native.GetWindowRect(s.Hwnd, out var appliedRect))
+			// 落点偏差：写完回读一次。原来每帧都读 —— 每帧多一次跨线程往返进目标线程，
+			// 目标程序越重这笔开销越明显。改成每 8 帧读一次：偏差是"跟不上"的累积症状，
+			// 不会只落在没采样的那几帧里，最大值照样抓得到。
+			_frameNo++;
+			if (_dragging && !alreadyWritten && (_frameNo & 7) == 0 && Native.GetWindowRect(s.Hwnd, out var appliedRect))
 			{
 				int appliedDrift = Math.Max(Math.Max(Math.Abs(appliedRect.Left - rECT.Left), Math.Abs(appliedRect.Top - rECT.Top)), Math.Max(Math.Abs(appliedRect.Width - rECT.Width), Math.Abs(appliedRect.Height - rECT.Height)));
 				if (appliedDrift > _applyDriftMax)
@@ -822,7 +875,10 @@ internal sealed class DragEngine : IDisposable
 						if (_dragging && _session.Gen == s.Gen && _frameWanted)
 						{
 							_frame.ApplyTheme(appConfig.FrameColorId, appConfig.FrameStyleId, appConfig.FrameThickness, appConfig.FrameRadius, appConfig.FrameOpacity, appConfig.EffectiveFrameColor);
-							_frame.SetRectNow(rectNow);
+							// 拖动中每帧都用合并信箱投递（同一时刻最多一条在途），不再每帧 AsyncWindowPos：
+							// 覆盖层线程忙的时候 SetRectNow 会把十几条 SetWindowPos 堆在它的消息队列里，
+							// 松手之后才追上，屏幕上就是虚线框还在滑一段。SetRect 只留最新一帧。
+							_frame.SetRect(rectNow);
 							DiagFrameUpdates++;
 						}
 					}
@@ -961,6 +1017,82 @@ internal sealed class DragEngine : IDisposable
 	/// AltDrag 在钩子里同步写窗口，压根没有这条时间差，这里照它的样子在钩子线程上写完再发
 	/// WM_EXITSIZEMOVE。一次拖动只多这几毫秒，换的是"松手即落位"。
 	/// </summary>
+	/// <summary>
+	/// 给 <see cref="DragTrace"/> 的一帧快照。在别的线程上跑，只读字段、只做 GetCursorPos / GetWindowRect，
+	/// 不碰任何锁 —— 拖动本身一刻都不能等它。
+	/// </summary>
+	/// <summary>被拖窗口的进程名（轨迹表头用，读不到就给 pid）。</summary>
+	private static string DescribeProcess(nint hwnd)
+	{
+		try
+		{
+			Native.GetWindowThreadProcessId(hwnd, out var processId);
+			if (processId == 0)
+			{
+				return "?";
+			}
+			return System.Diagnostics.Process.GetProcessById((int)processId).ProcessName + ":" + processId;
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+			return "?";
+		}
+	}
+
+	/// <summary>光标所在显示器的屏幕矩形与工作区矩形（轨迹表头用）。</summary>
+	private static string DescribeMonitor(Native.POINT pt)
+	{
+		try
+		{
+			Native.MONITORINFO monitorInfo = Native.GetMonitorInfoAt(pt);
+			return " 屏=" + monitorInfo.rcMonitor.Left + "," + monitorInfo.rcMonitor.Top + " " + monitorInfo.rcMonitor.Width + "x" + monitorInfo.rcMonitor.Height + " 工作区=" + monitorInfo.rcWork.Left + "," + monitorInfo.rcWork.Top + " " + monitorInfo.rcWork.Width + "x" + monitorInfo.rcWork.Height;
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+			return "";
+		}
+	}
+
+	private DragTrace.Sample SampleForTrace(nint hwnd)
+	{
+		DragTrace.Sample sample = default(DragTrace.Sample);
+		try
+		{
+			if (!Native.IsWindow(hwnd) || !Native.GetCursorPos(out var cursor) || !Native.GetWindowRect(hwnd, out var rect))
+			{
+				return sample;
+			}
+			sample.Ok = true;
+			sample.Cursor = cursor;
+			sample.Rect = rect;
+			// DWM 扩展边框：屏幕上真正画出来的那圈。它和 GetWindowRect 分家时，说明"画面在动、矩形没动"。
+			Native.RECT frame;
+			if (Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_EXTENDED_FRAME_BOUNDS, out frame, Marshal.SizeOf(typeof(Native.RECT))) == 0 && frame.Width > 0 && frame.Height > 0)
+			{
+				sample.Frame = frame;
+				sample.FrameOk = true;
+			}
+			sample.Event = _lastEventPt;
+			sample.Request = _traceRequest;
+			sample.RequestOk = _traceRequestValid;
+			sample.OffsetX = _traceOffsetX;
+			sample.OffsetY = _traceOffsetY;
+			sample.Writes = WindowActions.FramesWritten + Interlocked.Read(ref _traceAeroWrites);
+			sample.Events = Interlocked.Read(ref _traceEvents);
+			sample.TimerFrames = Interlocked.Read(ref _traceTimerFrames);
+			sample.Snap = _snap;
+			sample.Move = _moveMode;
+			sample.Locked = _traceLocked;
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+		return sample;
+	}
+
 	private void FinishTail(nint hwnd, Session session, Native.POINT pt, bool moveMode, long startedAt)
 	{
 		int residual = 0;
@@ -1286,6 +1418,7 @@ internal sealed class DragEngine : IDisposable
 				return;
 			}
 			_lastEventPt = pt;
+			Interlocked.Increment(ref _traceTimerFrames);
 			PostFrame(session, pt, forceWrite: false);
 		}
 		catch (Exception ex)
@@ -1372,6 +1505,12 @@ internal sealed class DragEngine : IDisposable
 			_frameWanted = false;
 			StopMovePollTimer();
 			StopRemaxRestoreTimer();
+			if (_timerPeriodRaised)
+			{
+				_timerPeriodRaised = false;
+				Native.TimeEndPeriod(1);
+			}
+			DragTrace.End();
 			// Cancel 路径（暂停、改配置、目标窗口没了）不会走 End 的通知，
 			// 这里补发一次，否则目标窗口会一直以为自己还在尺寸拖动循环里（部分程序会卡在"拖拽模式"）。
 			if (_sizeMoveActive)
