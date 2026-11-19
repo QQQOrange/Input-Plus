@@ -78,7 +78,7 @@ internal sealed class HookEngine : IDisposable
 	{
 		get
 		{
-			long num = Interlocked.Read(in _callbackSinceTicks);
+			long num = Interlocked.Read(ref _callbackSinceTicks);
 			if (num == 0L)
 			{
 				return 0.0;
@@ -92,7 +92,7 @@ internal sealed class HookEngine : IDisposable
 		}
 	}
 
-	public long SeenCount => Interlocked.Read(in _seenCount);
+	public long SeenCount => Interlocked.Read(ref _seenCount);
 
 	public bool TryGetLastSeen(out int x, out int y)
 	{

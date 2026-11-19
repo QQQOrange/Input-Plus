@@ -1216,6 +1216,13 @@ internal static class WindowActions
 		}
 	}
 
+	/// <summary>
+	/// WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE（hooks.c:1847 / 1892）。
+	/// AltDrag 用的是同步 SendMessage：很多程序在 WM_EXITSIZEMOVE 里保存窗口位置，
+	/// 用 PostMessage 的话"保存"可能排在下一帧写入之前，存下去的就是旧矩形。
+	/// 这里换成 SendMessageTimeout(SMTO_ABORTIFHUNG)：语义仍是同步，但目标挂死时不会把拖动线程一起拖住。
+	/// iTunes 例外（AltDrag 原样跳过，它收到这条消息会自己乱跳）。
+	/// </summary>
 	public static void NotifySizeMove(nint h, bool start)
 	{
 		if (h == IntPtr.Zero)
@@ -1224,8 +1231,11 @@ internal static class WindowActions
 		}
 		try
 		{
-			Native.PostMessageW(h, start ? 561 : 562, IntPtr.Zero, IntPtr.Zero);
-			Native.NotifyWinEvent(start ? 10u : 11u, h, 0, 0);
+			if (IsITunes(h))
+			{
+				return;
+			}
+			Native.SendMessageTimeoutW(h, start ? 561 : 562, IntPtr.Zero, IntPtr.Zero, Native.SMTO_ABORTIFHUNG, 2000u, out var _);
 		}
 		catch (Exception ex)
 		{
@@ -1233,13 +1243,55 @@ internal static class WindowActions
 		}
 	}
 
-	public static void SetRect(nint h, Native.RECT r)
+	private static bool IsITunes(nint h)
 	{
-		if (Native.IsZoomed(h))
+		try
 		{
-			Native.ShowWindow(h, 9);
+			StringBuilder stringBuilder = new StringBuilder(64);
+			if (Native.GetClassNameW(h, stringBuilder, stringBuilder.Capacity) == 0)
+			{
+				return false;
+			}
+			return string.Equals(stringBuilder.ToString(), "iTunes", StringComparison.Ordinal);
 		}
-		Native.SetWindowPos(h, IntPtr.Zero, r.Left, r.Top, r.Width, r.Height, 16916u);
+		catch
+		{
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// 拖动几何的写窗口：就是 AltDrag 的 MoveWindow(hwnd, x, y, w, h, TRUE)（hooks.c:927）。
+	/// 没有"和上次一样就跳过"、没有 LetWindowKickBack 探测 —— AltDrag 每一帧都无条件写，
+	/// 窗口的位置永远只由这一次的几何决定。贴边帧尤其不能跳过：跳过之后窗口会停在上一帧的尺寸上。
+	/// </summary>
+	public static void MoveWindowDrag(nint h, Native.RECT target)
+	{
+		if (h == IntPtr.Zero || target.Width <= 0 || target.Height <= 0)
+		{
+			return;
+		}
+		try
+		{
+			// hooks.c:927：源码这里就是一句 MoveWindow(hwnd, posx, posy, wndwidth, wndheight, TRUE)，
+			// 前面没有任何"先还原"的动作 —— 最大化窗口的还原由 SetupMove / SetupResize 负责。
+			Stopwatch stopwatch = Stopwatch.StartNew();
+			Native.MoveWindow(h, target.Left, target.Top, target.Width, target.Height, true);
+			stopwatch.Stop();
+			double totalMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
+			TotalWriteMs += totalMilliseconds;
+			if (totalMilliseconds > MaxWriteMs)
+			{
+				MaxWriteMs = totalMilliseconds;
+			}
+			FramesWritten++;
+			_lastWriteRect = target;
+			_lastWriteValid = true;
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
 	}
 
 	public static void MaximizeRestore(nint h)
@@ -1286,24 +1338,6 @@ internal static class WindowActions
 				int y = monitorInfoAt.rcWork.Top + (monitorInfoAt.rcWork.Height - lpRect.Height) / 2;
 				Native.SetWindowPos(h, IntPtr.Zero, x, y, lpRect.Width, lpRect.Height, 16404u);
 			}
-		}
-	}
-
-	public static void ApplySnap(nint h, SnapZone zone, Native.RECT work)
-	{
-		switch (zone)
-		{
-		case SnapZone.None:
-			break;
-		case SnapZone.Maximize:
-			if (!Native.IsZoomed(h))
-			{
-				Native.ShowWindow(h, 3);
-			}
-			break;
-		default:
-			SetRect(h, Zones.RectOf(zone, work));
-			break;
 		}
 	}
 

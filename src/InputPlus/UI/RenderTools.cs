@@ -114,6 +114,16 @@ public static class RenderTools
                     Pump(260);
                     Save(main, Path.Combine(outDir, "holddrag-sample.png"));
 
+                    /* 吸附档位：AltDrag 的 AutoSnap 四档 + 阈值 + Aero 开关，
+                       在首屏之外，单独拍一张，回归时才看得见它们到底排成什么样。 */
+                    try
+                    {
+                        hdv.ScrollSnapForRender();
+                        Pump(160);
+                        Save(main, Path.Combine(outDir, "holddrag-snap.png"));
+                    }
+                    catch (Exception ex) { CoreLog.Warn("渲染吸附档位失败：" + ex.Message); }
+
                     /* 黑名单与「按程序规则」在这页最底下，视口里看不到 ——
                        滚到底再拍一张，验证那里两个挑程序的按钮也在。 */
                     hdv.ScrollListsForRender();
@@ -738,6 +748,23 @@ public static class RenderTools
             RenderMenuShot(outDir);
         }
 
+        /* 手势轨迹出图（`INPUTPLUS_RENDER_TRAIL=1`）。
+         *
+         * 轨迹由覆盖层窗口自己画，页面截图里永远没有它：切角、描边、
+         * 阴影这些只有眼睛能验。这里直接把 GestureOverlayWindow 当画布，
+         * 按真实采样节奏（20px 一个点）喂一段折角，再渲染成 PNG。 */
+        if (Environment.GetEnvironmentVariable("INPUTPLUS_RENDER_TRAIL") == "1")
+        {
+            try
+            {
+                RenderTrailShots(host, outDir);
+            }
+            catch (Exception ex)
+            {
+                CoreLog.Warn("渲染手势轨迹失败：" + ex.Message);
+            }
+        }
+
         main.Close();
 
         /* 亮度横条。
@@ -1158,6 +1185,87 @@ public static class RenderTools
         {
             CoreLog.Warn("渲染菜单截图失败：" + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 手势轨迹出图：常态色（浅底）与已识别色（深底）各一张。
+    /// 走的是覆盖层窗口自己的绘制路径（GestureTrail + 三层 Path），
+    /// 所以图里看到的就是真机上画出来的样子。
+    /// </summary>
+    private static void RenderTrailShots(AppHost host, string outDir)
+    {
+        const double shotW = 660;
+        const double shotH = 520;
+
+        /* 先横后竖的一段折角：直线段看有没有抖，拐角看 Chaikin 切角，
+         * 收笔看圆头。点距 20px 正好是 GestureTrail.MinDistance，
+         * 即"能被收下"的临界值（小于 20 会被过滤掉）。 */
+        double ox = SystemParameters.VirtualScreenLeft + 90;
+        double oy = SystemParameters.VirtualScreenTop + 120;
+        var stroke = new List<(double X, double Y)>();
+        for (int i = 0; i <= 22; i++) stroke.Add((ox + i * 20, oy));
+        for (int i = 1; i <= 14; i++) stroke.Add((ox + 440, oy + i * 20));
+
+        void Snapshot(GestureOverlayWindow win, Brush backdrop, string file)
+        {
+            var root = (FrameworkElement)win.Content;
+            root.Width = shotW;
+            root.Height = shotH;
+            root.Measure(new Size(shotW, shotH));
+            root.Arrange(new Rect(0, 0, shotW, shotH));
+            root.UpdateLayout();
+
+            int w = (int)shotW;
+            int h = (int)shotH;
+            var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+
+            /* 覆盖层本身是透明的，没有桌面可叠；铺一层中性底才看得出
+             * 白描边和黑阴影到底有没有画出来。 */
+            var backdropVisual = new DrawingVisual();
+            using (var dc = backdropVisual.RenderOpen())
+            {
+                dc.DrawRectangle(backdrop, null, new Rect(0, 0, w, h));
+            }
+            bmp.Render(backdropVisual);
+            bmp.Render(root);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bmp));
+            using var fs2 = File.Create(Path.Combine(outDir, file));
+            encoder.Save(fs2);
+            win.Clear();
+        }
+
+        void Draw(bool recognized, Brush backdrop, string file)
+        {
+            var win = new GestureOverlayWindow { Width = shotW, Height = shotH };
+            win.Begin(host.Settings.GestureOptions);
+            if (recognized) win.MarkRecognized();
+
+            foreach (var (x, y) in stroke)
+            {
+                win.AddPoint(x, y);
+                /* 16ms 节流是给 8ms 轮询用的：一次性喂完点，
+                 * 用 ReplaceLast 强制刷最后一笔，否则除首点外全是空几何。 */
+                win.ReplaceLast(x, y);
+            }
+
+            Snapshot(win, backdrop, file);
+        }
+
+        /* 起始超时红点单独拍一张：白描边压在灰底上才看得出边框，
+         * 圆的位置也顺便验一下是不是以光标为圆心（WG2 的 B/X.cs:21-28）。 */
+        void DrawDot(Brush backdrop, string file)
+        {
+            var win = new GestureOverlayWindow { Width = shotW, Height = shotH };
+            win.Begin(host.Settings.GestureOptions);
+            win.ShowTimeoutDot(ox + 220, oy + 140);
+            Snapshot(win, backdrop, file);
+        }
+
+        Draw(false, new SolidColorBrush(Color.FromRgb(0xF4, 0xF5, 0xF7)), "gesture-trail.png");
+        Draw(true, new SolidColorBrush(Color.FromRgb(0x1F, 0x22, 0x27)), "gesture-trail-dark.png");
+        DrawDot(new SolidColorBrush(Color.FromRgb(0x53, 0x59, 0x63)), "gesture-dot.png");
     }
 
     private static void Save(Window window, string path)

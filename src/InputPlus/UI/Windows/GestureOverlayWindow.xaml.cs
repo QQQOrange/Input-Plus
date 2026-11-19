@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,12 +26,16 @@ namespace InputPlus.UI.Windows;
 /// </list>
 ///
 /// 轨迹与名称的画法照搬 WGestures 2：三层笔（阴影 / 描边 / 主线，见
-/// <c>YingDev.WGApp.Views\PathView.xaml.cs</c>：描边粗细 = 线宽 + 2×BorderWidth、
-/// 透明度 = 主色 ×0.75，阴影 = ×0.075）、颜色只在"已识别 / 未识别"之间切换一次
-/// （<c>A/T.cs:130</c>）、名称位置由 GestureNamePos 决定（<c>A/T.cs:387-393</c>：
-/// y = area.Top + (area.Height - labelH) × (1 - pos)，水平居中）、执行后按
+/// <c>A/U.cs</c>：描边粗细 = 线宽 + 2×BorderWidth、透明度 = 主色 ×0.75、
+/// 阴影 = ×0.075）、点距 20px 过滤 + ≤128 点一轮 Chaikin 切角（<c>A/U.cs</c> 的
+/// <c>C_f</c> 与 <c>F()</c>，实现在 <see cref="GestureTrail"/>）、重绘按 16ms 节流
+/// （<c>B/X.cs:119</c>）、颜色只在"已识别 / 未识别"之间切换一次（<c>A/T.cs:130</c>）。
+///
+/// **消失**（这次对齐的重点）：手势一结束就把整条轨迹清掉（<c>A/T.cs:115-119</c>
+/// 的 <c>A_f3.D()</c> → <c>U.E()</c>，没有淡出、不跟名称一起停留）；名称框单独按
 /// FadeOutExecuted 淡出（<c>A/T.cs:141-150</c>：勾了→停 100ms 后 1ms 消失；
-/// 没勾→停 250ms 后 250ms CubicEaseIn 淡出）。
+/// 没勾→停 250ms 后 250ms CubicEaseIn 淡出），位置由 GestureNamePos 决定
+/// （<c>A/T.cs:387-393</c>：y = area.Top + (area.Height - labelH) × (1 - pos)，水平居中）。
 /// </summary>
 public sealed partial class GestureOverlayWindow : Window
 {
@@ -43,6 +48,15 @@ public sealed partial class GestureOverlayWindow : Window
     private GestureOptions _opts = new();
     private string? _button;
     private bool _labelExecuted;
+
+    /* 轨迹数据（WG2 A/U.cs 的 List<Vec2> + GraphicsPath）与重绘节流时间戳。
+     * 点一律存物理像素，只有真正画的时候才换算成 DIP —— WG2 的轨迹窗口
+     * 整个画在设备坐标里，换算多一次就多一次浮点误差。 */
+    private readonly GestureTrail _trail = new();
+    private long _lastPaintAt;
+
+    /// <summary>重绘最小间隔（<c>B/X.cs:119</c>：距上次画满 16ms 才重来一次）。</summary>
+    private const int PaintIntervalMs = 16;
 
     public GestureOverlayWindow()
     {
@@ -174,7 +188,7 @@ public sealed partial class GestureOverlayWindow : Window
     {
         _opts = opts ?? new GestureOptions();
         _button = button;
-        TrailsReset();
+        ClearTrail();
         TimeoutDot.Visibility = Visibility.Collapsed;
         LabelBox.Visibility = Visibility.Collapsed;
         ApplyPathColor(NormalColor());
@@ -183,29 +197,50 @@ public sealed partial class GestureOverlayWindow : Window
         LabelBox.BeginAnimation(OpacityProperty, null);
     }
 
-    private void TrailsReset()
-    {
-        Trail.Points.Clear();
-        TrailBorder.Points.Clear();
-        TrailShadow.Points.Clear();
-    }
-
+    /// <summary>
+    /// 收一个轨迹点（物理像素）。顺序照 <c>A/U.cs</c> + <c>B/X.cs:112-119</c>：
+    /// 先按 20px 最小距离进模型（不够近就丢掉），再按 16ms 节流重绘。
+    /// 8ms 轮询下每个点都重建几何会把 UI 线程喂满，节流后画面看不出差别。
+    /// </summary>
     public void AddPoint(double px, double py)
     {
-        var p = ToCanvas(px, py);
-        Trail.Points.Add(p);
-        TrailBorder.Points.Add(p);
-        TrailShadow.Points.Add(p);
+        if (!_trail.Add(px, py)) return;
+        Repaint();
     }
 
     public void ReplaceLast(double px, double py)
     {
-        if (Trail.Points.Count == 0) { AddPoint(px, py); return; }
-        var p = ToCanvas(px, py);
-        Trail.Points[^1] = p;
-        TrailBorder.Points[^1] = p;
-        TrailShadow.Points[^1] = p;
+        _trail.ReplaceLast(px, py);
+        Repaint(force: true);
     }
+
+    /// <summary>重建三支笔的几何（三层共用同一个 Geometry 实例，WPF 只需布局一次）。</summary>
+    private void Repaint(bool force = false)
+    {
+        long now = Environment.TickCount64;
+        if (!force && now - _lastPaintAt < PaintIntervalMs) return;
+        _lastPaintAt = now;
+
+        Geometry? geometry = GestureTrail.ToGeometry(_trail.Build(), ToCanvasPointOf);
+        Trail.Data = geometry;
+        TrailBorder.Data = geometry;
+        TrailShadow.Data = geometry;
+    }
+
+    /// <summary>
+    /// 轨迹立刻消失 —— WG2 <c>A/T.cs:115-119</c> 的手势结束分支（<c>A_f3.D()</c> →
+    /// <c>U.E()</c>）：整条清空 + 脏区重画成透明，没有淡出、不跟名称一起停留。
+    /// </summary>
+    public void ClearTrail()
+    {
+        _trail.Clear();
+        _lastPaintAt = 0;
+        Trail.Data = null;
+        TrailBorder.Data = null;
+        TrailShadow.Data = null;
+    }
+
+    private Point ToCanvasPointOf(Point device) => ToCanvas(device.X, device.Y);
 
     /// <summary>
     /// 认出来了：三支笔一起换成「已识别」色。WG2 只在命中这一刻换一次色，
@@ -215,17 +250,10 @@ public sealed partial class GestureOverlayWindow : Window
 
     // ───────────────── 结果 ─────────────────
 
-    /// <summary>没有匹配规则时：轨迹保持「未识别」色，并显示「未识别」。</summary>
-    public void ShowUnrecognized(double px, double py)
-    {
-        ApplyPathColor(NormalColor());
-        ShowLabel(Loc.T("未识别"), px, py, keepTrail: true);
-    }
-
     /// <summary>起始超时：鼠标尖端一个红色实心圆。只画圆，不显示文字和轨迹。</summary>
     public void ShowTimeoutDot(double px, double py)
     {
-        TrailsReset();
+        ClearTrail();
         LabelBox.Visibility = Visibility.Collapsed;
 
         var p = ToCanvas(px, py);
@@ -244,7 +272,7 @@ public sealed partial class GestureOverlayWindow : Window
     /// </summary>
     public void ShowLabel(string text, double px, double py, bool keepTrail = false, bool executed = false)
     {
-        if (!keepTrail) TrailsReset();
+        if (!keepTrail) ClearTrail();
         TimeoutDot.Visibility = Visibility.Collapsed;
 
         ApplyLabelStyle(executed);
@@ -309,7 +337,7 @@ public sealed partial class GestureOverlayWindow : Window
         LabelBox.BeginAnimation(OpacityProperty, null);
         LabelBox.Opacity = 1.0;
         _labelExecuted = false;
-        TrailsReset();
+        ClearTrail();
         TimeoutDot.Visibility = Visibility.Collapsed;
         LabelBox.Visibility = Visibility.Collapsed;
     }

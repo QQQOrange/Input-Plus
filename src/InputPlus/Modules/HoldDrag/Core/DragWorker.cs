@@ -54,7 +54,32 @@ internal sealed class DragWorker : IDisposable
 
 	public static int MaxDrained;
 
+	/// <summary>从"钩子排进队列"到"工作线程真正开始写窗口"的最大/累计延迟（毫秒）。</summary>
+	public static long MaxLagMs;
+
+	public static long LagSumMs;
+
+	public static long LagCount;
+
 	private volatile bool _disposed;
+
+	/// <summary>
+	/// 鼠标移动的"信箱"：只留**最新**一个坐标，并且线程消息队列里最多一条在途消息。
+	///
+	/// 以前每个鼠标事件都 PostThreadMessageW 一条，队列深度没有上限。工作线程一旦被抢走
+	/// 百来毫秒（实测合并峰值 47 条），这 47 个过期坐标就排在队列里；线程回来时窗口
+	/// 要从"几十毫秒前的位置"一路追到光标现在的位置 —— 手感上就是"手停了窗口还在跑"。
+	/// 现在坐标只写进信箱、在途最多一条，滞后上限固定成"写一次窗口"的时间。
+	/// </summary>
+	private readonly object _moveGate = new object();
+
+	private int _moveX;
+
+	private int _moveY;
+
+	private bool _movePending;
+
+	private long _postedAt;
 
 	public bool IsRunning
 	{
@@ -73,6 +98,9 @@ internal sealed class DragWorker : IDisposable
 		MaxMoveMs = 0L;
 		MaxIdleMs = 0L;
 		MaxDrained = 0;
+		MaxLagMs = 0L;
+		LagSumMs = 0L;
+		LagCount = 0L;
 	}
 
 	public DragWorker(Action<Native.POINT> onMove)
@@ -86,7 +114,10 @@ internal sealed class DragWorker : IDisposable
 		{
 			_thread = new Thread(ThreadMain);
 			_thread.IsBackground = true;
-			_thread.Priority = ThreadPriority.AboveNormal;
+			/* Highest：这条线程平时阻塞在 GetMessage 上，只有"写一次窗口"（实测 2.4ms，
+			   峰值 18.7ms）时才占 CPU。它被抢走的每一毫秒都会变成松手时窗口要追的距离，
+			   所以提到 Highest，让写窗口这一步尽量不被普通线程打断。 */
+			_thread.Priority = ThreadPriority.Highest;
 			_thread.Name = "HoldDrag.DragWorker";
 			_thread.Start();
 			if (!_ready.Wait(3000))
@@ -98,9 +129,30 @@ internal sealed class DragWorker : IDisposable
 
 	public void PostMove(Native.POINT pt)
 	{
-		if (!_disposed && _threadId != 0 && !Native.PostThreadMessageW(_threadId, 32775u, new IntPtr(pt.X), new IntPtr(pt.Y)))
+		if (_disposed || _threadId == 0)
+		{
+			return;
+		}
+		lock (_moveGate)
+		{
+			_moveX = pt.X;
+			_moveY = pt.Y;
+			// 已经有一条在途：只更新信箱里的坐标，不再往队列里塞第二条。
+			// 工作线程醒来时按信箱里的最新坐标写一次就够了。
+			if (_movePending)
+			{
+				return;
+			}
+			_movePending = true;
+			_postedAt = Environment.TickCount64;
+		}
+		if (!Native.PostThreadMessageW(_threadId, 32775u, new IntPtr(pt.X), new IntPtr(pt.Y)))
 		{
 			int lastWin32Error = Marshal.GetLastWin32Error();
+			lock (_moveGate)
+			{
+				_movePending = false;
+			}
 			if (lastWin32Error != 0)
 			{
 				Log.Trace("投递鼠标移动失败，Win32 错误码 " + lastWin32Error);
@@ -187,7 +239,33 @@ internal sealed class DragWorker : IDisposable
 					{
 						Log.Trace("合并掉了 " + num2 + " 个过期的鼠标移动位置");
 					}
-					Native.POINT obj = new Native.POINT((int)((IntPtr)lpMsg2.wParam).ToInt64(), (int)((IntPtr)lpMsg2.lParam).ToInt64());
+					// 坐标一律取信箱里的最新值，消息自带的那对参数只当兜底：
+					// 在途标记在调用 _onMove 之前清掉，这样写窗口的这两毫秒里新来的事件
+					// 还能再排一条，最后一次移动不会丢。
+					Native.POINT obj;
+					long num4 = 0L;
+					lock (_moveGate)
+					{
+						obj = new Native.POINT(_moveX, _moveY);
+						if (_movePending)
+						{
+							num4 = Environment.TickCount64 - _postedAt;
+						}
+						_movePending = false;
+					}
+					if (num4 > 0)
+					{
+						LagSumMs += num4;
+						LagCount++;
+						if (num4 > MaxLagMs)
+						{
+							MaxLagMs = num4;
+						}
+					}
+					if (obj.X == 0 && obj.Y == 0)
+					{
+						obj = new Native.POINT((int)((IntPtr)lpMsg2.wParam).ToInt64(), (int)((IntPtr)lpMsg2.lParam).ToInt64());
+					}
 					long tickCount2 = Environment.TickCount64;
 					try
 					{

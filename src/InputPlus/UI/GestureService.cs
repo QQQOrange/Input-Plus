@@ -1166,6 +1166,8 @@ public sealed class GestureService : IDisposable
          * 只停止这一笔并保留一下名称。以前这里会误走录制分支。 */
         if (!execute && !recording)
         {
+            /* 这一笔到此结束：轨迹按 WG2 立刻清空，名称该闪就闪，不拖着线一起留。 */
+            Ui(() => _overlay?.ClearTrail());
             if (string.IsNullOrWhiteSpace(keepOverlayFor)) HideOverlay(0);
             else ShowLabel(keepOverlayFor!, px, py);
             return;
@@ -1235,12 +1237,11 @@ public sealed class GestureService : IDisposable
         }
         else
         {
-            if (extent >= opts.MinMove)
-            {
-                ShowUnrecognized(px, py);
-                CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
-            }
-            else HideOverlay(0);
+            /* 未识别 = 屏幕上什么都不留。WG2 的手势结束处理只有两句
+             * （A/T.cs:115-119）：A_f3.D() 把轨迹整条清空、e() 收红点并停计时。
+             * 没有「未识别」字样，也没有"灰线多留一会儿" —— 那两样是我们自己加的。 */
+            if (extent >= opts.MinMove) CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
+            HideOverlay(0);
         }
     }
 
@@ -1650,20 +1651,6 @@ public sealed class GestureService : IDisposable
         ShowLabel(g.Title(ActionCatalogTitle(g)), px, py);
     }
 
-    private void ShowUnrecognized(double px, double py)
-    {
-        Ui(() =>
-        {
-            var overlay = EnsureOverlay();
-            overlay.ShowPassive();
-            overlay.ShowUnrecognized(px, py);
-            /* 「未识别」和轨迹一起留、一起变灰、一起消失。
-             * 原来的 120ms 根本看不清 —— 用户看到的只是轨迹闪一下就没了，
-             * 也不知道是"没认出来"还是"根本没触发"。 */
-            HideOverlay(UnrecognizedHoldMs(Settings().GestureOptions));
-        });
-    }
-
     private void ShowTimeoutDot(double px, double py)
     {
         /* 「超时后显示此标志」关掉时，超时就只是安静地结束，屏幕什么都不画。 */
@@ -1677,7 +1664,8 @@ public sealed class GestureService : IDisposable
             var overlay = EnsureOverlay();
             overlay.ShowPassive();
             overlay.ShowTimeoutDot(px, py);
-            HideOverlay(700);
+            /* 不设自动收：WG2 的红点是手势开始时显示（A/T.cs:51-52）、
+             * 手势结束才藏（A/T.cs:383）。不画也不松手，它就一直亮着。 */
         });
     }
 
@@ -1696,7 +1684,7 @@ public sealed class GestureService : IDisposable
     /// <param name="holdMs">
     /// 这次提示停留多久；null = 用配置里的 <see cref="LabelHoldMs"/>。
     /// 命中并执行了动作时**不走这里**（直接 <see cref="HideOverlay"/> 收掉，
-    /// 见 <see cref="HitLabelLingerMs"/>），这里只剩预览 / 未识别 / 滚轮换层。
+    /// 见 <see cref="HitLabelLingerMs"/>），这里只剩预览 / 滚轮换层。
     /// </param>
     private void ShowLabel(string text, double px, double py, int? holdMs = null)
     {
@@ -1709,12 +1697,10 @@ public sealed class GestureService : IDisposable
              * （比如 Win+E 打开资源管理器），如果只在“首次显示”时置顶，
              * 新窗口会把胶囊压到下面，用户就只看到轨迹、看不到名字。 */
             overlay.ShowPassive();
-            /* 名称和轨迹一起留、一起消失。
-             *
-             * 以前这里是 keepTrail=false：命中瞬间轨迹被清掉，名称还在屏幕
-             * 底部多挂 1.2 秒 —— 用户看到的就是「手势已经没了，名字还赖着」。
-             * 现在轨迹留着陪名称，HideOverlay 到点时把两者一起清掉。 */
-            overlay.ShowLabel(text, px, py, keepTrail: true);
+            /* 只留名称框，轨迹一律不留 —— WG2 的轨迹归轨迹、名称归名称：
+             * 轨迹在手势结束那一刻就整条清掉（A/T.cs:115-119），
+             * 名称框按 FadeOutExecuted / 停留时间自己收。 */
+            overlay.ShowLabel(text, px, py, keepTrail: false);
 
             /* 动作打开的窗口可能在这一帧之后才完成激活，160ms 后再顶一次，
              * 防止资源管理器/浏览器把胶囊盖住。只顶一次，不改变窗口状态。 */
@@ -1730,47 +1716,32 @@ public sealed class GestureService : IDisposable
             raise.Start();
         });
         CoreLog.Info($"显示手势名：{text}");
-        /* 这段时长同时也是轨迹留在屏幕上的时长 —— HideOverlay 到点把
-         * 名称和轨迹一起清掉，两者不会分先后消失。
-         * 命中执行时根本不到这里（当场 HideOverlay 收掉），只有预览/滚轮那种
-         * 没有执行动作的提示才按配置的 1.2 秒以上留着。 */
+        /* 这段时长只决定名称框留多久：轨迹在收尾那一帧就已经清掉了
+         * （见 overlay.ShowLabel 的 keepTrail:false），不会再出现
+         * "手势画完了、线还在屏幕上挂着"的尾巴。 */
         HideOverlay(holdMs ?? LabelHoldMs(Settings().GestureOptions));
     }
 
     /// <summary>
-    /// 手势命中后，名称框（以及陪它的轨迹）在屏幕上停留多久。
+    /// 没有执行动作的提示（预览、滚轮换层）名称框在屏幕上停留多久。
     ///
-    /// 单独抽出来是为了自检能盯住这条不变量：名称和轨迹**同一时刻**消失，
-    /// 而不是轨迹立刻没、名称再挂一段时间。
+    /// **不包含轨迹**：轨迹在手势结束那一刻就已经清掉了（WG2 <c>A/T.cs:115-119</c>），
+    /// 这条时长只决定名称框自己留多久。
     /// </summary>
     internal static int LabelHoldMs(GestureOptions opts)
         => Math.Max(1200, opts.LabelLingerMs);
 
     /// <summary>
-    /// 命中并**执行了动作**之后，名称框（连同轨迹）还留在屏幕上多久 —— <b>0，立刻消失</b>。
+    /// 命中并**执行了动作**之后，名称框（轨迹已在同一帧清掉）还留在屏幕上多久 —— <b>0，立刻消失</b>。
     ///
     /// 用户定的规则（两种模式都要"执行完就没"）：
     /// ① 手势勾了「识别手势立即执行」→ 方向串一对上就执行，执行那一刻方框立刻收；
     /// ② 没勾 → 画的过程中方框跟着预览（<see cref="UpdatePreview"/>），
     ///    等鼠标键松开、<see cref="Finish"/> 结算执行，**松手这一刻**立刻收。
-    /// 两种情况都不留尾巴；只有"没执行动作"的提示（预览、未识别、滚轮换层）
-    /// 才按 <see cref="LabelHoldMs"/> / <see cref="UnrecognizedHoldMs"/> 继续留着。
+    /// 两种情况都不留尾巴；只有"没执行动作"的提示（预览、滚轮换层）
+    /// 才按 <see cref="LabelHoldMs"/> 继续留着。
     /// </summary>
     internal const int HitLabelLingerMs = 0;
-
-    /// <summary>
-    /// 「未识别」闪一下就走：手画完没匹配到任何手势时，灰色轨迹和「未识别」两个字
-    /// 只保留 <see cref="UnrecognizedFlashMs"/> 就消失。
-    ///
-    /// 用户定的规则（原话）："没有匹配到任何手势，当画完手势的时候就只保留灰色一瞬间就消失"。
-    /// 所以这里**不跟**「名称停留时间」联动 —— 那是给"已执行"的回执用的，
-    /// 没认出来的东西不该在屏幕上占位。名称和轨迹走同一个定时器
-    /// （见 <see cref="HideOverlay"/>），到点一起清掉。
-    /// </summary>
-    internal const int UnrecognizedFlashMs = 120;
-
-    /// <summary>未识别的停留毫秒数（保留 <paramref name="opts"/> 参数只是为了不动调用点与自检签名）。</summary>
-    internal static int UnrecognizedHoldMs(GestureOptions opts) => UnrecognizedFlashMs;
 
     /// <summary>
     /// 命中并执行之后覆盖层怎么收 —— WGestures 2 的「执行后淡出」：
@@ -1793,7 +1764,10 @@ public sealed class GestureService : IDisposable
             var overlay = EnsureOverlay();
             overlay.ShowPassive();
             overlay.MarkRecognized();
-            overlay.ShowLabel(title, px, py, keepTrail: true, executed: true);
+            /* 手势结束 = 轨迹立刻消失（WG2 A/T.cs:115-119 的 A_f3.D()），
+             * 屏幕上只留名称框按 FadeOutExecuted 淡出。以前这里是 keepTrail:true，
+             * 轨迹陪着名称多挂 130~530ms —— 看起来就是"手势都做完了线还赖着"。 */
+            overlay.ShowLabel(title, px, py, keepTrail: false, executed: true);
         });
         HideOverlayFading();
     }

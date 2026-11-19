@@ -95,10 +95,35 @@ internal sealed class AppConfig
 	/// <summary>触发键按住一会儿后浮出快捷键提示。</summary>
 	public bool ShowTriggerHint { get; set; }
 
+	/// <summary>
+	/// AltDrag 的 AutoSnap 档位（hooks.c:2234）：1 = 只吸屏幕边缘和任务栏，
+	/// 2 = 再吸其它窗口的外侧，3 = 再吸窗口内侧。0 由 <see cref="SnapToEdges"/> 的 false 表示 ——
+	/// 两个字段合起来才是 AltDrag 的四档，Normalize 负责把它们对齐。
+	/// </summary>
+	public int SnapLevel { get; set; }
+
 	/// <summary>拖动时吸附到屏幕/工作区边缘。</summary>
 	public bool SnapToEdges { get; set; }
 
-	/// <summary>吸附阈值（像素）。</summary>
+	/// <summary>
+	/// AltDrag 的 Aero 设置（AltDrag.ini 的 Aero=1）：拖到屏幕边缘分半屏、拖到顶部最大化。
+	/// 和吸附档位是两件事 —— 关掉吸附（AutoSnap=0）时源码的 Aero 仍然生效。
+	/// </summary>
+	public bool AeroSnap { get; set; }
+
+	/// <summary>
+	/// AltDrag 的 AutoRemaximize（hooks.c:663-706）：把最大化的窗口拖到另一块显示器上时，
+	/// 在那边按原尺寸居中并重新最大化，然后锁住本次拖动。源码 ini 出厂就是 1。
+	/// </summary>
+	public bool AutoRemaximize { get; set; }
+
+	/// <summary>
+	/// 对应 AltDrag 的 AutoRemaximize=2（hooks.c:687-690）：上一条生效一秒后，
+	/// 源码用 RESTORE_TIMER 把窗口还原成普通窗口、按光标比例重算 offset 继续跟手。
+	/// 两个开关合起来就是 ini 里那个 0/1/2 的整数。
+	/// </summary>
+	public bool AutoRemaximizeRestore { get; set; }
+
 	public int SnapThreshold { get; set; }
 
 	/// <summary>触发键按住期间用方向键 / 数字键布局窗口。</summary>
@@ -118,17 +143,13 @@ internal sealed class AppConfig
 	public string Blacklist { get; set; }
 
 	/// <summary>
-	/// 抽帧（照 AltDrag 的 MoveRate）：每几个鼠标移动事件才真的写一次窗口。
+	/// 抽帧（照 AltDrag 的 MoveRate）：每几个鼠标移动事件才真的写一次窗口（in 2 / 5，见 AltDrag.ini）。
 	/// 1 = 每个事件都写，最跟手；调大能把"目标程序写一次很慢"时的队列积压压下去。
 	/// </summary>
 	public int MoveRate { get; set; }
 
 	/// <summary>缩放的抽帧倍数（照 AltDrag 的 ResizeRate），含义同上。</summary>
 	public int ResizeRate { get; set; }
-
-	public int DragThreshold { get; set; }
-
-	public int DragOutThresholdPx { get; set; }
 
 	public string AutoStart { get; set; }
 
@@ -193,17 +214,25 @@ internal sealed class AppConfig
 		DragHudShowPosition = true;
 		ShowTriggerHint = true;
 		SnapToEdges = true;
-		SnapThreshold = 8;
+		// AltDrag 出厂 AutoSnap=0，但它的安装包 ini 与"装上就该好用"的取向都是满档；
+		// 这里默认 3（屏幕 + 窗口两侧），等价于旧版"贴边吸附"打开时的行为。
+		SnapLevel = 3;
+		AeroSnap = true;
+		// AltDrag 的安装包 ini 里 AutoRemaximize=1（hooks.c 的代码缺省是 0，这里跟 ini 走）。
+		AutoRemaximize = true;
+	AutoRemaximizeRestore = false;
+		SnapThreshold = 20;
 		KeyboardTiling = true;
 		UndoEnabled = true;
 		OnboardingDone = false;
 		AppRules = string.Empty;
-		CornerPercent = 26;
+		// 缩放九宫格的分界线：AltDrag 用固定 38% / 62%（hooks.c:1700-1710）。
+		// 这个字段留着只是为了兼容老配置文件的解析。
+		CornerPercent = 38;
 		Blacklist = string.Empty;
-		MoveRate = 1;
-		ResizeRate = 1;
-		DragThreshold = 1;
-		DragOutThresholdPx = 20;
+		// AltDrag.ini 出厂就是 2 / 5：移动每两个事件写一次、缩放每五个事件写一次。
+		MoveRate = 2;
+		ResizeRate = 5;
 		AutoStart = "TaskScheduler";
 		RunAsAdmin = true;
 		WarnNonAdmin = true;
@@ -238,6 +267,11 @@ internal sealed class AppConfig
 		if (SnapThreshold > 40)
 		{
 			SnapThreshold = 40;
+		}
+		// 档位只有 1/2/3 三档是"开着"；0 一律由 SnapToEdges 表达，避免两个字段互相打架。
+		if (SnapLevel < 1 || SnapLevel > 3)
+		{
+			SnapLevel = 3;
 		}
 		if (string.IsNullOrEmpty(TriggerKeyId))
 		{
@@ -329,11 +363,11 @@ internal sealed class AppConfig
 		{
 			Blacklist = Blacklist.Substring(0, 2000);
 		}
-		// 抽帧倍数（AltDrag 的 MoveRate / ResizeRate）：默认 1 = 每个鼠标事件都写窗口。
-		// 老配置里没有这两个字段时走 C# 默认值 0，这里一并夹进来。
+		// 抽帧倍数（AltDrag 的 MoveRate / ResizeRate）：出厂跟 ini 一样是 2 / 5。
+		// 老配置里没有这两个字段时走 C# 默认值 0，这里落回 ini 的值，而不是 1。
 		if (MoveRate < 1)
 		{
-			MoveRate = 1;
+			MoveRate = 2;
 		}
 		if (MoveRate > 8)
 		{
@@ -341,27 +375,11 @@ internal sealed class AppConfig
 		}
 		if (ResizeRate < 1)
 		{
-			ResizeRate = 1;
+			ResizeRate = 5;
 		}
 		if (ResizeRate > 8)
 		{
 			ResizeRate = 8;
-		}
-		if (DragThreshold < 0)
-		{
-			DragThreshold = 0;
-		}
-		if (DragThreshold > 2)
-		{
-			DragThreshold = 2;
-		}
-		if (DragOutThresholdPx < 0)
-		{
-			DragOutThresholdPx = 0;
-		}
-		if (DragOutThresholdPx > 200)
-		{
-			DragOutThresholdPx = 200;
 		}
 		if (AutoStart != "TaskScheduler" && AutoStart != "Registry" && AutoStart != "None")
 		{

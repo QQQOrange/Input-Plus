@@ -34,11 +34,17 @@ namespace InputPlus.Modules.HoldDrag;
 
 internal static class Native
 {
-	internal struct POINT(int x, int y)
+	internal struct POINT
 	{
-		public int X = x;
+		public int X;
 
-		public int Y = y;
+		public int Y;
+
+		public POINT(int x, int y)
+		{
+			X = x;
+			Y = y;
+		}
 
 		public override string ToString()
 		{
@@ -46,15 +52,23 @@ internal static class Native
 		}
 	}
 
-	internal struct RECT(int l, int t, int r, int b)
+	internal struct RECT
 	{
-		public int Left = l;
+		public int Left;
 
-		public int Top = t;
+		public int Top;
 
-		public int Right = r;
+		public int Right;
 
-		public int Bottom = b;
+		public int Bottom;
+
+		public RECT(int l, int t, int r, int b)
+		{
+			Left = l;
+			Top = t;
+			Right = r;
+			Bottom = b;
+		}
 
 		public int Width => Right - Left;
 
@@ -128,6 +142,20 @@ internal static class Native
 		public POINT ptMaxPosition;
 
 		public RECT rcNormalPosition;
+	}
+
+	/// <summary>WM_GETMINMAXINFO 的载荷：目标窗口自己声明的最小/最大跟踪尺寸（AltDrag 也读这个）。</summary>
+	internal struct MINMAXINFO
+	{
+		public POINT ptReserved;
+
+		public POINT ptMaxSize;
+
+		public POINT ptMaxPosition;
+
+		public POINT ptMinTrackSize;
+
+		public POINT ptMaxTrackSize;
 	}
 
 	internal struct MSG
@@ -208,20 +236,33 @@ internal static class Native
 
 	internal delegate bool EnumWindowsProc(nint hWnd, nint lParam);
 
-	internal struct SIZE(int w, int h)
+	internal struct SIZE
 	{
-		public int cx = w;
+		public int cx;
 
-		public int cy = h;
+		public int cy;
+
+		public SIZE(int w, int h)
+		{
+			cx = w;
+			cy = h;
+		}
 	}
 
-	internal struct ColorAccent(int r, int g, int b)
+	internal struct ColorAccent
 	{
-		public int R = r;
+		public int R;
 
-		public int G = g;
+		public int G;
 
-		public int B = b;
+		public int B;
+
+		public ColorAccent(int r, int g, int b)
+		{
+			R = r;
+			G = g;
+			B = b;
+		}
 	}
 
 	internal struct BLENDFUNCTION
@@ -395,6 +436,28 @@ internal static class Native
 	public const int WM_ENTERSIZEMOVE = 561;
 
 	public const int WM_EXITSIZEMOVE = 562;
+
+	/// <summary>AltDrag 起拖时用它问目标窗口要真实的最小/最大跟踪尺寸（hooks.c:1619）。</summary>
+	public const int WM_GETMINMAXINFO = 36;
+
+	public const int SM_CXMAXIMIZED = 36;
+
+	public const int SM_CYMAXIMIZED = 37;
+
+	public const int SM_CXMAXTRACK = 78;
+
+	public const int SM_CYMAXTRACK = 79;
+
+	public const int VK_SHIFT = 16;
+
+	public const int VK_CONTROL = 17;
+
+	public const int VK_MENU = 18;
+
+	public const int VK_SPACE = 32;
+
+	/// <summary>AltDrag 的 ESC：直接放弃这次拖动（hooks.c:976-980）。</summary>
+	public const int VK_ESCAPE = 27;
 
 	public const int WM_SIZING = 532;
 
@@ -641,8 +704,15 @@ internal static class Native
 	[DllImport("user32.dll", SetLastError = true)]
 	internal static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
 
+	// 拖动写窗口用的就是它（hooks.c:843/927/1676/1710/1778/1823 全是 MoveWindow(..., TRUE)）
+	[DllImport("user32.dll", SetLastError = true)]
+	internal static extern bool MoveWindow(nint hWnd, int x, int y, int nWidth, int nHeight, bool bRepaint);
+
 	[DllImport("user32.dll", SetLastError = true)]
 	internal static extern bool GetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	internal static extern bool SetWindowPlacement(nint hWnd, [In] ref WINDOWPLACEMENT lpwndpl);
 
 	[DllImport("user32.dll", SetLastError = true)]
 	internal static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
@@ -818,8 +888,28 @@ internal static class Native
 	[DllImport("user32.dll", SetLastError = true)]
 	internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+	[DllImport("user32.dll")]
+	internal static extern nint GetMessageExtraInfo();
+
 	[DllImport("user32.dll", SetLastError = true)]
 	internal static extern short GetAsyncKeyState(int vKey);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	internal static extern nint LoadCursorW(nint hInstance, nint lpCursorName);
+
+	[DllImport("user32.dll")]
+	internal static extern nint SetCursor(nint hCursor);
+
+	/// <summary>IDC_SIZENWSE 等标准光标（MAKEINTRESOURCE 形式）。</summary>
+	public const int IDC_SIZENWSE = 32642;
+
+	public const int IDC_SIZENESW = 32643;
+
+	public const int IDC_SIZENS = 32644;
+
+	public const int IDC_SIZEWE = 32645;
+
+	public const int IDC_SIZEALL = 32646;
 
 	/// <summary>
 	/// 给控件关掉系统主题绘制。传「 」是官方支持的写法：

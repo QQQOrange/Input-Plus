@@ -18,45 +18,44 @@
         点击穿透靠 WS_EX_TRANSPARENT（见 code-behind），IsHitTestVisible 只挡住
         WPF 内部的命中测试，挡不住窗口本身。
 
-        轨迹三层画法和 WGestures 2 的 PathView 一致（YingDev.WGApp.Views\PathView.xaml.cs）：
-        阴影 → 描边 → 主线，三层同一组点，只是粗细和透明度不同。
+        轨迹三层画法照 WGestures 2 的 A/U.cs：阴影 → 描边 → 主线，
+        三层共用同一条几何（Path.Data 是同一个对象），只是粗细和透明度不同。
         描边是主线两侧各 BorderWidth 像素，所以它的粗细 = 线宽 + 2×描边宽。
+        用 Path 而不是 Polyline，是因为轨迹点要过一遍 Chaikin 切角
+        （见 GestureTrail.cs），Polyline 的 Points 塞不进平滑后的几何。
     -->
     <Canvas x:Name="Root" Background="Transparent" IsHitTestVisible="False">
-        <Polyline x:Name="TrailShadow"
-                  Stroke="#14000000"
-                  StrokeThickness="5"
-                  StrokeLineJoin="Round"
-                  StrokeStartLineCap="Round"
-                  StrokeEndLineCap="Round"
-                  IsHitTestVisible="False" />
-        <Polyline x:Name="TrailBorder"
-                  Stroke="#B3FFFFFF"
-                  StrokeThickness="3.5"
-                  StrokeLineJoin="Round"
-                  StrokeStartLineCap="Round"
-                  StrokeEndLineCap="Round"
-                  IsHitTestVisible="False" />
-        <Polyline x:Name="Trail"
-                  Stroke="#FF3B82F6"
-                  StrokeThickness="1.5"
-                  StrokeLineJoin="Round"
-                  StrokeStartLineCap="Round"
-                  StrokeEndLineCap="Round"
-                  IsHitTestVisible="False" />
+        <Path x:Name="TrailShadow"
+              Stroke="#14000000"
+              StrokeThickness="5"
+              StrokeLineJoin="Round"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"
+              IsHitTestVisible="False" />
+        <Path x:Name="TrailBorder"
+              Stroke="#B3FFFFFF"
+              StrokeThickness="3.5"
+              StrokeLineJoin="Round"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"
+              IsHitTestVisible="False" />
+        <Path x:Name="Trail"
+              Stroke="#FF3B82F6"
+              StrokeThickness="1.5"
+              StrokeLineJoin="Round"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"
+              IsHitTestVisible="False" />
 
-        <!-- 起始超时：鼠标尖端一个红色实心圆，短暂闪一下就走。 -->
+        <!-- 起始超时：光标尖端一个红圆，照 WGestures 2 的 B/X.cs:21-28 画 ——
+             24×24 的框内缩 4px 得到直径 16 的圆，纯红填充 + 白色 2px 描边，没有阴影。 -->
         <Ellipse x:Name="TimeoutDot"
                  Width="16" Height="16"
-                 Fill="#FFEF4444"
-                 Stroke="#CCFFFFFF"
-                 StrokeThickness="1"
+                 Fill="#FFFF0000"
+                 Stroke="#FFFFFFFF"
+                 StrokeThickness="2"
                  Visibility="Collapsed"
-                 IsHitTestVisible="False">
-            <Ellipse.Effect>
-                <DropShadowEffect Color="#FFFF3B30" BlurRadius="12" ShadowDepth="0" Opacity="0.9" />
-            </Ellipse.Effect>
-        </Ellipse>
+                 IsHitTestVisible="False" />
 
         <!-- 手势名称：圆角 16、白色描边、白字 24 号，尺寸和 WGestures 的 GestureLabelView 对齐 -->
         <Border x:Name="LabelBox"

@@ -371,7 +371,7 @@ public static partial class SelfTest
             lineSettings, 0x02, "", sPts, lineSettings.GestureOptions);
         Check("画 S 不会被判成只写了一个方向的手势", sVsLine.Hit == null, sVsLine.Hit?.Name ?? "null");
 
-        // 两条一样像时宁可不猜（宁可显示「未识别」，也别触发错的动作）
+        // 两条一样像时宁可不猜（宁可什么都不显示，也别触发错的动作）
         var twin = new MouseGesture
         {
             Id = "qq2", Name = "QQ2", Kind = "stroke", Button = "right", Action = "openFile",
@@ -793,24 +793,56 @@ public static partial class SelfTest
         holdOpts.LabelLingerMs = -500;
         Check("配置写了负数也不会提前收", GestureService.LabelHoldMs(holdOpts) >= 1200);
 
-        /* 用户定的规则（原话）："没有匹配到任何手势，当画完手势的时候就只保留灰色
-         * 一瞬间就消失"。所以未识别是一个很短的闪，既不能长到占位，
-         * 也不能是 0（否则用户看不出到底触发了没有）。 */
-        var unrecOpts = new GestureOptions { LabelLingerMs = 0 };
-        Check("未识别只闪一下（≤200ms）", GestureService.UnrecognizedHoldMs(unrecOpts) <= 200,
-            GestureService.UnrecognizedHoldMs(unrecOpts).ToString());
-        Check("未识别不是 0（还得看得见）", GestureService.UnrecognizedHoldMs(unrecOpts) > 0,
-            GestureService.UnrecognizedHoldMs(unrecOpts).ToString());
-        CheckEqual("未识别不受「名称停留时间」拉长", GestureService.UnrecognizedHoldMs(new GestureOptions { LabelLingerMs = 5000 }),
-            GestureService.UnrecognizedFlashMs);
+        /* 未识别 = 屏幕上什么都不留：WG2 的手势结束处理只有两句（A/T.cs:115-119），
+         * 轨迹整条清空、红点收掉，没有「未识别」字样、也没有"灰线多留一会儿"。
+         * 这里用反射守住这两样东西别被重新加回来。 */
+        Check("覆盖层不再有「未识别」文案入口",
+            typeof(InputPlus.UI.Windows.GestureOverlayWindow).GetMethod("ShowUnrecognized") == null);
+        Check("手势服务不再有未识别停留常量",
+            typeof(GestureService).GetMethod("UnrecognizedHoldMs",
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) == null);
 
         /* 命中的手势是"命令已经发出去了"，用户要的是动作，不是名字。
          * 规则（用户原话）：勾了「识别手势立即执行」的，生效那一刻就消失；
          * 没勾的，画的过程中方框跟着预览，松手结算执行时立刻消失。
          * 两种情况都不留尾巴 —— 所以常量必须是 0。 */
         CheckEqual("命中执行后名称立刻消失（停留 0 毫秒）", GestureService.HitLabelLingerMs, 0);
-        Check("命中后仍短于未识别提示",
-            GestureService.HitLabelLingerMs < GestureService.UnrecognizedHoldMs(unrecOpts));
+
+        /* ---- 轨迹几何：WG2 的 20px 采样 / ≤128 点切角 / 立刻清空 ----
+         * 对齐的是 A/U.cs 的 C_f = 20f 与 F()（count <= 128 ? 1 : 0 轮平滑），
+         * 以及 A/T.cs:115-119 的"手势结束就把轨迹整条清掉"。 */
+        var trail = new InputPlus.UI.Windows.GestureTrail();
+        Check("轨迹第一个点一定收下", trail.Add(0, 0));
+        Check("离上一个点不到 20px 的点丢弃", !trail.Add(19, 0));
+        Check("刚好 20px 的点收下", trail.Add(20, 0));
+        CheckEqual("按 20px 过滤后的点数", trail.Count, 2);
+        Check("两点画得出一条路径",
+            InputPlus.UI.Windows.GestureTrail.ToGeometry(trail.Points,
+                pt => new System.Windows.Point(pt.X, pt.Y)) != null);
+        Check("一个点画不出路径（GDI+ 同样画不出）",
+            InputPlus.UI.Windows.GestureTrail.ToGeometry(
+                new List<System.Windows.Point> { new(5, 5) }, pt => pt) == null);
+
+        trail.Clear();
+        CheckEqual("清空后一个点都不剩（手势结束的 D()）", trail.Count, 0);
+
+        // 直角拐角：切角后不再经过原来的拐点，首尾点保持不动
+        trail.Add(0, 0);
+        trail.Add(100, 0);
+        trail.Add(100, 100);
+        var smoothed = trail.Build();
+        Check("≤128 点会做一轮切角（点变多）", smoothed.Count > trail.Count,
+            $"{trail.Count} → {smoothed.Count}");
+        Check("拐点被切掉，不再经过 (100,0)",
+            !smoothed.Any(pt => Math.Abs(pt.X - 100) < 0.001 && Math.Abs(pt.Y) < 0.001));
+        CheckEqual("首点不动", $"{(int)smoothed[0].X},{(int)smoothed[0].Y}", "0,0");
+        CheckEqual("尾点不动",
+            $"{(int)smoothed[^1].X},{(int)smoothed[^1].Y}", "100,100");
+
+        // 超过 128 点不平滑（WG2 F() 的 else 分支）
+        trail.Clear();
+        for (int i = 0; i < 130; i++) trail.Add(i * 30, (i % 2) * 30);
+        CheckEqual("超过 128 点原样输出，不做切角", trail.Build().Count, trail.Count);
 
         try { File.Delete(path); } catch { }
     }

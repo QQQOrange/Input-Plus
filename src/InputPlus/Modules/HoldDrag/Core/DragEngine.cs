@@ -46,11 +46,11 @@ internal sealed class DragEngine : IDisposable
 
 		public Native.RECT StartRect;
 
-		public ResizeZone Zone;
-
-		public int MinW;
-
-		public int MinH;
+		/// <summary>
+		/// AltDrag 那套跨帧状态（offset / 被拖的边 / origin 尺寸 / 最小最大跟踪）。
+		/// 是引用类型：Step() 拿到的是会话副本，但几何状态必须共享同一份。
+		/// </summary>
+		public AltState Alt;
 
 		public int Gen;
 	}
@@ -120,10 +120,25 @@ internal sealed class DragEngine : IDisposable
 	/// <summary>本次是移动还是缩放 —— 抽帧和收尾核对都要用，Begin 时定下。</summary>
 	private bool _moveMode;
 
+	/// <summary>当前吸附级别（AltDrag 的 sharedstate.snap）：0 关 / 1 只吸屏幕 / 2 窗口外侧 / 3 窗口内侧。</summary>
+	private volatile int _snap;
+
+	/// <summary>本次拖动的默认吸附级别（Shift 抬起后回到这里）。</summary>
+	private int _snapBase;
+
+	/// <summary>触发键本身就是 Ctrl 时不再做"Ctrl 把光标夹在显示器内"，否则按住触发键就动不了。</summary>
+	private bool _ctrlIsTrigger;
+
 	/// <summary>上一帧请求的矩形。收尾时拿它跟窗口的真实矩形比一次（见 ReconcileTail）。</summary>
 	private Native.RECT _lastTarget;
 
 	private bool _lastTargetValid;
+
+	/// <summary>Shift 是不是已经按住（键盘自动重复会连发 keydown，照 hooks.c:960 只在第一次补一帧）。</summary>
+	private bool _shiftHeld;
+
+	/// <summary>Ctrl 是不是已经按住（hooks.c:984 用 state.ctrl 防止连发）。</summary>
+	private bool _ctrlHeld;
 
 	/// <summary>本次拖动的开始时刻（End 时算时长，写进诊断）。</summary>
 	private long _dragStartedAt;
@@ -143,7 +158,6 @@ internal sealed class DragEngine : IDisposable
 
 	private int _sessionCount;
 
-	private volatile bool _dragWait;
 
 	private bool _frameInside;
 
@@ -177,6 +191,10 @@ internal sealed class DragEngine : IDisposable
 		DiagFrameUpdates = 0;
 		DiagWindowSkipped = 0;
 		DiagWindowWritten = 0;
+		// 这两组计数器以前只在进程启动时归零，诊断行里的"合并峰值""写耗时平均"
+		// 其实是开机以来的累计值，不是这一次拖动的。每次起拖清零，账才对得上。
+		DragWorker.ResetStats();
+		WindowActions.ResetFrameStats();
 	}
 
 	public DragEngine(Func<AppConfig> config)
@@ -222,6 +240,7 @@ internal sealed class DragEngine : IDisposable
 		{
 			return;
 		}
+		_lastEventPt = pt;
 		// 抽帧（照 AltDrag 的 MoveRate / ResizeRate）：不是省性能，是让"写窗口"这一步
 		// 永远有空档。每来一个鼠标事件就排一帧进去，队列只会在目标程序慢的时候越积越长，
 		// 表现出来就是"手停了窗口还在挪"。
@@ -235,6 +254,26 @@ internal sealed class DragEngine : IDisposable
 			}
 		}
 		_worker.PostMove(pt);
+	}
+
+	/// <summary>
+	/// 绕过 <see cref="DeliverCursor"/> 的抽帧，立刻排一帧进去。
+	/// AltDrag 在两个地方是"事件里当场 MouseMove()"的：最大化窗口被还原之后（hooks.c:1671）、
+	/// Shift 刚按下时（hooks.c:962）。这两处都不能等用户再动一下鼠标 ——
+	/// 一个会让窗框停在原处，一个会让"按住 Shift 强制吸内侧"看起来像没生效。
+	/// 带上代次检查：真排到队里时如果已经换了下一次拖动，这一帧就作废。
+	/// </summary>
+	private void PostFrame(Session s, Native.POINT pt, bool forceWrite)
+	{
+		int gen = s.Gen;
+		_worker.Post(() =>
+		{
+			if (gen != _generation)
+			{
+				return;
+			}
+			Step(pt, s, forceWrite);
+		});
 	}
 
 	/// <summary>
@@ -290,140 +329,79 @@ internal sealed class DragEngine : IDisposable
 			Log.Info("[诊断] 目标窗口不可缩放（无 WS_THICKFRAME）→ 放行不接管 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X"));
 			return false;
 		}
-		if (flag | flag2)
+		// 最大化窗口一律交给 AltDrag 的 SetupMove / SetupResize 处理，这里不提前还原：
+		//   移动 hooks.c:1661-1683 —— 按"光标在窗口里的比例"折算 offset，再 SW_RESTORE，并当场补一帧 MouseMove；
+		//   缩放 hooks.c:1685-1711 —— 先把 rcNormalPosition 铺满整块显示器再 SW_RESTORE，然后按九宫格起手。
+		// 提前还原会让 RecordOrigin 读到一个"已经是普通窗口"的状态：origin.maximized 丢了、origin 宽高也变成了
+		// 还原后的尺寸，抓点和 Aero 还原全都会错位。
+		// 剩下的只有一种 Input-Plus 特有情况：没有标题栏、正好铺满整块显示器的真·全屏窗口 ——
+		// AltDrag 对这类窗口是直接放行的（hooks.c:1567-1574），这里保留"触发时退出全屏"把它降级成普通窗口。
+		if (flag2)
 		{
-			if (appConfig.ExitFullscreenOnTrigger)
+			if (!appConfig.ExitFullscreenOnTrigger)
 			{
-				List<Action> pending = new List<Action>();
-				if (!WindowActions.ExitFullscreenToWindowed(hwnd, ref lpRect, pt, (Action w) =>
-				{
-					pending.Add(w);
-				}))
-				{
-					Log.Info("[诊断] 目标是" + (flag ? "最大化" : "全屏") + "窗口，降级成普通窗口失败 → 放行不接管 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X"));
-					return false;
-				}
-				if (pending.Count > 0)
-				{
-					int cornerPct = appConfig.CornerPercent;
-					int btn = button;
-					bool mv = move;
-					Native.POINT cur = pt;
-					nint target = hwnd;
-					PostTargetWork(() =>
-					{
-						for (int i = 0; i < pending.Count; i++)
-						{
-							try
-							{
-								pending[i]();
-							}
-							catch (Exception ex2)
-							{
-								Log.Error(ex2);
-							}
-						}
-						if (Native.GetWindowRect(target, out var lpRect2))
-						{
-							ReconcileStartRect(target, btn, mv, cur, cornerPct, lpRect2);
-						}
-					});
-				}
+				Log.Info("[诊断] 目标是无标题栏全屏窗口，且『触发时退出全屏』已关闭 → 放行不接管 键=" + button + " 移动=" + move);
+				return false;
 			}
-			else
+			List<Action> pending = new List<Action>();
+			if (!WindowActions.ExitFullscreenToWindowed(hwnd, ref lpRect, pt, (Action w) =>
 			{
-				if (!flag || !appConfig.RestoreMaximizedWhenMoved)
+				pending.Add(w);
+			}))
+			{
+				Log.Info("[诊断] 目标是无标题栏全屏窗口，降级成普通窗口失败 → 放行不接管 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X"));
+				return false;
+			}
+			if (pending.Count > 0)
+			{
+				int cornerPct = appConfig.CornerPercent;
+				int btn = button;
+				bool mv = move;
+				Native.POINT cur = pt;
+				nint target = hwnd;
+				PostTargetWork(() =>
 				{
-					Log.Info("[诊断] 目标是" + (flag ? "最大化" : "全屏") + "窗口，且『触发时退出全屏』已关闭 → 放行不接管 键=" + button + " 移动=" + move);
-					return false;
-				}
-				double num = ((lpRect.Width > 0) ? ((double)(pt.X - lpRect.Left) / (double)lpRect.Width) : 0.5);
-				double num2 = ((lpRect.Height > 0) ? ((double)(pt.Y - lpRect.Top) / (double)lpRect.Height) : 0.5);
-				if (num < 0.0)
-				{
-					num = 0.0;
-				}
-				if (num > 1.0)
-				{
-					num = 1.0;
-				}
-				if (num2 < 0.0)
-				{
-					num2 = 0.0;
-				}
-				if (num2 > 1.0)
-				{
-					num2 = 1.0;
-				}
-				Native.WINDOWPLACEMENT lpwndpl = new Native.WINDOWPLACEMENT
-				{
-					length = Marshal.SizeOf(typeof(Native.WINDOWPLACEMENT))
-				};
-				if (Native.GetWindowPlacement(hwnd, ref lpwndpl) && lpwndpl.rcNormalPosition.Width > 0 && lpwndpl.rcNormalPosition.Height > 0)
-				{
-					lpRect = lpwndpl.rcNormalPosition;
-				}
-				else if (!Native.GetWindowRect(hwnd, out lpRect))
-				{
-					return false;
-				}
-				nint target2 = hwnd;
-				int cornerPct2 = appConfig.CornerPercent;
-				int btn2 = button;
-				bool mv2 = move;
-				Native.POINT cur2 = pt;
-				if (move)
-				{
-					int nx = pt.X - (int)(num * (double)lpRect.Width);
-					int ny = pt.Y - (int)(num2 * (double)lpRect.Height);
-					int ww = lpRect.Width;
-					int hh = lpRect.Height;
-					PostTargetWork(() =>
+					for (int i = 0; i < pending.Count; i++)
 					{
-						Native.ShowWindow(target2, 9);
-						Native.SetWindowPos(target2, IntPtr.Zero, nx, ny, ww, hh, 16917u);
-						if (Native.GetWindowRect(target2, out var lpRect2))
+						try
 						{
-							ReconcileStartRect(target2, btn2, mv2, cur2, cornerPct2, lpRect2);
+							pending[i]();
 						}
-					});
-					lpRect = new Native.RECT(nx, ny, nx + ww, ny + hh);
-				}
-				else
-				{
-					PostTargetWork(() =>
+						catch (Exception ex2)
+						{
+							Log.Error(ex2);
+						}
+					}
+					if (Native.GetWindowRect(target, out var lpRect2))
 					{
-						Native.ShowWindow(target2, 9);
-						if (Native.GetWindowRect(target2, out var lpRect2))
-						{
-							ReconcileStartRect(target2, btn2, mv2, cur2, cornerPct2, lpRect2);
-						}
-					});
-				}
+						ReconcileStartRect(target, btn, mv, cur, cornerPct, lpRect2);
+					}
+				});
 			}
 		}
-		ResizeZone resizeZone = ResizeZone.Center;
-		if (!move)
+		// —— 起拖状态照 AltDrag（hooks.c:1583-1690）——
+		// origin 必须在任何还原动作之前记下来（最大化窗口的"还原尺寸"就是从这里取的）。
+		AltState alt = new AltState();
+		Native.RECT startWnd = lpRect;
+		if (Native.GetWindowRect(hwnd, out var liveWnd))
 		{
-			resizeZone = Zones.Resize(lpRect, pt.X, pt.Y, appConfig.CornerPercent);
-			if (resizeZone == ResizeZone.Center)
-			{
-				resizeZone = Zones.NearestCorner(lpRect, pt.X, pt.Y);
-			}
+			startWnd = liveWnd;
 		}
-		int num3 = Native.GetSystemMetrics(34);
-		int num4 = Native.GetSystemMetrics(35);
-		if (num3 < 64)
+		AltDragCore.RecordOrigin(alt, hwnd, startWnd);
+		// 最小/最大尺寸问窗口自己要（WM_GETMINMAXINFO），不是拍脑袋用系统的 SM_CXMINTRACK。
+		AltDragCore.QueryMinMax(hwnd, pt, out alt.MinTrack, out alt.MaxTrack);
+		alt.Entry = WndDb.Touch(hwnd);
+		// 这一步之后 SetupMove 会把"最大化"吃掉（还原成普通窗口），所以要先留个记号。
+		bool wasMaximized = alt.OriginMaximized;
+		if (move)
 		{
-			num3 = 64;
+			AltDragCore.SetupMove(alt, hwnd, pt, ref startWnd);
 		}
-		if (num4 < 32)
+		else
 		{
-			num4 = 32;
+			AltDragCore.SetupResize(alt, hwnd, pt, ref startWnd);
 		}
-		Native.RECT inset = ComputeInset(hwnd, lpRect);
-		bool flag3 = appConfig.DragThreshold >= 2 || ((appConfig.DragThreshold == 1) & flag);
-		_dragWait = flag3 && appConfig.DragOutThresholdPx > 0;
+		Native.RECT inset = ComputeInset(hwnd, startWnd);
 		lock (_gate)
 		{
 			_session = default;
@@ -431,10 +409,8 @@ internal sealed class DragEngine : IDisposable
 			_session.Move = move;
 			_session.Button = button;
 			_session.StartCursor = pt;
-			_session.StartRect = lpRect;
-			_session.Zone = resizeZone;
-			_session.MinW = num3;
-			_session.MinH = num4;
+			_session.StartRect = startWnd;
+			_session.Alt = alt;
 			_moved = false;
 			_generation++;
 			_session.Gen = _generation;
@@ -449,12 +425,39 @@ internal sealed class DragEngine : IDisposable
 		_resizeRate = Math.Clamp(appConfig.ResizeRate, 1, 8);
 		_moveTick = 0;
 		_dragStartedAt = Environment.TickCount64;
+		// hooks.c:1849-1854：抽帧时源码另起一个 100ms 的 MOVE_TIMER 兜底 ——
+		// 钩子被系统掐掉/消息没送到时，只要光标动过就补一帧。
+		StartMovePollTimer(move);
+		// 吸附级别照 AltDrag 的 sharedstate.snap：0 = 关、1 = 只吸屏幕、2 = 再吸窗口外侧、3 = 再吸窗口内侧。
+		// Input-Plus 只有一个"贴边吸附"开关，打开就按 3 走（这是 AltDrag 的完整行为）。
+		_snapBase = (appConfig.SnapToEdges ? Math.Clamp(appConfig.SnapLevel, 1, 3) : 0);
+		// 起拖时 Shift 已经按着，就按"吸窗口内侧"来（hooks.c:958 把 snap 直接立成 3，
+		// 这个状态是跨拖动保留的，不会因为换了个窗口就退回默认档）。
+		_shiftHeld = IsShiftDown();
+		_snap = (_shiftHeld ? 3 : _snapBase);
+		// Ctrl 的物理状态也要接上：起拖时已经按着 Ctrl，抬起事件才不会被漏掉（hooks.c:984 的 state.ctrl 同理）。
+		_ctrlHeld = IsCtrlDown();
+		_ctrlIsTrigger = KeysUtil.ToVirtualKey(appConfig.TriggerKeyId) == Native.VK_CONTROL;
 		_lastTargetValid = false;
 		_tailFixes = 0;
 		_tailDriftMax = 0;
 		_frameInside = false;
 		WindowActions.NotifySizeMove(hwnd, start: true);
 		_sizeMoveActive = true;
+		// hooks.c:1666-1671：最大化窗口按 pt-offset 还原之后，源码当场 MouseMove() 摆一帧。
+		// 少了这一帧，窗口会停在"最大化矩形"的位置上，直到用户再动一下鼠标才跟上光标。
+		if (wasMaximized && move && TryLiveCursor(out var firstPt))
+		{
+			PostFrame(_session, firstPt, forceWrite: true);
+		}
+		// hooks.c:1857-1863：按住 Alt 去点窗口，窗口会把这当成"要开菜单"。
+		// 源码起拖时无条件补发一对 Ctrl（不判断热键），这里照做。
+		// 触发键恰好是 Ctrl 时，源码在 hooks.c:949-953 把 ignorectrl 整个拖动期间常立 —— 等价于这里先立住。
+		if (_ctrlIsTrigger)
+		{
+			alt.IgnoreCtrl = true;
+		}
+		AltDragCore.MasqueradeAsControl(alt);
 		try
 		{
 			GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
@@ -484,9 +487,9 @@ internal sealed class DragEngine : IDisposable
 		if (appConfig.ShowActivationFrame && AppRules.AllowsFrame(hwnd))
 		{
 			_frame.HideOverlay();
-			ShowDragFrame(lpRect, appConfig);
-			Native.RECT rECT = FrameRectOf(lpRect, appConfig, out var inset2);
-			Log.Info("[诊断] 拖动框已请求显示 开关=" + appConfig.ShowActivationFrame + " 就绪=" + _overlaysReady + " 目标矩形=" + lpRect.Left + "," + lpRect.Top + " " + lpRect.Width + "x" + lpRect.Height + " 可见缩进=" + _inset.Left + "/" + _inset.Top + "/" + _inset.Right + "/" + _inset.Bottom + " 外框矩形=" + rECT.Left + "," + rECT.Top + " " + rECT.Width + "x" + rECT.Height + (inset2 ? " 模式=内缩" : " 模式=外扩") + " 抬到最顶=" + _frame.RaiseAboveAll + " 显示=" + _frame.IsShown + " 请求=" + (_frame.ShowRequestedForTest ? "已投递" : "未投递"));
+			ShowDragFrame(startWnd, appConfig);
+			Native.RECT rECT = FrameRectOf(startWnd, appConfig, out var inset2);
+			Log.Info("[诊断] 拖动框已请求显示 开关=" + appConfig.ShowActivationFrame + " 就绪=" + _overlaysReady + " 目标矩形=" + startWnd.Left + "," + startWnd.Top + " " + startWnd.Width + "x" + startWnd.Height + " 可见缩进=" + _inset.Left + "/" + _inset.Top + "/" + _inset.Right + "/" + _inset.Bottom + " 外框矩形=" + rECT.Left + "," + rECT.Top + " " + rECT.Width + "x" + rECT.Height + (inset2 ? " 模式=内缩" : " 模式=外扩") + " 抬到最顶=" + _frame.RaiseAboveAll + " 显示=" + _frame.IsShown + " 请求=" + (_frame.ShowRequestedForTest ? "已投递" : "未投递"));
 		}
 		Log.Info((move ? "开始移动" : "开始缩放") + " 句柄=" + ((IntPtr)hwnd).ToInt64().ToString("X"));
 		Interlocked.Increment(ref _sessionCount);
@@ -573,7 +576,7 @@ internal sealed class DragEngine : IDisposable
 	}
 
 	/// <summary>
-	/// 按住 Shift 时临时不吸附：想精确摆放时不用跑去设置里关掉再打开。
+	/// Shift 的当前状态（hooks.c:958-963：按住 Shift 强制吸到窗口内侧，也就是 snap=3）。
 	/// </summary>
 	private static bool IsShiftDown()
 	{
@@ -587,17 +590,19 @@ internal sealed class DragEngine : IDisposable
 		}
 	}
 
-	/// <summary>吸附阈值按目标窗口的 DPI 缩放（150% 屏上 8px 会显得很紧）。</summary>
-	private static int ScaledThreshold(int threshold, nint hwnd)
+	/// <summary>
+	/// Ctrl 的当前状态。hooks.c:984 用 state.ctrl 记"这一次按下已经处理过"，
+	/// 起拖那一刻如果 Ctrl 已经按着，抬起事件也得能对上号。
+	/// </summary>
+	private static bool IsCtrlDown()
 	{
 		try
 		{
-			int num = Native.DpiOfWindow(hwnd);
-			return Math.Max(1, (int)Math.Round((double)threshold * (double)num / 96.0));
+			return (Native.GetAsyncKeyState(Native.VK_CONTROL) & 0x8000) != 0;
 		}
 		catch
 		{
-			return threshold;
+			return false;
 		}
 	}
 
@@ -661,33 +666,21 @@ internal sealed class DragEngine : IDisposable
 				pt = livePt;
 			}
 			AppConfig appConfig = _cfg();
-			if (Native.GetClipCursor(out var lpRect) && lpRect.Right > lpRect.Left && lpRect.Bottom > lpRect.Top)
+			// hooks.c:651-657：按住 Ctrl 时把光标夹在"按下那一刻所在的显示器"里，
+			// 这样拖动过程中不会一不小心把窗口拖到另一块屏上去。
+			AltState altNow = s.Alt;
+			if (!_ctrlIsTrigger && altNow != null && !altNow.IgnoreCtrl && altNow.OriginMonitor != IntPtr.Zero && (Native.GetAsyncKeyState(Native.VK_CONTROL) & 0x8000) != 0)
 			{
-				if (pt.X < lpRect.Left)
+				Native.MONITORINFO lpmi = new Native.MONITORINFO
 				{
-					pt.X = lpRect.Left;
-				}
-				if (pt.X > lpRect.Right - 1)
+					cbSize = Marshal.SizeOf(typeof(Native.MONITORINFO))
+				};
+				if (Native.GetMonitorInfoW(altNow.OriginMonitor, ref lpmi))
 				{
-					pt.X = lpRect.Right - 1;
+					Native.RECT rcMonitor = lpmi.rcMonitor;
+					pt.X = ((pt.X < rcMonitor.Left) ? rcMonitor.Left : ((pt.X >= rcMonitor.Right) ? (rcMonitor.Right - 1) : pt.X));
+					pt.Y = ((pt.Y < rcMonitor.Top) ? rcMonitor.Top : ((pt.Y >= rcMonitor.Bottom) ? (rcMonitor.Bottom - 1) : pt.Y));
 				}
-				if (pt.Y < lpRect.Top)
-				{
-					pt.Y = lpRect.Top;
-				}
-				if (pt.Y > lpRect.Bottom - 1)
-				{
-					pt.Y = lpRect.Bottom - 1;
-				}
-			}
-			if (_dragWait)
-			{
-				int dragOutThresholdPx = appConfig.DragOutThresholdPx;
-				if (Math.Abs(pt.X - s.StartCursor.X) < dragOutThresholdPx && Math.Abs(pt.Y - s.StartCursor.Y) < dragOutThresholdPx)
-				{
-					return;
-				}
-				_dragWait = false;
 			}
 			int num = pt.X - s.StartCursor.X;
 			int num2 = pt.Y - s.StartCursor.Y;
@@ -695,91 +688,85 @@ internal sealed class DragEngine : IDisposable
 			{
 				_moved = true;
 			}
+			// —— 以下几何逐条照 AltDrag 的 MouseMove（hooks.c:700-927）——
+			// 和旧实现最大的差别：不再用"起点矩形 + 总位移"，而是每一帧重新读窗口矩形，
+			// 再按 pt - offset 摆。窗口被目标程序钳制过（到达最小尺寸、分块重画）之后，
+			// 下一帧就自己纠回来，误差不会一直背着走。
+			AltState alt = s.Alt;
+			if (alt == null)
+			{
+				return;
+			}
+			// hooks.c:663-706：AutoRemaximize 的优先级高于 locked —— 原本最大化的窗口被拖到另一块显示器上时，
+			// 在新显示器里按 origin 尺寸居中、重新最大化，然后锁住本次拖动。
+			if (s.Move && appConfig.AutoRemaximize && AltDragCore.AutoRemaximize(alt, s.Hwnd, pt))
+			{
+				// hooks.c:687-690：AutoRemaximize=2 时一秒后自己还原（RESTORE_TIMER）。
+				if (appConfig.AutoRemaximizeRestore)
+				{
+					ScheduleRemaxRestore(s);
+				}
+				_moved = true;
+				_lastTargetValid = false;
+				return;
+			}
+			// hooks.c:708-710：锁定之后本次拖动不再动窗口，HUD / 外框也就停在最后一帧。
+			if (alt.Locked)
+			{
+				_lastTargetValid = false;
+				return;
+			}
+			if (!Native.GetWindowRect(s.Hwnd, out var wnd))
+			{
+				return;
+			}
+			// hooks.c:225-230：吸附阈值就是 ini 里的 SnapThreshold，不按 DPI 缩放。
+			int threshold = appConfig.SnapThreshold;
 			Native.RECT rECT;
+			bool alreadyWritten = false;
 			if (s.Move)
 			{
-				rECT = new Native.RECT(s.StartRect.Left + num, s.StartRect.Top + num2, s.StartRect.Right + num, s.StartRect.Bottom + num2);
+				int posx = pt.X - alt.OffsetX;
+				int posy = pt.Y - alt.OffsetY;
+				int wndwidth = wnd.Width;
+				int wndheight = wnd.Height;
+				AltDragCore.AeroOutcome aeroOutcome = AltDragCore.MoveAero(alt, appConfig, s.Hwnd, pt, ref posx, ref posy, ref wndwidth, ref wndheight);
+				if (aeroOutcome == AltDragCore.AeroOutcome.Maximized)
+				{
+					// 上边 = 最大化：AltDrag 在这里直接 return，这一帧不写窗口
+					rECT = (Native.GetWindowRect(s.Hwnd, out var maxed) ? maxed : wnd);
+					alreadyWritten = true;
+				}
+				else if (aeroOutcome == AltDragCore.AeroOutcome.Written)
+				{
+					// Aero 区：AltDrag 是立刻 MoveWindow 再回读真实尺寸，而且这一帧不走吸附
+					Native.RECT aeroRect = new Native.RECT(posx, posy, posx + wndwidth, posy + wndheight);
+					WindowActions.MoveWindowDrag(s.Hwnd, aeroRect);
+					AltDragCore.NoteAeroWritten(alt, s.Hwnd);
+					rECT = (Native.GetWindowRect(s.Hwnd, out var back) ? back : aeroRect);
+					alreadyWritten = true;
+				}
+				else
+				{
+					if (_snap > 0 && threshold > 0)
+					{
+						SnapEngine.Move(_snap, threshold, s.Hwnd, ref posx, ref posy, wndwidth, wndheight);
+					}
+					rECT = new Native.RECT(posx, posy, posx + wndwidth, posy + wndheight);
+				}
 			}
 			else
 			{
-				rECT = s.StartRect;
-				Zones.EdgesOf(s.Zone, out var left, out var top, out var right, out var bottom);
-				if (left)
+				int posx = wnd.Left;
+				int posy = wnd.Top;
+				int wndwidth = wnd.Width;
+				int wndheight = wnd.Height;
+				AltDragCore.ResizeGeometry(alt, pt, wnd, ref posx, ref posy, ref wndwidth, ref wndheight);
+				if (_snap > 0 && threshold > 0)
 				{
-					rECT.Left = s.StartRect.Left + num;
+					SnapEngine.Resize(_snap, threshold, s.Hwnd, alt.EdgeX, alt.EdgeY, ref posx, ref posy, ref wndwidth, ref wndheight);
 				}
-				if (right)
-				{
-					rECT.Right = s.StartRect.Right + num;
-				}
-				if (top)
-				{
-					rECT.Top = s.StartRect.Top + num2;
-				}
-				if (bottom)
-				{
-					rECT.Bottom = s.StartRect.Bottom + num2;
-				}
-				// 只夹"真的有拖动边"的轴：旧实现两个轴都夹，
-				// 于是上下边缩放一个本来就很窄（< SM_CXMIN）的窗口时，宽度会被莫名撑到 112px。
-				bool dragX = left || right;
-				bool dragY = top || bottom;
-				if (dragX && rECT.Width < s.MinW)
-				{
-					if (left)
-					{
-						rECT.Left = rECT.Right - s.MinW;
-					}
-					else
-					{
-						rECT.Right = rECT.Left + s.MinW;
-					}
-				}
-				if (dragY && rECT.Height < s.MinH)
-				{
-					if (top)
-					{
-						rECT.Top = rECT.Bottom - s.MinH;
-					}
-					else
-					{
-						rECT.Bottom = rECT.Top + s.MinH;
-					}
-				}
-			}
-			lock (_gate)
-			{
-				if (forceWrite)
-				{
-					if (_session.Gen != s.Gen)
-					{
-						return;
-					}
-				}
-				else if (!_dragging || _session.Gen != s.Gen)
-				{
-					return;
-				}
-			}
-			if (s.Move)
-			{
-				if (_shakeGen != s.Gen)
-				{
-					int num3 = Native.DpiOfWindow(s.Hwnd);
-					_shake.SetScale((double)num3 / 96.0);
-					_shake.Reset(s.StartCursor.X, s.StartCursor.Y, Environment.TickCount64);
-					_shakeGen = s.Gen;
-				}
-				if (appConfig.ShakeMinimizeOthers && _shake.Feed(pt.X, pt.Y, Environment.TickCount64))
-				{
-					ShakeAction.ToggleMinimizeOthers(s.Hwnd);
-				}
-			}
-			if (appConfig.SnapToEdges && appConfig.SnapThreshold > 0 && !IsShiftDown() && (s.Move || s.Zone != ResizeZone.None))
-			{
-				Native.RECT work = WorkAreaOfPoint(pt);
-				SnapEngine.Result snap = (s.Move ? SnapEngine.SnapMove(rECT, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)) : SnapEngine.SnapResize(rECT, s.Zone == ResizeZone.Left, s.Zone == ResizeZone.Right, s.Zone == ResizeZone.Top, s.Zone == ResizeZone.Bottom, work, ScaledThreshold(appConfig.SnapThreshold, s.Hwnd)));
-				rECT = snap.Rect;
+				rECT = new Native.RECT(posx, posy, posx + wndwidth, posy + wndheight);
 			}
 			// 记下"这一帧请求的是哪儿"：收尾时用它跟窗口的真实矩形对一次账（ReconcileTail）。
 			_lastTarget = rECT;
@@ -787,17 +774,18 @@ internal sealed class DragEngine : IDisposable
 			// 先把窗口挪过去，再画 HUD 和外框 —— 顺序照 AltDrag：一个鼠标移动事件进来，
 			// 第一件事就是让窗口跟上光标。装饰晚一帧看不出来，可它们若排在前面，
 			// 那份开销就直接变成用户手上的延迟。
-			if (forceWrite)
+			if (alreadyWritten)
 			{
-				WindowActions.SetDragRect(s.Hwnd, rECT);
-			}
-			else if (WindowActions.SetDragRectFrame(s.Hwnd, rECT, s.Move))
-			{
+				// Aero 帧（贴边 / 最大化）在这一帧里已经自己写过窗口了
 				DiagWindowWritten++;
 			}
 			else
 			{
-				DiagWindowSkipped++;
+				// hooks.c:927 —— AltDrag 每个鼠标移动事件都无条件 MoveWindow，
+				// 没有"和上次一样就跳过"，也没有响应性探测。窗口的位置永远只由
+				// 这一帧的几何决定；贴边那一帧尤其不能跳过，否则会停在上一帧的尺寸上。
+				WindowActions.MoveWindowDrag(s.Hwnd, rECT);
+				DiagWindowWritten++;
 			}
 
 			if (appConfig.ShowDragHud)
@@ -884,13 +872,16 @@ internal sealed class DragEngine : IDisposable
 				_sizeMoveActive = false;
 				// 收尾要用的东西在这一刻定下来：这条工作项排到队列里之后，
 				// 万一用户马上又开始下一次拖动，这些字段会被下一次重置。
-				Native.RECT want = _lastTarget;
-				bool wantValid = _lastTargetValid;
 				long startedAt = _dragStartedAt;
 				bool moveMode = s.Move;
 				_worker.Post(() =>
 				{
+					// 最后一帧先写，再拿"这一帧请求的矩形"跟窗口对账。
+					// want 必须在 Step 之后取：Step 会刷新 _lastTarget，提前取会拿到上一帧的旧值，
+					// 松手那一瞬间就会把窗口往后退一帧。
 					Step(pt, s, forceWrite: true);
+					Native.RECT want = _lastTarget;
+					bool wantValid = _lastTargetValid;
 					// 最后一帧写完先对账，再通知"尺寸移动结束" —— 顺序反了的话，
 					// 程序会在 WM_EXITSIZEMOVE 里把偏掉的那一版矩形存下来，下次打开就是错的。
 					int residual = ReconcileTail(hwnd, want, wantValid);
@@ -995,6 +986,7 @@ internal sealed class DragEngine : IDisposable
 				+ " 时长=" + num + "ms"
 				+ " 帧: 请求=" + num2 + " 写=" + DiagWindowWritten + " 跳过=" + DiagWindowSkipped + " 漂移修正=" + WindowActions.FramesDrifted
 				+ " | 写耗时 平均=" + num3.ToString("0.0") + "ms 最大=" + WindowActions.MaxWriteMs.ToString("0.0") + "ms"
+				+ " | 滞后 最大=" + DragWorker.MaxLagMs + "ms 平均=" + ((DragWorker.LagCount > 0) ? (DragWorker.LagSumMs / (double)DragWorker.LagCount).ToString("0.0") : "0.0") + "ms"
 				+ " | 合并峰值=" + DragWorker.MaxDrained
 				+ " | 收尾补写=" + _tailFixes + " 残余偏差=" + residual + "px 最大=" + _tailDriftMax + "px"
 				+ " | 钩子 最大=" + Coordinator.HookMaxMsForTest.ToString("0.0") + "ms 慢=" + Coordinator.SlowHookCountForTest + "次";
@@ -1055,15 +1047,9 @@ internal sealed class DragEngine : IDisposable
 			}
 			_session.StartRect = real;
 			_inset = ComputeInset(hwnd, real);
-			if (!move)
-			{
-				ResizeZone resizeZone = Zones.Resize(real, pt.X, pt.Y, cornerPercent);
-				if (resizeZone == ResizeZone.Center)
-				{
-					resizeZone = Zones.NearestCorner(real, pt.X, pt.Y);
-				}
-				_session.Zone = resizeZone;
-			}
+			// 降级落账之后窗口是真的换了位置/尺寸，AltDrag 那套 offset 得按新矩形重算一次，
+			// 否则下一帧会按旧基准摆，窗口直接跳一下。
+			AltDragCore.Rebase(_session.Alt, move, pt, real);
 			Log.Info("[诊断] 降级落账后校正会话矩形：" + startRect.Left + "," + startRect.Top + " " + startRect.Width + "x" + startRect.Height + " → " + real.Left + "," + real.Top + " " + real.Width + "x" + real.Height);
 		}
 	}
@@ -1125,11 +1111,176 @@ internal sealed class DragEngine : IDisposable
 		}
 	}
 
+	private System.Threading.Timer _movePollTimer;
+
+	private System.Threading.Timer _remaxTimer;
+
+	private Native.POINT _lastEventPt;
+
+	private int _pollGeneration;
+
+	private int _remaxGeneration;
+
+	/// <summary>
+	/// hooks.c:1849-1854 的 MOVE_TIMER：MoveRate / ResizeRate 大于 1 时，源码另开一个 100ms 定时器。
+	/// 它不是节流，是补帧 —— 低层鼠标钩子被系统静默摘掉（LowLevelHooksTimeout）时，窗口不会停在半路。
+	/// </summary>
+	private void StartMovePollTimer(bool move)
+	{
+		try
+		{
+			if ((move ? _moveRate : _resizeRate) <= 1)
+			{
+				StopMovePollTimer();
+				return;
+			}
+			lock (_gate)
+			{
+				_pollGeneration = _generation;
+			}
+			System.Threading.Timer timer = _movePollTimer;
+			if (timer == null)
+			{
+				_movePollTimer = new System.Threading.Timer(OnMovePollTick, null, 100, 100);
+				return;
+			}
+			timer.Change(100, 100);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+	private void StopMovePollTimer()
+	{
+		try
+		{
+			_movePollTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+	/// <summary>hooks.c:1999-2008：光标位置和最后一次鼠标事件里的坐标不同就当场补一帧 MouseMove()。</summary>
+	private void OnMovePollTick(object state)
+	{
+		try
+		{
+			if (!_dragging)
+			{
+				StopMovePollTimer();
+				return;
+			}
+			Session session;
+			int num;
+			lock (_gate)
+			{
+				session = _session;
+				num = _pollGeneration;
+			}
+			if (session.Gen != num)
+			{
+				StopMovePollTimer();
+				return;
+			}
+			if (!TryLiveCursor(out var pt))
+			{
+				return;
+			}
+			if (pt.X == _lastEventPt.X && pt.Y == _lastEventPt.Y)
+			{
+				return;
+			}
+			_lastEventPt = pt;
+			PostFrame(session, pt, forceWrite: false);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+	/// <summary>
+	/// hooks.c:687-690 的 RESTORE_TIMER：AutoRemaximize=2 时，重新最大化一秒后把窗口还原成普通窗口，
+	/// 按光标在新显示器里的相对位置重算 offset，再补一帧。
+	/// </summary>
+	private void ScheduleRemaxRestore(Session session)
+	{
+		try
+		{
+			lock (_gate)
+			{
+				_remaxGeneration = session.Gen;
+			}
+			System.Threading.Timer timer = _remaxTimer;
+			if (timer == null)
+			{
+				_remaxTimer = new System.Threading.Timer(OnRemaxRestoreTick, null, 1000, Timeout.Infinite);
+				return;
+			}
+			timer.Change(1000, Timeout.Infinite);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+	private void StopRemaxRestoreTimer()
+	{
+		try
+		{
+			_remaxTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+	private void OnRemaxRestoreTick(object state)
+	{
+		try
+		{
+			if (!_dragging)
+			{
+				return;
+			}
+			Session session;
+			int num;
+			lock (_gate)
+			{
+				session = _session;
+				num = _remaxGeneration;
+			}
+			if (session.Gen != num || session.Alt == null || !session.Move)
+			{
+				return;
+			}
+			if (!TryLiveCursor(out var pt))
+			{
+				return;
+			}
+			AltDragCore.RestoreAfterRemaximize(session.Alt, session.Hwnd, pt);
+			PostFrame(session, pt, forceWrite: true);
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+		}
+	}
+
+
 	private void Cleanup()
 	{
 		try
 		{
 			_frameWanted = false;
+			StopMovePollTimer();
+			StopRemaxRestoreTimer();
 			// Cancel 路径（暂停、改配置、目标窗口没了）不会走 End 的通知，
 			// 这里补发一次，否则目标窗口会一直以为自己还在尺寸拖动循环里（部分程序会卡在"拖拽模式"）。
 			if (_sizeMoveActive)
@@ -1369,7 +1520,12 @@ internal sealed class DragEngine : IDisposable
 			}
 			if (appConfig.SnapToEdges && appConfig.SnapThreshold > 0)
 			{
-				list.Add(Loc.T("Shift 不吸附"));
+				// hooks.c:958：按住 Shift 是把档位顶到 3（吸窗口内侧），不是"关掉吸附"。
+				list.Add(Loc.T("Shift 吸窗口内侧"));
+			}
+			if (appConfig.AeroSnap)
+			{
+				list.Add(Loc.T("贴边分屏"));
 			}
 			return string.Join("  ·  ", list);
 		}
@@ -1405,6 +1561,75 @@ internal sealed class DragEngine : IDisposable
 	internal string HintTextForTest => HintText();
 
 	internal static bool ProbeShiftDownForTest() => IsShiftDown();
+
+	/// <summary>
+	/// 键盘对吸附的临时影响，照 hooks.c:1030-1090：
+	/// Shift 按住 → 强制吸到窗口内侧（3）；Shift 抬起 → 回到默认级别。
+	/// Space 按下 → 本次拖动关掉吸附。
+	/// </summary>
+	internal void ObserveKey(int vk, bool down)
+	{
+		if (vk == Native.VK_SHIFT)
+		{
+			_snap = (down ? 3 : _snapBase);
+			if (down && !_shiftHeld)
+			{
+				_shiftHeld = true;
+				// hooks.c:958-963：状态一改就当场 MouseMove()，不等下一次鼠标事件。
+				if (_dragging && TryLiveCursor(out var shiftPt))
+				{
+					PostFrame(_session, shiftPt, forceWrite: false);
+				}
+			}
+			else if (!down)
+			{
+				_shiftHeld = false;
+				// hooks.c:1088-1092：Shift 抬起也要当场 MouseMove()，否则吸附级别换回来了窗口还停在内侧。
+				if (_dragging && TryLiveCursor(out var shiftUpPt))
+				{
+					PostFrame(_session, shiftUpPt, forceWrite: false);
+				}
+			}
+			return;
+		}
+		if (vk == Native.VK_CONTROL)
+		{
+			if (!down)
+			{
+				// hooks.c:1052-1059：抬起时先补一帧再清 ctrl —— 被夹住的光标要立刻把窗口带到准确位置。
+				if (_ctrlHeld)
+				{
+					_ctrlHeld = false;
+					if (_dragging && !_ctrlIsTrigger && TryLiveCursor(out var ctrlUpPt))
+					{
+						PostFrame(_session, ctrlUpPt, forceWrite: false);
+					}
+				}
+				return;
+			}
+			// hooks.c:984-993：拖动中重新按下 Ctrl → 解开 locked、清掉 origin.maximized（这次拖动不再自动重新最大化），
+			// 把 origin.monitor 重新对准光标所在显示器，然后把窗口提到前台并当场走一帧。
+			if (!_ctrlHeld)
+			{
+				_ctrlHeld = true;
+				if (_dragging && !_ctrlIsTrigger && _session.Alt != null && TryLiveCursor(out var ctrlPt))
+				{
+					AltState alt = _session.Alt;
+					alt.Locked = false;
+					alt.OriginMaximized = false;
+					alt.OriginMaximizedAtStart = false;
+					alt.OriginMonitor = Native.MonitorFromPoint(ctrlPt, 2u);
+					Native.SetForegroundWindow(_session.Hwnd);
+					PostFrame(_session, ctrlPt, forceWrite: false);
+				}
+			}
+			return;
+		}
+		if (vk == Native.VK_SPACE && down && _snap != 0)
+		{
+			_snap = 0;
+		}
+	}
 
 	private void CancelHintTimer()
 	{

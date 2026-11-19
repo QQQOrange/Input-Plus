@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using InputPlus.Core;
 using InputPlus.Modules.HoldDrag;
@@ -149,8 +150,10 @@ internal partial class HoldDragView : UserControl
             RadiusBox.Text = Num(_cfg.FrameRadius);
             OpacityBox.Text = Num(_cfg.FrameOpacity);
 
-            SnapBox.IsChecked = _cfg.SnapToEdges;
+            // AltDrag 的四档：0 关 / 1 只吸屏幕 / 2 再吸窗口外侧 / 3 再吸窗口内侧。
+            Select(SnapLevelBox, (_cfg.SnapToEdges ? Math.Clamp(_cfg.SnapLevel, 1, 3) : 0).ToString(CultureInfo.InvariantCulture));
             SnapBox2.Text = Num(_cfg.SnapThreshold);
+            AeroBox.IsChecked = _cfg.AeroSnap;
             TilingBox.IsChecked = _cfg.KeyboardTiling;
             ShakeBox.IsChecked = _cfg.ShakeMinimizeOthers;
             HudBox.IsChecked = _cfg.ShowDragHud;
@@ -166,9 +169,6 @@ internal partial class HoldDragView : UserControl
             OwnBox.IsChecked = _cfg.AllowDragOwnWindows;
             UndoBox.IsChecked = _cfg.UndoEnabled;
 
-            DragThresholdBox.Text = Num(_cfg.DragThreshold);
-            DragOutBox.Text = Num(_cfg.DragOutThresholdPx);
-            CornerBox.Text = Num(_cfg.CornerPercent);
 
             BlacklistBox.Text = _cfg.Blacklist ?? "";
             RulesBox.Text = _cfg.AppRules ?? "";
@@ -231,7 +231,7 @@ internal partial class HoldDragView : UserControl
         switch ((sender as CheckBox)?.Tag as string)
         {
             case "ShowActivationFrame": _cfg.ShowActivationFrame = on; break;
-            case "SnapToEdges": _cfg.SnapToEdges = on; break;
+            case "AeroSnap": _cfg.AeroSnap = on; break;
             case "KeyboardTiling": _cfg.KeyboardTiling = on; break;
             case "ShakeMinimizeOthers": _cfg.ShakeMinimizeOthers = on; break;
             case "ShowDragHud": _cfg.ShowDragHud = on; break;
@@ -266,6 +266,12 @@ internal partial class HoldDragView : UserControl
             case "ActionMiddle": _cfg.ActionMiddle = value; break;
             case "FrameStyleId": _cfg.FrameStyleId = value; break;
             case "FrameColorId": _cfg.FrameColorId = value; break;
+            case "SnapLevel":
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int level)) return;
+                _cfg.SnapLevel = Math.Clamp(level, 0, 3);
+                // 0 档就是"关闭"：AltDrag 的 AutoSnap=0。两个字段始终同步，别让它们各自为政。
+                _cfg.SnapToEdges = _cfg.SnapLevel > 0;
+                break;
             default: return;
         }
         ScheduleCommit();
@@ -285,8 +291,6 @@ internal partial class HoldDragView : UserControl
             case "FrameRadius": _cfg.FrameRadius = v; break;
             case "FrameOpacity": _cfg.FrameOpacity = v; break;
             case "SnapThreshold": _cfg.SnapThreshold = v; break;
-            case "DragThreshold": _cfg.DragThreshold = v; break;
-            case "DragOutThresholdPx": _cfg.DragOutThresholdPx = v; break;
             case "CornerPercent": _cfg.CornerPercent = v; break;
             default: return;
         }
@@ -514,6 +518,25 @@ internal partial class HoldDragView : UserControl
     internal void ScrollListsForRender()
     {
         RightScroll?.ScrollToEnd();
+    }
+
+    /// <summary>
+    /// 出图用：滚到「吸附与手感」那一栏（四档吸附 + 阈值 + Aero 开关都在这儿）。
+    /// 直接 BringIntoView 会把标题顶到视口最上沿、只露半截，所以先按元素位置算一个偏移。
+    /// </summary>
+    internal void ScrollSnapForRender()
+    {
+        if (SnapLevelBox == null) return;
+        // 不用 BringIntoView：它只保证"刚好露出"，而且滚动是排队等布局的，
+        // 紧接着再改偏移会被它覆盖。这里直接按元素在滚动内容里的位置算目标偏移。
+        DependencyObject? cur = SnapLevelBox;
+        while (cur != null && cur is not ScrollViewer)
+        {
+            cur = VisualTreeHelper.GetParent(cur);
+        }
+        if (cur is not ScrollViewer sv) return;
+        double y = SnapLevelBox.TransformToAncestor(sv).Transform(new Point(0, 0)).Y;
+        sv.ScrollToVerticalOffset(sv.VerticalOffset + y - 150);
     }
 
     private void OnResetDefaults(object sender, RoutedEventArgs e)

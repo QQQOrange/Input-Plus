@@ -79,9 +79,6 @@
     <SolidColorBrush x:Key="Brush.GestureLabelBackground" Color="#CCFFFFFF" />
     <SolidColorBrush x:Key="Brush.GestureLabelForeground" Color="#FF111827" />
     <SolidColorBrush x:Key="Brush.GestureLabelBorder" Color="#9958A6FF" />
-    <!-- 「未识别」三个字：白底上必须用中灰，浅灰等于看不见（原来把 #D1D5DB 写死在代码里）。 -->
-    <SolidColorBrush x:Key="Brush.GestureUnrecognizedForeground" Color="#FF6B7280" />
-    <SolidColorBrush x:Key="Brush.GestureUnrecognizedBorder" Color="#999CA3AF" />
     <SolidColorBrush x:Key="Brush.OverlayText" Color="#161A23" />
     <SolidColorBrush x:Key="Brush.OverlayTextSecondary" Color="#5A6478" />
     <SolidColorBrush x:Key="Brush.OverlayTextTertiary" Color="#8A93A6" />

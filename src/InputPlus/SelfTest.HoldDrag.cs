@@ -40,6 +40,7 @@ public static partial class SelfTest
         cfg.FrameColorId = "Accent";
         cfg.SnapThreshold = 12;
         cfg.Blacklist = "game.exe";
+        cfg.AutoRemaximizeRestore = true;
         string json = ConfigStore.Serialize(cfg);
         var back = ConfigStore.Parse(json);
         CheckEqual("按住拖拽：往返保住触发键", back.TriggerKeyId, "K:0x20");
@@ -49,6 +50,7 @@ public static partial class SelfTest
         CheckEqual("按住拖拽：往返保住外框颜色", back.FrameColorId, "Accent");
         Check("按住拖拽：往返保住吸附阈值", back.SnapThreshold == 12, back.SnapThreshold.ToString());
         CheckEqual("按住拖拽：往返保住黑名单", back.Blacklist, "game.exe");
+        Check("按住拖拽：往返保住「重新最大化后一秒还原」", back.AutoRemaximizeRestore);
 
         // ---- 坏值一律收敛，不许把引擎带崩 ----
         var wild = ConfigStore.Parse("");
@@ -160,9 +162,26 @@ public static partial class SelfTest
             typeof(DragWorker).GetProperty("FrameIntervalMs") is null
             && typeof(AppConfig).GetMethod("FrameIntervalMs") is null);
 
+        // ---- 拖拽核完全照 AltDrag：Input-Plus 自己加的两条语义（位移门槛、阈值按 DPI 缩放）已经拿掉 ----
+        // 留着的话，改了 ini 里的 SnapThreshold 在 150% 屏上也不是同一个手感，跟源码对不上。
+        Check("按住拖拽：配置里已经没有「拖动阈值 / 出界容差」",
+            typeof(AppConfig).GetProperty("DragThreshold") is null
+            && typeof(AppConfig).GetProperty("DragOutThresholdPx") is null);
+        Check("按住拖拽：吸附阈值不再按 DPI 缩放",
+            typeof(DragEngine).GetMethod("ScaledThreshold", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) is null);
+        Check("按住拖拽：抽帧时那个 100ms 补帧定时器还在（hooks.c 的 MOVE_TIMER）",
+            typeof(DragEngine).GetMethod("StartMovePollTimer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null);
+        var dflt = ConfigStore.Parse("");
+        Check("按住拖拽：抽帧倍数跟 AltDrag.ini 一样（移动 2 / 缩放 5）",
+            dflt.MoveRate == 2 && dflt.ResizeRate == 5, dflt.MoveRate + "/" + dflt.ResizeRate);
+        Check("按住拖拽：AutoRemaximize 默认按 ini 的 1（一秒还原关着）",
+            dflt.AutoRemaximize && !dflt.AutoRemaximizeRestore);
+
         // ---- 拖动跟手：「手停了窗口还在跑」的病根 ----
         TestHoldDragTailMath();
         TestHoldDragLiveCursor();
+
+        TestHoldDragResizeAxes();
     }
 
     // ---------------- 收尾对账的算术 ----------------
@@ -230,8 +249,6 @@ public static partial class SelfTest
             cfg.ShowActivationFrame = false;
             cfg.BringToFront = false;
             cfg.ShakeMinimizeOthers = false;
-            cfg.DragThreshold = 0;
-            cfg.DragOutThresholdPx = 0;
             cfg.MoveRate = 1;
             DragDiag.Init(InputPlus.Core.AppPaths.DataDir);
             engine = new DragEngine(() => cfg);
@@ -261,12 +278,30 @@ public static partial class SelfTest
             Check("按住拖拽跟手：光标走 40,50，窗口跟着走 40,50",
                 Math.Abs(r2.Left - 140) <= 1 && Math.Abs(r2.Top - 150) <= 1, r2.Left + "," + r2.Top);
 
+            // ④ 一口气打 60 个移动事件：队列里始终只能有一条在途消息，
+            //    最后落点必须是"最后一次光标位置"，不多不少（旧实现会积压成串，松手后再补跑一段）
+            DragWorker.ResetStats();
+            fx = 500;
+            fy = 500;
+            for (int i = 0; i < 60; i++)
+            {
+                fx += 7;
+                fy += 5;
+                engine.DeliverCursor(new Native.POINT(fx, fy));
+            }
+            System.Threading.Thread.Sleep(250);
+            Native.GetWindowRect(hwnd, out Native.RECT r4);
+            Check("按住拖拽：连打 60 个移动事件后停在最后一个光标位置，不会再多跑一段",
+                Math.Abs(r4.Left - (fx - 900)) <= 1 && Math.Abs(r4.Top - (fy - 700)) <= 1, r4.Left + "," + r4.Top);
+            Check("按住拖拽：连打 60 个移动事件，线程消息队列里始终只有一条在途", DragWorker.MaxDrained == 0, DragWorker.MaxDrained.ToString());
+            Check("按住拖拽：从排进队列到开始写窗口不超过一帧", DragWorker.MaxLagMs <= 40, DragWorker.MaxLagMs + "ms");
+
             // ③ 松手：收尾那一帧之后窗口必须还停在光标对应的位置
             engine.End();
             System.Threading.Thread.Sleep(300);
             Native.GetWindowRect(hwnd, out Native.RECT r3);
             Check("按住拖拽收尾：松手后停在光标对应的位置，不再自己往前跑",
-                Math.Abs(r3.Left - r2.Left) <= 1 && Math.Abs(r3.Top - r2.Top) <= 1, r3.Left + "," + r3.Top);
+                Math.Abs(r3.Left - r4.Left) <= 1 && Math.Abs(r3.Top - r4.Top) <= 1, r3.Left + "," + r3.Top);
 
             bool wrote = false;
             string diagPath = DragDiag.Path;
@@ -279,6 +314,52 @@ public static partial class SelfTest
             {
             }
             Check("按住拖拽：拖动结束会往 drag-diag.txt 记一笔明文账", wrote, diagPath);
+
+            // ⑤ AltDrag 的 MOVE_TIMER（hooks.c:1849-1854、1999-2008）：抽帧开着的时候，
+            //    如果低层鼠标钩子被系统掐掉（光标还在动、钩子不再来事件），源码靠一个 100ms 定时器补一帧。
+            //    这里把 MoveRate 调成 2（每两个事件才写一次），然后只挪假光标、不喂事件：
+            //    定时器不干活的话，窗口就会停在原地等下一个事件。
+            engine.End();
+            System.Threading.Thread.Sleep(120);
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
+            cfg.MoveRate = 2;
+            fx = 1000;
+            fy = 800;
+            Check("按住拖拽补帧：抽帧 2 时还能开始拖动",
+                engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800)));
+            System.Threading.Thread.Sleep(60);
+            fx = 1060;
+            fy = 840;
+            System.Threading.Thread.Sleep(320);
+            Native.GetWindowRect(hwnd, out Native.RECT r5);
+            Check("按住拖拽补帧：钩子不再来事件时，100ms 定时器把窗口补到光标位置",
+                Math.Abs(r5.Left - 160) <= 1 && Math.Abs(r5.Top - 140) <= 1, r5.Left + "," + r5.Top);
+            engine.End();
+            System.Threading.Thread.Sleep(120);
+
+            // ⑥ AutoRemaximize=2 的一秒还原（hooks.c:1974-1997）：先解锁，再按光标在新显示器里的
+            //    相对位置重算 offset，然后 SW_RESTORE。这里单独钉住"解锁 + 比例 + 真的退出了最大化"。
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
+            Native.WINDOWPLACEMENT wp = new Native.WINDOWPLACEMENT
+            {
+                length = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.WINDOWPLACEMENT))
+            };
+            Native.GetWindowPlacement(hwnd, ref wp);
+            wp.showCmd = Native.SW_MAXIMIZE;
+            Native.SetWindowPlacement(hwnd, ref wp);
+            var alt = new AltState
+            {
+                OriginWidth = 800,
+                OriginHeight = 600,
+                Locked = true
+            };
+            Native.POINT probe = new Native.POINT(200, 150);
+            Native.MONITORINFO mi = Native.GetMonitorInfoAt(probe);
+            int wantOffsetX = (int)Math.Round((double)(probe.X - mi.rcMonitor.Left) / (double)mi.rcMonitor.Width * 800.0);
+            bool restored = AltDragCore.RestoreAfterRemaximize(alt, hwnd, probe);
+            Check("按住拖拽重最大化后还原：解锁并退出最大化", restored && !alt.Locked && !Native.IsZoomed(hwnd));
+            Check("按住拖拽重最大化后还原：offset 按光标在新显示器里的比例重算",
+                alt.OffsetX == wantOffsetX, alt.OffsetX + " vs " + wantOffsetX);
         }
         finally
         {
@@ -308,4 +389,118 @@ public static partial class SelfTest
             ready.Dispose();
         }
     }
+    // ---------------- 临时探针：缩放的两个轴到底有没有动 ----------------
+    // ---------------- 缩放：两轴都得能动 ----------------
+    // AltDrag 的九宫格（hooks.c:1700-1710）在"只有一条轴落在中间带"时会把那一轴锁死：
+    // 抓左边框中段上下拖，只有宽度会变。用户手上的预期是"按住触发键随便拖，两个方向都能调"，
+    // 所以移植里把锁死的那一轴换成了"离得近的那条边"（上半→上边、下半→下边、左半→左边、右半→右边），
+    // 两轴都落在中间带时仍然走 AltDrag 的四向对称扩张。这一段真起一个窗口拖给它看。
+    private static void TestHoldDragResizeAxes()
+    {
+        nint hwnd = IntPtr.Zero;
+        var ready = new System.Threading.ManualResetEventSlim(initialState: false);
+        var pump = new System.Threading.Thread(() =>
+        {
+            hwnd = Native.CreateWindowExW(0u, "STATIC", "inputplus-resize-axes", 0x00CF0000u, 100, 100, 400, 300, IntPtr.Zero, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
+            ready.Set();
+            Native.MSG msg;
+            while (Native.GetMessageW(out msg, IntPtr.Zero, 0u, 0u) > 0)
+            {
+                Native.DispatchMessageW(ref msg);
+            }
+        });
+        pump.IsBackground = true;
+        pump.Start();
+        ready.Wait(3000);
+        if (hwnd == IntPtr.Zero)
+        {
+            Check("缩放：窗口建不出来", false);
+            return;
+        }
+
+        var previous = DragEngine.CursorProbeForTest;
+        DragEngine engine = null!;
+        try
+        {
+            var cfg = ConfigStore.Parse("");
+            cfg.SnapToEdges = false;
+            cfg.ShowDragHud = false;
+            cfg.ShowActivationFrame = false;
+            cfg.BringToFront = false;
+            cfg.ShakeMinimizeOthers = false;
+            cfg.MoveRate = 1;
+            cfg.ResizeRate = 1;
+            engine = new DragEngine(() => cfg);
+
+            int fx = 0;
+            int fy = 0;
+            DragEngine.CursorProbeForTest = () => new Native.POINT(fx, fy);
+
+            Native.RECT Run(int gx, int gy, int dx, int dy)
+            {
+                Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 400, 300, 4u);
+                System.Threading.Thread.Sleep(60);
+                fx = gx;
+                fy = gy;
+                engine.Begin(hwnd, move: false, button: 1, pt: new Native.POINT(gx, gy));
+                for (int i = 1; i <= 6; i++)
+                {
+                    fx = gx + dx * i / 6;
+                    fy = gy + dy * i / 6;
+                    engine.DeliverCursor(new Native.POINT(fx, fy));
+                    System.Threading.Thread.Sleep(20);
+                }
+                System.Threading.Thread.Sleep(150);
+                Native.GetWindowRect(hwnd, out Native.RECT r1);
+                engine.End();
+                System.Threading.Thread.Sleep(120);
+                return r1;
+            }
+
+            static bool Near(int a, int b) => Math.Abs(a - b) <= 2;
+            static string Fmt(Native.RECT r) => r.Left + "," + r.Top + "," + r.Width + "x" + r.Height;
+
+            // 底边中段往下拖 60：只动高，宽度和上边不许动。
+            Native.RECT bottom = Run(300, 395, 0, 60);
+            Check("缩放：抓底边往下拖只改高", Near(bottom.Top, 100) && Near(bottom.Height, 360) && Near(bottom.Width, 400), Fmt(bottom));
+
+            // 左边框中段（上下拖本来是被 AltDrag 锁死的那种）：宽和高都得跟着动。
+            Native.RECT leftMid = Run(105, 250, -40, 60);
+            Check("缩放：抓左边框中段也能改高", Near(leftMid.Width, 440) && Near(leftMid.Height, 360), Fmt(leftMid));
+            Check("缩放：抓左边框中段改高时不挪上边", Near(leftMid.Top, 100) && Near(leftMid.Left, 60), Fmt(leftMid));
+
+            // 右边框中段往左拖：只改宽，高不许被带跑。
+            Native.RECT rightMid = Run(495, 250, -60, 0);
+            Check("缩放：抓右边框中段横拖只改宽", Near(rightMid.Width, 340) && Near(rightMid.Height, 300), Fmt(rightMid));
+
+            // 上边中段往下拖 60：上边跟着走、高变小，宽度也跟着动（另一轴不再锁死）。
+            Native.RECT topMid = Run(300, 105, 40, 60);
+            Check("缩放：抓上边中段下拖，上边跟着走", Near(topMid.Top, 160) && Near(topMid.Height, 240), Fmt(topMid));
+            Check("缩放：抓上边中段也能改宽", Near(topMid.Width, 440), Fmt(topMid));
+
+            // 抓窗口正中：AltDrag 的四向对称扩张，原样保留。
+            Native.RECT center = Run(300, 250, 40, 60);
+            Check("缩放：抓正中仍是四向对称扩张",
+                Near(center.Left, 60) && Near(center.Top, 40) && Near(center.Width, 480) && Near(center.Height, 420), Fmt(center));
+        }
+        finally
+        {
+            DragEngine.CursorProbeForTest = previous;
+            try
+            {
+                engine?.Dispose();
+            }
+            catch
+            {
+            }
+            try
+            {
+                Native.DestroyWindow(hwnd);
+            }
+            catch
+            {
+            }
+        }
+    }
+
 }

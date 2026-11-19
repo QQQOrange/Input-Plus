@@ -788,13 +788,87 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <TextBlock x:Name="TargetTitle" Grid.Row="0" Style="{StaticResource Text.H3}"
-                               Margin="2,0,0,10" Text="{loc:T '全局的手势'}" />
+                    <!-- 标题行右端集中放列表工具：按键筛选 → 搜索（平时只有放大镜，点开才长成输入框）
+                         → 排序（按钮上只有图标，点开才是四档）。原来这些各占一行/一个胶囊，
+                         挤得列表窄了一截，也让"排序"看起来像个设置而不是工具。 -->
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TargetTitle" Grid.Column="0" Style="{StaticResource Text.H3}"
+                                   VerticalAlignment="Center" Margin="2,0,8,0"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="{loc:T '全局的手势'}" />
+
+                        <!-- 工具组：按键筛选 + 搜索。搜索展开时把前两个收起来、原地换成输入框，
+                             这样中间这一栏的标题不会被挤没（卡片本来就窄）。 -->
+                        <Grid Grid.Column="1" VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="ButtonFilterBox" Grid.Column="0" Width="96" MinHeight="32"
+                                      Style="{StaticResource ComboBox.Base}"
+                                      DisplayMemberPath="Text" SelectedValuePath="Value"
+                                      SelectionChanged="OnButtonFilterChanged"
+                                      ToolTip="{loc:T '按鼠标按键筛选'}" />
+                            <Button x:Name="SearchButton" Grid.Column="1" Style="{StaticResource Button.Icon}"
+                                    Margin="6,0,0,0" Click="OnToggleSearch" Content="&#xE721;"
+                                    ToolTip="{loc:T '搜索手势'}" />
+                            <!-- 宽 134 = 96 + 6 + 32，正好盖住上面两件，不往标题上压。 -->
+                            <Grid x:Name="SearchPanel" Grid.ColumnSpan="2" Width="134"
+                                  HorizontalAlignment="Right" Visibility="Collapsed">
+                                <TextBox x:Name="FilterBox" Style="{StaticResource TextBox.Base}" MinHeight="32"
+                                         Padding="30,4,26,4" TextChanged="OnFilterChanged"
+                                         KeyDown="OnFilterKeyDown" LostKeyboardFocus="OnFilterLostFocus" />
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="12" Margin="10,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.TextTertiary}" IsHitTestVisible="False" />
+                                <TextBlock x:Name="FilterHint" Text="{loc:T '筛选手势…'}" Margin="30,0,26,0"
+                                           VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextTertiary}"
+                                           IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Body}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=FilterBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <Button x:Name="SearchClear" Style="{StaticResource Button.Icon}"
+                                        Width="24" Height="24" FontSize="10" Content="&#xE711;"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,3,0"
+                                        Click="OnClearSearch" ToolTip="{loc:T '清空搜索'}" />
+                            </Grid>
+                        </Grid>
+
+                        <!-- 排序：按钮只有图标（不带文字），点开才是四档菜单，当前档打勾。 -->
+                        <Button x:Name="SortButton" Grid.Column="2" Style="{StaticResource Button.Icon}"
+                                Margin="4,0,0,0" Content="&#xE8CB;" Click="OnSortButtonClick"
+                                ToolTip="{loc:T '手势列表的排序方式'}">
+                            <Button.ContextMenu>
+                                <ContextMenu x:Name="SortMenu">
+                                    <MenuItem Tag="custom" IsCheckable="True" Click="OnSortPick"
+                                              Header="{loc:T '自定义顺序'}" />
+                                    <MenuItem Tag="name" IsCheckable="True" Click="OnSortPick"
+                                              Header="{loc:T '按名称'}" />
+                                    <MenuItem Tag="trigger" IsCheckable="True" Click="OnSortPick"
+                                              Header="{loc:T '按触发方式'}" />
+                                    <MenuItem Tag="action" IsCheckable="True" Click="OnSortPick"
+                                              Header="{loc:T '按动作'}" />
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
+                    </Grid>
 
                     <!-- 该目标「允许的触发方式」：照 WGestures 的 TriggerList 抄的，
                          61 条三态（启用 / 禁用 / 默认）。默认 = 跟随上一层：应用 → 分组 → 全局。 -->
@@ -849,47 +923,7 @@
                         </StackPanel>
                     </Expander>
 
-                    <Grid Grid.Row="2" Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox x:Name="FilterBox" Style="{StaticResource TextBox.Base}" MinHeight="32"
-                                 Padding="32,4,10,4" VerticalContentAlignment="Center"
-                                 TextChanged="OnFilterChanged" />
-                        <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="13" Margin="11,0,0,0" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource Brush.TextTertiary}" IsHitTestVisible="False" />
-                        <TextBlock x:Name="FilterHint" Text="{loc:T '筛选手势…'}" Margin="33,0,10,0"
-                                   VerticalAlignment="Center" Foreground="{DynamicResource Brush.TextTertiary}"
-                                   IsHitTestVisible="False">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Body}">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Text, ElementName=FilterBox}" Value="">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <ComboBox x:Name="ButtonFilterBox" Grid.Column="1" Width="108" MinHeight="32"
-                                  Margin="8,0,0,0" Style="{StaticResource ComboBox.Base}"
-                                  DisplayMemberPath="Text" SelectedValuePath="Value"
-                                  SelectionChanged="OnButtonFilterChanged"
-                                  ToolTip="{loc:T '按鼠标按键筛选'}" />
-                        <!-- 排序方式：自定义顺序（可拖手柄）之外三档都只影响显示，不改表本身。
-                             宽度定死是因为这一行左边还要留筛选框，"按触发方式"这五个字才不会被切。 -->
-                        <ComboBox x:Name="SortBox" Grid.Column="2" Width="118" MinHeight="32"
-                                  Margin="8,0,0,0" Style="{StaticResource ComboBox.Base}"
-                                  DisplayMemberPath="Text" SelectedValuePath="Value"
-                                  SelectionChanged="OnSortChanged"
-                                  ToolTip="{loc:T '手势列表的排序方式'}" />
-                    </Grid>
-
-                    <ScrollViewer x:Name="ListScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="ListScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
                         <!-- 拖动排序的收尾挂在列表上：按下手柄后鼠标被列表捕获，
                              后续的移动/抬起都只有列表收得到（行里的 Button 收不到，自然也不会误触发"选中"） -->
@@ -978,12 +1012,12 @@
 
                     <!-- 插入位置提示线：和列表占同一格、画在它上面。
                          只做视觉提示，不吃鼠标（IsHitTestVisible=False），拖动时鼠标仍在列表手里。 -->
-                    <Canvas Grid.Row="3" x:Name="DropLayer" IsHitTestVisible="False" ClipToBounds="True">
+                    <Canvas Grid.Row="2" x:Name="DropLayer" IsHitTestVisible="False" ClipToBounds="True">
                         <Rectangle x:Name="DropLine" Height="2" Width="0" RadiusX="1" RadiusY="1"
                                    Fill="{DynamicResource Brush.Accent}" Visibility="Collapsed" />
                     </Canvas>
 
-                    <TextBlock Grid.Row="4" x:Name="EmptyHint" Margin="0,16,0,4"
+                    <TextBlock Grid.Row="3" x:Name="EmptyHint" Margin="0,16,0,4"
                                Text="{loc:T '还没有手势。点右上角「录制新手势」画一笔。'}"
                                Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Visibility="Collapsed" />
                 </Grid>

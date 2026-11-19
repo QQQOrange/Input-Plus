@@ -591,10 +591,9 @@ public static partial class SelfTest
             "Brush.OverlayTextTertiary", "Brush.OverlayAccent", "Brush.OverlayAccentSoft",
             "Brush.OverlayAccentText", "Brush.OverlayRowHover", "Brush.OverlayScrim",
             "Brush.OverlayShadow",
-            // 手势名称方框 / 「未识别」：这两组以前是写死在代码里的颜色，
+            // 手势名称方框：这组以前是写死在代码里的颜色，
             // 浅色主题下变成"白底 + 浅灰字"，整句看不见。
             "Brush.GestureLabelBackground", "Brush.GestureLabelForeground",
-            "Brush.GestureUnrecognizedForeground", "Brush.GestureUnrecognizedBorder",
         };
 
         var saved = UI.Theme.ThemeManager.Current;
@@ -621,20 +620,6 @@ public static partial class SelfTest
             double darkCard = LuminanceOf(dark["Brush.OverlayCard"]);
             Check("浅色浮层是浅底", lightCard > 0.70, $"亮度={lightCard:F2}");
             Check("深色浮层是深底", darkCard < 0.30, $"亮度={darkCard:F2}");
-
-            // 「未识别」必须看得见：文字与方框底色的对比度按 WCAG 算够 4.5。
-            // 现场报障：浅色主题下白底 + #D1D5DB 浅灰字（写死在代码里），等于没写字。
-            foreach (var (theme, palette) in new[] { ("浅色", light), ("深色", dark) })
-            {
-                double ratio = ContrastRatio(
-                    palette["Brush.GestureUnrecognizedForeground"],
-                    palette["Brush.GestureLabelBackground"]);
-                Check($"{theme}主题「未识别」的字看得清（对比度 ≥4.5）", ratio >= 4.5,
-                    $"对比度={ratio:F1} 字={palette["Brush.GestureUnrecognizedForeground"]} 底={palette["Brush.GestureLabelBackground"]}");
-                Check($"{theme}主题「未识别」是灰的，和正常名称不是一个颜色",
-                    palette["Brush.GestureUnrecognizedForeground"] != palette["Brush.GestureLabelForeground"],
-                    palette["Brush.GestureUnrecognizedForeground"] + " vs " + palette["Brush.GestureLabelForeground"]);
-            }
         }
         finally
         {

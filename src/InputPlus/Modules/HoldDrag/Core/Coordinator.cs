@@ -639,6 +639,22 @@ internal sealed class Coordinator : IInputSink, IDisposable
 			{
 				return false;
 			}
+			// Shift / Space 对吸附的临时影响（AltDrag hooks.c:1030-1090）：按住 Shift 强制吸窗口内侧，
+			// 按一下 Space 本次拖动就不吸。放在触发键之前，保证拖动中这两个键始终被看到。
+			_drag.ObserveKey((int)kb.vkCode, down);
+			// 自己补发的假 Ctrl（起拖时的 MasqueradeAsControl）不能被当成用户按了触发键：
+			// 触发键配成 Ctrl 时，那一对假 Ctrl 会立刻把刚建立的拖动结束掉。
+			// 只是"不处理"，不吞掉 —— 它本来就该送到目标窗口去顶替 Alt。
+			if ((kb.flags & Native.LLKHF_INJECTED) != 0 && AltDragCore.InjectedBurst)
+			{
+				return false;
+			}
+			// hooks.c:976-980：拖动中按 ESC 就是放弃这次拖动（action=NONE + UnhookMouse）。
+			// 只取消自己的拖动，键照常放行给目标窗口 —— 源码这里也是 CallNextHookEx。
+			if (down && kb.vkCode == Native.VK_ESCAPE && _drag.IsDragging)
+			{
+				_drag.Cancel();
+			}
 			if (down && TryHandleUndo(ref kb))
 			{
 				return true;
@@ -1107,6 +1123,8 @@ internal sealed class Coordinator : IInputSink, IDisposable
 		bool flag2 = _lastDown[idx] != 0L && tickCount - _lastDown[idx] <= num2 && !_lastMoved[idx];
 		_lastDown[idx] = tickCount;
 		_lastMoved[idx] = false;
+		// 双击照 AltDrag（hooks.c:1630-1648 / 1749-1794）：
+		// 移动时双击 = 最大化（顺带把还原矩形挪到光标所在的显示器），缩放时双击 = 那半屏 / 那块四分之一。
 		if (((idx == 0 && cfg.DoubleClickLeftMaximize && text == "Move") & flag2) && !flag)
 		{
 			_lastDown[idx] = 0L;
@@ -1115,7 +1133,7 @@ internal sealed class Coordinator : IInputSink, IDisposable
 			Native.POINT at = pt;
 			_drag.PostTargetWork(() =>
 			{
-				WindowActions.MaximizeRestore(target);
+				AltDragCore.DoubleClickMaximize(target, at);
 				RefreshHoverAfterAction(at);
 			});
 			_heldDuringHold[idx] = true;
@@ -1129,7 +1147,7 @@ internal sealed class Coordinator : IInputSink, IDisposable
 			Native.POINT at2 = pt;
 			_drag.PostTargetWork(() =>
 			{
-				ApplyZoneDoubleClick(target2, at2, cfg);
+				AltDragCore.DoubleClickAeroHalf(target2, at2);
 				RefreshHoverAfterAction(at2);
 			});
 			_heldDuringHold[idx] = true;
@@ -1169,28 +1187,6 @@ internal sealed class Coordinator : IInputSink, IDisposable
 		}
 	}
 
-	private static void ApplyZoneDoubleClick(nint hwnd, Native.POINT pt, AppConfig cfg)
-	{
-		if (!Native.GetWindowRect(hwnd, out var lpRect))
-		{
-			return;
-		}
-		ResizeZone resizeZone = Zones.Resize(lpRect, pt.X, pt.Y, cfg.CornerPercent);
-		if (resizeZone == ResizeZone.Center)
-		{
-			resizeZone = Zones.NearestCorner(lpRect, pt.X, pt.Y);
-		}
-		SnapZone snapZone = Zones.ScreenZoneOfResizeZone(resizeZone);
-		if (snapZone != SnapZone.None)
-		{
-			Native.MONITORINFO monitorInfoAt = Native.GetMonitorInfoAt(pt);
-			if (monitorInfoAt.rcWork.Width > 0)
-			{
-				WindowActions.ApplySnap(hwnd, snapZone, monitorInfoAt.rcWork);
-			}
-		}
-	}
-
 	private bool HandleButtonUp(int idx, Native.POINT pt)
 	{
 		if (_drag.IsDragging && _drag.Button == idx)
@@ -1205,7 +1201,10 @@ internal sealed class Coordinator : IInputSink, IDisposable
 		}
 		if (_swallowUp[idx])
 		{
+			// 双击（最大化 / 贴半屏）那条路把 _heldDuringHold 立成 true 了，
+			// 抬起被吞掉时得一起清掉，否则下一次按下会拿着上一次的"阈值期按住"当参考。
 			_swallowUp[idx] = false;
+			_heldDuringHold[idx] = false;
 			return true;
 		}
 		return false;

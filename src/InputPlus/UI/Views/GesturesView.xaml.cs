@@ -6,6 +6,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 /* 只挑拖动要用的几个输入类型做别名：整条 using System.Windows.Input 会带进来
  * WPF 自己的 MouseGesture，和手势模型 MouseGesture 撞名（CS0104）。 */
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using KeyboardFocusChangedEventArgs = System.Windows.Input.KeyboardFocusChangedEventArgs;
 using MouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
 using MouseButtonState = System.Windows.Input.MouseButtonState;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
@@ -129,7 +131,7 @@ public partial class GesturesView
             UpdateColorSwatches();
             SyncWg2Controls(opts);
             _sortMode = GestureListOrder.Normalize(opts.ListSort);
-            SelectTag(SortBox, _sortMode);
+            UpdateSortChecks();
             BuildTargets();
             LoadList(selectId: _current.Id);
         }
@@ -958,18 +960,6 @@ public partial class GesturesView
         ButtonFilterBox.SelectedValuePath = "Value";
         SelectTag(ButtonFilterBox, "");
 
-        /* 排序下拉：只有「自定义顺序」允许拖动手柄改表，其余三档只影响显示。 */
-        SortBox.ItemsSource = new List<Choice>
-        {
-            new(GestureListOrder.Custom, Loc.T("自定义顺序")),
-            new(GestureListOrder.ByName, Loc.T("按名称")),
-            new(GestureListOrder.ByTrigger, Loc.T("按触发方式")),
-            new(GestureListOrder.ByAction, Loc.T("按动作"))
-        };
-        SortBox.DisplayMemberPath = "Text";
-        SortBox.SelectedValuePath = "Value";
-        SelectTag(SortBox, GestureListOrder.Custom);
-
         ChordBox.ItemsSource = new List<Choice> { new("", Loc.T("不组合")) }
             .Concat(GestureButtons.All.Select(b => new Choice(b, Loc.T(GestureButtons.Display(b)))))
             .ToList();
@@ -1118,22 +1108,101 @@ public partial class GesturesView
         LoadList(selectId: _current.Id);
     }
 
+    /* ─────────────────── 搜索：放大镜 ↔ 输入框 ───────────────────
+     *
+     * 平时这块地方只占 32 像素（一个放大镜按钮），点开才换成输入框，
+     * 这样列表能多出一整行的宽度；收起时不丢已有的字——失焦只在没字时收。 */
+
+    private void OnToggleSearch(object sender, RoutedEventArgs e) => OpenSearch();
+
+    private void OpenSearch()
+    {
+        // 三件东西占同一个格子：展开时把「按键筛选 + 放大镜」换成输入框，宽度不变，标题不抖。
+        ButtonFilterBox.Visibility = Visibility.Collapsed;
+        SearchButton.Visibility = Visibility.Collapsed;
+        SearchPanel.Visibility = Visibility.Visible;
+        // 刚由 Collapsed 变 Visible 时布局还没跑，直接 Focus 会落空，等一轮输入再抢焦点。
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            FilterBox.Focus();
+            FilterBox.CaretIndex = FilterBox.Text.Length;
+        }), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private void CloseSearch()
+    {
+        if (_loading) return;
+        SearchPanel.Visibility = Visibility.Collapsed;
+        ButtonFilterBox.Visibility = Visibility.Visible;
+        SearchButton.Visibility = Visibility.Visible;
+    }
+
+    private void OnFilterKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        e.Handled = true;
+        // Esc 一回到底：先清字（TextChanged 会把列表还原），再收成放大镜。
+        if (FilterBox.Text.Length > 0) FilterBox.Clear();
+        CloseSearch();
+        SearchButton.Focus();
+    }
+
+    private void OnFilterLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (FilterBox.Text.Length == 0) CloseSearch();
+    }
+
+    private void OnClearSearch(object sender, RoutedEventArgs e)
+    {
+        FilterBox.Clear();
+        FilterBox.Focus();
+    }
+
     private void OnButtonFilterChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || ButtonFilterBox.SelectedItem == null) return;
         LoadList(selectId: _current.Id);
     }
 
-    private void OnSortChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>排序按钮只有图标，点它才把四档菜单摊在按钮下面。</summary>
+    private void OnSortButtonClick(object sender, RoutedEventArgs e)
     {
-        if (_loading) return;
-        string mode = GestureListOrder.Normalize(SelectedValue(SortBox));
-        if (string.Equals(mode, _sortMode, StringComparison.Ordinal)) return;
+        UpdateSortChecks();
+        if (SortButton.ContextMenu is not { } menu) return;
+        menu.PlacementTarget = SortButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    /// <summary>选中一档：自定义顺序之外都只影响显示，不改 <c>Settings.Gestures</c> 的物理顺序。</summary>
+    private void OnSortPick(object sender, RoutedEventArgs e)
+    {
+        string mode = GestureListOrder.Normalize((sender as MenuItem)?.Tag as string);
+        UpdateSortChecks();
+        if (_loading || string.Equals(mode, _sortMode, StringComparison.Ordinal)) return;
         _sortMode = mode;
         _host!.Settings.GestureOptions.ListSort = mode;
         _host.SaveSettings();
         LoadList(selectId: _current.Id);
     }
+
+    /// <summary>把勾打到当前档上（<see cref="MenuItem"/> 自己也会翻，所以点完必须再刷一次）。</summary>
+    private void UpdateSortChecks()
+    {
+        if (SortMenu is null) return;
+        foreach (MenuItem item in SortMenu.Items.OfType<MenuItem>())
+            item.IsChecked = string.Equals(GestureListOrder.Normalize(item.Tag as string), _sortMode,
+                                           StringComparison.Ordinal);
+    }
+
+    /// <summary>排序档位的中文名，出图/自检回报用。</summary>
+    private static string SortLabel(string mode) => GestureListOrder.Normalize(mode) switch
+    {
+        GestureListOrder.ByName => Loc.T("按名称"),
+        GestureListOrder.ByTrigger => Loc.T("按触发方式"),
+        GestureListOrder.ByAction => Loc.T("按动作"),
+        _ => Loc.T("自定义顺序"),
+    };
 
     /* ─────────────────── 拖动排序（只在「自定义顺序」下） ───────────────────
      *
@@ -1274,14 +1343,14 @@ public partial class GesturesView
         try
         {
             _sortMode = GestureListOrder.Normalize(mode);
-            SelectTag(SortBox, _sortMode);
+            UpdateSortChecks();
         }
         finally { _loading = false; }
 
         LoadList(selectId: _current.Id);
         return new[]
         {
-            "排序：" + (SelectedValue(SortBox) ?? "?"),
+            "排序：" + SortLabel(_sortMode),
             "这一档行数：" + _rows.Count + "（全表 " + _host!.Settings.Gestures.Count + " 条）",
             "手柄可见：" + _rows.Count(r => r.GripVisibility == Visibility.Visible) + " 行",
             "前四行：" + string.Join(" | ", _rows.Take(4).Select(r => r.Title)),
