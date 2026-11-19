@@ -789,6 +789,11 @@ namespace InputPlus.Modules.HoldDrag
 			["诊断包与便携模式"] = "Diagnostics bundle and portable mode",
 			["「帮助 → 诊断」可以一键导出诊断包：配置文件 + 最近三个日志 + 系统信息（版本、系统、DPI、显示器、权限），遇到问题把它发给开发者即可。把 portable.txt 放在 exe 旁边则进入便携模式，配置、日志和布局都写在该目录的 data 文件夹里，不再写入 AppData。"] = "Help → Diagnostics exports a bundle: the config, the last three logs and system info (version, OS, DPI, monitors, privileges). Put portable.txt next to the exe to enable portable mode; config, logs and layouts then live in a data folder beside the exe instead of AppData.",
 			["双击手势、全屏窗口，以及尺寸提示 / 吸附 / 分屏 / 撤销"] = "Double-click gestures, full-screen windows, and the size HUD / snapping / tiling / undo",
+			/* 拖拽动作的显示名（AltDrag 的 [Input] 八个动作） */
+			["改窗口大小"] = "Resize the window",
+			["放到最下层"] = "Send to the bottom",
+			["居中"] = "Center",
+			["什么都不做"] = "Do nothing",
 		};
 	}
 }

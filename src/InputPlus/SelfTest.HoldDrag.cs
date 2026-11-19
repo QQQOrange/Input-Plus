@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using InputPlus.Core.HoldDrag;
 using InputPlus.Core.Settings;
 using InputPlus.Modules.HoldDrag;
@@ -6,13 +7,16 @@ using InputPlus.Modules.HoldDrag;
 namespace InputPlus;
 
 /// <summary>
-/// 自检：并进来的「按住拖拽」。
+/// 自检：并进来的「按住拖拽」（AltDrag 的 hooks.c）。
 ///
-/// 引擎本体（钩子、拖窗）在这里**不启动** —— 自检跑在用户桌面上，
-/// 装一个全局鼠标钩子会把用户的鼠标拖歪。所以只验到"配置这一层"：
-/// 默认关、JSON 往返、越界值被收敛、关着的时候绝不装钩子。
-/// 之所以强调默认关：触发键默认是 Enter，装上就等于抢走回车，
-/// 用户只会觉得键盘坏了。
+/// 分两层：
+///   · 配置 / 黑名单 / 动作表这些纯函数，直接算；
+///   · 拖拽本身用**真窗口 + 假光标**走一遍完整链路（按住触发键 → 按下 → 移动 → 松开），
+///     假光标是为了不挪用户的鼠标，真窗口是为了走真正的 MoveWindow。
+///
+/// 最要紧的一条断言是「同步」：MouseMove 事件一返回，窗口就必须已经在新的位置 ——
+/// 旧实现把事件塞进工作线程队列，于是松手之后窗口还要追几十毫秒前的坐标跑一段。
+/// 这里不 sleep、直接 GetWindowRect，就是钉住这条。
 /// </summary>
 public static partial class SelfTest
 {
@@ -22,216 +26,134 @@ public static partial class SelfTest
         Check("按住拖拽：默认是关的", !fresh.HoldDragEnabled);
         CheckEqual("按住拖拽：默认没存过配置", fresh.HoldDragJson, "");
 
-        // ---- 空串要能解析成一份能用的默认配置 ----
-        var cfg = ConfigStore.Parse("");
-        Check("按住拖拽：空配置解析得出默认值", cfg != null);
-        if (cfg is null) cfg = new AppConfig();
-        CheckEqual("按住拖拽：默认触发键是 Enter", cfg.TriggerKeyId, "K:0x0D");
-        Check("按住拖拽：默认长按时长是 300ms", cfg.HoldMs == 300, cfg.HoldMs.ToString());
-        CheckEqual("按住拖拽：左键默认拖", cfg.ActionLeft, Actions.Move);
-        CheckEqual("按住拖拽：右键默认缩放", cfg.ActionRight, Actions.Resize);
-        CheckEqual("按住拖拽：中键默认最大化", cfg.ActionMiddle, Actions.Maximize);
-
-        // ---- JSON 往返：存下来的东西能原样读回来 ----
-        cfg.TriggerKeyId = "K:0x20";
-        cfg.TriggerMode = "Toggle";
-        cfg.HoldMs = 450;
-        cfg.FrameStyleId = "Aurora";
-        cfg.FrameColorId = "Accent";
-        cfg.SnapThreshold = 12;
-        cfg.Blacklist = "game.exe";
-        cfg.AutoRemaximizeRestore = true;
-        string json = ConfigStore.Serialize(cfg);
-        var back = ConfigStore.Parse(json);
-        CheckEqual("按住拖拽：往返保住触发键", back.TriggerKeyId, "K:0x20");
-        CheckEqual("按住拖拽：往返保住触发方式", back.TriggerMode, "Toggle");
-        Check("按住拖拽：往返保住长按时长", back.HoldMs == 450, back.HoldMs.ToString());
-        CheckEqual("按住拖拽：往返保住外框样式", back.FrameStyleId, "Aurora");
-        CheckEqual("按住拖拽：往返保住外框颜色", back.FrameColorId, "Accent");
-        Check("按住拖拽：往返保住吸附阈值", back.SnapThreshold == 12, back.SnapThreshold.ToString());
-        CheckEqual("按住拖拽：往返保住黑名单", back.Blacklist, "game.exe");
-        Check("按住拖拽：往返保住「重新最大化后一秒还原」", back.AutoRemaximizeRestore);
-
-        // ---- 坏值一律收敛，不许把引擎带崩 ----
-        var wild = ConfigStore.Parse("");
-        wild.HoldMs = 99999;
-        wild.FrameThickness = 0;
-        wild.FrameOpacity = 500;
-        wild.SnapThreshold = 400;
-        wild.TriggerKeyId = "K:0x00";
-        wild.FrameStyleId = "不存在的样式";
-        wild.ActionLeft = "不存在的动作";
-        var fixedUp = ConfigStore.Parse(ConfigStore.Serialize(wild));
-        Check("按住拖拽：长按时长被夹回 3000", fixedUp.HoldMs == 3000, fixedUp.HoldMs.ToString());
-        Check("按住拖拽：粗细被夹到最小 1", fixedUp.FrameThickness == 1, fixedUp.FrameThickness.ToString());
-        Check("按住拖拽：不透明度被夹回 100", fixedUp.FrameOpacity == 100, fixedUp.FrameOpacity.ToString());
-        Check("按住拖拽：吸附阈值被夹回 40", fixedUp.SnapThreshold == 40, fixedUp.SnapThreshold.ToString());
-        CheckEqual("按住拖拽：无效触发键回落 Enter", fixedUp.TriggerKeyId, "K:0x0D");
-        Check("按住拖拽：无效样式回落默认样式",
-            string.Equals(fixedUp.FrameStyleId, FrameStyles.DefaultId, StringComparison.Ordinal), fixedUp.FrameStyleId);
-        CheckEqual("按住拖拽：无效动作回落拖动", fixedUp.ActionLeft, Actions.Move);
-
-        // ---- 外框样式只留三套：细线环、虚线环、流光边 ----
-        Check("按住拖拽：外框样式只剩三套", FrameStyles.All.Length == 3, FrameStyles.All.Length.ToString());
-        CheckEqual("按住拖拽：三套样式是 虚线环/细线环/流光边",
-            string.Join("|", FrameStyles.All), "Dashed|Hairline|Aurora");
-        Check("按住拖拽：细线环还在", FrameStyles.IsValid("Hairline"));
-        Check("按住拖拽：流光边还在", FrameStyles.IsValid("Aurora"));
-        Check("按住拖拽：旧样式 柔光 已经删掉", !FrameStyles.IsValid("Glow"));
-        Check("按住拖拽：旧样式 霓虹 已经删掉", !FrameStyles.IsValid("Neon"));
-        Check("按住拖拽：旧样式 底部条 已经删掉", !FrameStyles.IsValid("Underline"));
-        var legacyStyle = ConfigStore.Parse("{\"FrameStyleId\":\"Glow\"}");
-        CheckEqual("按住拖拽：老配置里的旧样式自动回落虚线环", legacyStyle.FrameStyleId, FrameStyles.DefaultId);
-
-        // ---- 关着的时候：装配一次也不许装钩子 ----
-        var settings = new AppSettings();
-        using (var service = new HoldDragService(() => settings))
-        {
-            service.ApplySettings();
-            Check("按住拖拽：关着时不会装钩子", !service.Installed);
-            Check("按住拖拽：关着时也不报错", string.IsNullOrEmpty(service.LastError), service.LastError);
-
-            var editable = service.EditableConfig();
-            Check("按住拖拽：没配置时也能给出可编辑的默认值", editable != null && editable.HoldMs == 300);
-            if (editable is null) editable = new AppConfig();
-
-            editable.HoldMs = 520;
-            editable.TriggerKeyId = "K:0x20";
-            int persisted = 0;
-            var withSave = new HoldDragService(() => settings, _ => persisted++);
-            Check("按住拖拽：改参数能写回设置", withSave.ApplyEditedConfig(editable));
-            withSave.Dispose();
-            Check("按住拖拽：写回时通知了宿主保存", persisted == 1, persisted.ToString());
-
-            var saved = ConfigStore.Parse(settings.HoldDragJson);
-            Check("按住拖拽：写回的参数读得出来", saved.HoldMs == 520, saved.HoldMs.ToString());
-            CheckEqual("按住拖拽：写回的触发键读得出来", saved.TriggerKeyId, "K:0x20");
-            Check("按住拖拽：改参数不会顺手把功能打开", !settings.HoldDragEnabled);
-            Check("按住拖拽：写回之后钩子仍然没装", !withSave.Installed);
-        }
-
-        // ---- 触发键不能被配成一个普通字母键（否则打字都变成拖窗） ----
-        Check("按住拖拽：候选触发键都解析得出虚拟键码",
-            KeysUtil.ToVirtualKey("K:0x0D") != 0 && KeysUtil.ToVirtualKey("K:0x20") != 0
-            && KeysUtil.ToVirtualKey("K:LShift") != 0);
-        Check("按住拖拽：Enter 显示成可读名字而不是裸 id",
-            KeysUtil.DisplayName("K:0x0D").Length > 0 && KeysUtil.DisplayName("K:0x0D") != "K:0x0D");
-
-
-        // ---- 触发键候选表覆盖住了要显示的名字（下拉框不能出现裸 id） ----
-        Check("按住拖拽：候选触发键都有可读名字",
-            KeysUtil.DisplayName("M:1").Length > 0 && KeysUtil.DisplayName("K:LShift").Length > 0);
-
-        // ---- 黑名单/规则：两个挑程序的入口与手打共用同一个追加逻辑 ----
-        CheckEqual("黑名单追加：空清单直接放进去",
-            UI.Views.HoldDragView.AppendToken("", "obs64.exe"), "obs64.exe");
-        CheckEqual("黑名单追加：换行分隔、保持原顺序",
-            UI.Views.HoldDragView.AppendToken("obs64.exe\ngame*.exe", "code.exe"),
-            "obs64.exe\ngame*.exe\ncode.exe");
-        CheckEqual("黑名单追加：同一个程序不会进两次（忽略大小写）",
-            UI.Views.HoldDragView.AppendToken("OBS64.exe", "obs64.exe"), "OBS64.exe");
-        CheckEqual("黑名单追加：空白行会被抹掉",
-            UI.Views.HoldDragView.AppendToken("  obs64.exe  \n\n", "code.exe"), "obs64.exe\ncode.exe");
-
-        CheckEqual("按程序规则：新程序写成 程序名=行为",
-            UI.Views.HoldDragView.UpsertRule("", "wps.exe", "Ignore"), "wps.exe=Ignore");
-        CheckEqual("按程序规则：同名换行为，不新增一行",
-            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore", "wps.exe", "MoveOnly"), "wps.exe=MoveOnly");
-        CheckEqual("按程序规则：不同程序各占一行",
-            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore", "code.exe", "NoFrame"),
-            "wps.exe=Ignore\ncode.exe=NoFrame");
-        CheckEqual("按程序规则：行为留空按完全不接管算",
-            UI.Views.HoldDragView.UpsertRule("", "game.exe", ""), "game.exe=Ignore");
-        // 手打用分号（引擎自己的写法）也得拆开，不能把 "; code.exe=MoveOnly" 当成行为名
-        CheckEqual("按程序规则：分号分隔的清单也拆得开",
-            UI.Views.HoldDragView.UpsertRule("wps.exe=Ignore; code.exe=MoveOnly", "code.exe", "NoFrame"),
-            "wps.exe=Ignore\ncode.exe=NoFrame");
-
-        // ---- 清单是配置的视图：删掉一条就等于把它从配置里拿掉 ----
-        CheckEqual("程序例外：删一条不影响别的", UI.Views.HoldDragView.RemoveToken("a.exe\nb.exe", "b.exe"), "a.exe");
-        CheckEqual("程序例外：删不存在的条目什么都不变",
-            UI.Views.HoldDragView.RemoveToken("a.exe", "zz.exe"), "a.exe");
-        CheckEqual("按程序规则：删规则按程序名匹配",
-            UI.Views.HoldDragView.RemoveRule("wps.exe=Ignore; code.exe=MoveOnly", "wps.exe"), "code.exe=MoveOnly");
-
-        // ---- 拖动不再按屏幕刷新率节流（AltDrag 那套：每个鼠标移动事件立刻落位） ----
-        // 这两个配置字段和节流 API 已经删掉，留着的话就会有人"顺手"再把它接回移动路径。
-        Check("按住拖拽：配置里已经没有「跟随刷新率」",
-            typeof(AppConfig).GetProperty("DragRefreshMode") is null && typeof(AppConfig).GetProperty("DragRefreshHz") is null);
-        Check("按住拖拽：拖动线程没有帧间隔节流",
-            typeof(DragWorker).GetProperty("FrameIntervalMs") is null
-            && typeof(AppConfig).GetMethod("FrameIntervalMs") is null);
-
-        // ---- 拖拽核完全照 AltDrag：Input-Plus 自己加的两条语义（位移门槛、阈值按 DPI 缩放）已经拿掉 ----
-        // 留着的话，改了 ini 里的 SnapThreshold 在 150% 屏上也不是同一个手感，跟源码对不上。
-        Check("按住拖拽：配置里已经没有「拖动阈值 / 出界容差」",
-            typeof(AppConfig).GetProperty("DragThreshold") is null
-            && typeof(AppConfig).GetProperty("DragOutThresholdPx") is null);
-        Check("按住拖拽：吸附阈值不再按 DPI 缩放",
-            typeof(DragEngine).GetMethod("ScaledThreshold", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) is null);
-        Check("按住拖拽：抽帧时那个 100ms 补帧定时器还在（hooks.c 的 MOVE_TIMER）",
-            typeof(DragEngine).GetMethod("StartMovePollTimer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null);
-        var dflt = ConfigStore.Parse("");
-        Check("按住拖拽：抽帧倍数跟 AltDrag.ini 一样（移动 2 / 缩放 5）",
-            dflt.MoveRate == 2 && dflt.ResizeRate == 5, dflt.MoveRate + "/" + dflt.ResizeRate);
-        Check("按住拖拽：AutoRemaximize 默认按 ini 的 1（一秒还原关着）",
-            dflt.AutoRemaximize && !dflt.AutoRemaximizeRestore);
-        // ---- 延迟优化：吸附目标缓存 + 拖动期间定时器精度 1ms ----
-        // 少了这两样，一帧里光"重新枚举所有顶层窗口"就要 20~40ms，写窗口永远比光标晚一帧以上。
-        Check("按住拖拽：吸附目标带缓存（不是每帧 EnumWindows）",
-            typeof(SnapEngine).GetMethod("CollectIfStale", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) != null);
-        Check("按住拖拽：拖动期间把系统定时器精度提到 1ms",
-            typeof(DragEngine).GetField("_timerPeriodRaised", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null);
-
-        // ---- 拖动轨迹账本：只为"手停了窗口还在动"这种反馈留下逐帧证据（Core/DragTrace.cs） ----
-        // 它不是功能，是证据链：删掉它，下一次同样的反馈就只剩猜。
-        Check("按住拖拽：逐帧轨迹账本还在（drag-trace.txt）",
-            typeof(DragEngine).GetMethod("SampleForTrace", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null
-            && DragTrace.PathFor(System.IO.Path.Combine("x", "drag-diag.txt")).EndsWith("drag-trace.txt", StringComparison.Ordinal));
-
-        // ---- 拖动跟手：「手停了窗口还在跑」的病根 ----
-        TestHoldDragTailMath();
-        TestHoldDragLiveCursor();
-
-        TestHoldDragResizeAxes();
+        TestHoldDragConfig();
+        TestHoldDragRules();
+        TestHoldDragLive();
     }
 
-    // ---------------- 收尾对账的算术 ----------------
-    // 松手时最后那一帧写下去之后要跟窗口的真实矩形对一次，对不上就补写。
-    // 这段全是整数减法，单独钉住，免得哪天"顺手优化"把符号或宽高算反。
-    private static void TestHoldDragTailMath()
+    // ---------------- 配置：默认值 / 往返 / 收敛 ----------------
+
+    private static void TestHoldDragConfig()
     {
-        var want = new Native.RECT(100, 100, 400, 300);
+        var cfg = AppConfig.Parse("");
+        CheckEqual("按住拖拽：默认触发键是 Enter", cfg.TriggerKey, "K:0x0D");
+        Check("按住拖拽：回车显示成 Enter",
+            KeysUtil.DisplayName("K:0x0D").Contains("Enter", StringComparison.OrdinalIgnoreCase),
+            KeysUtil.DisplayName("K:0x0D"));
+        Check("按住拖拽：触发键的虚拟键码认得出来", KeysUtil.ToVirtualKey("K:0x0D") == 13);
+        CheckEqual("按住拖拽：默认左键拖动窗口", cfg.ActionLeft, Actions.Move);
+        CheckEqual("按住拖拽：默认右键改大小", cfg.ActionRight, Actions.Resize);
+        CheckEqual("按住拖拽：默认中键也改大小", cfg.ActionMiddle, Actions.Resize);
+        CheckEqual("按住拖拽：默认侧键什么都不做", cfg.ActionX1 + "/" + cfg.ActionX2, Actions.Nothing + "/" + Actions.Nothing);
+        Check("按住拖拽：默认贴到窗口内侧（AltDrag.ini 的 AutoSnap=3）", cfg.AutoSnap == 3);
+        Check("按住拖拽：默认吸附距离 20（AltDrag 的 SnapThreshold）", cfg.SnapThreshold == 20);
+        Check("按住拖拽：默认开 Aero 贴边", cfg.AeroSnap);
+        Check("按住拖拽：默认拖到别的屏就最大化（AutoRemaximize=1）", cfg.AutoRemaximize == 1);
+        Check("按住拖拽：默认不抢焦点", !cfg.AutoFocus);
+        Check("按住拖拽：默认每个事件都跟手（抽帧 1/1）", cfg.MoveRate == 1 && cfg.ResizeRate == 1);
+        Check("按住拖拽：默认不吞触发键（回车该打还是打）", !cfg.SwallowTrigger);
 
-        Check("收尾对账：严丝合缝不算偏",
-            !DragEngine.TailMismatch(want, new Native.RECT(100, 100, 400, 300), out _, out _, out _, out _));
+        // ---- 往返：界面改的每一项都得原样存回来 ----
+        cfg.TriggerKey = "K:0x20";
+        cfg.SwallowTrigger = true;
+        cfg.ActionLeft = Actions.Resize;
+        cfg.ActionMiddle = Actions.Center;
+        cfg.ActionRight = Actions.Move;
+        cfg.ActionX1 = Actions.AlwaysOnTop;
+        cfg.ActionX2 = Actions.Close;
+        cfg.AeroSnap = false;
+        cfg.AutoSnap = 2;
+        cfg.SnapThreshold = 33;
+        cfg.AutoRemaximize = 2;
+        cfg.AutoFocus = true;
+        cfg.MoveRate = 3;
+        cfg.ResizeRate = 4;
+        cfg.ProcessBlacklist = "wps.exe\ncode.exe";
+        cfg.WindowBlacklist = "*|FooWnd";
+        var back = AppConfig.Parse(cfg.Serialize());
+        CheckEqual("按住拖拽：往返保住触发键", back.TriggerKey, "K:0x20");
+        Check("按住拖拽：往返保住吞键开关", back.SwallowTrigger);
+        CheckEqual("按住拖拽：往返保住五个鼠标动作",
+            back.ActionLeft + "/" + back.ActionMiddle + "/" + back.ActionRight + "/" + back.ActionX1 + "/" + back.ActionX2,
+            "Resize/Center/Move/AlwaysOnTop/Close");
+        Check("按住拖拽：往返保住贴边设置", !back.AeroSnap && back.AutoSnap == 2 && back.SnapThreshold == 33);
+        Check("按住拖拽：往返保住多显示器与焦点设置", back.AutoRemaximize == 2 && back.AutoFocus);
+        Check("按住拖拽：往返保住抽帧倍数", back.MoveRate == 3 && back.ResizeRate == 4);
+        Check("按住拖拽：往返保住程序例外", back.ProcessBlacklist == "wps.exe\ncode.exe", back.ProcessBlacklist);
+        CheckEqual("按住拖拽：往返保住窗口例外", back.WindowBlacklist, "*|FooWnd");
 
-        bool off = DragEngine.TailMismatch(want, new Native.RECT(103, 96, 403, 296), out int dx, out int dy, out int dw, out int dh);
-        Check("收尾对账：偏 3,-4 能带符号算出来",
-            off && dx == 3 && dy == -4 && dw == 0 && dh == 0, dx + "," + dy + "," + dw + "," + dh);
+        // ---- 越界值收敛 ----
+        var wild = AppConfig.Parse("{\"AutoSnap\":9,\"SnapThreshold\":-50,\"AutoRemaximize\":7,\"MoveRate\":0,\"ResizeRate\":99,\"ActionLeft\":\"炸\",\"TriggerKey\":\"\"}");
+        Check("按住拖拽：AutoSnap 9 收到 3", wild.AutoSnap == 3, wild.AutoSnap.ToString());
+        Check("按住拖拽：吸附距离负数收到 0", wild.SnapThreshold == 0, wild.SnapThreshold.ToString());
+        Check("按住拖拽：AutoRemaximize 7 收到 2", wild.AutoRemaximize == 2, wild.AutoRemaximize.ToString());
+        Check("按住拖拽：抽帧 0 收到 1", wild.MoveRate == 1 && wild.ResizeRate == 8, wild.MoveRate + "/" + wild.ResizeRate);
+        CheckEqual("按住拖拽：认不出的动作落到 Nothing", wild.ActionLeft, Actions.Nothing);
+        CheckEqual("按住拖拽：空触发键回到 Enter", wild.TriggerKey, "K:0x0D");
+        Check("按住拖拽：坏 JSON 也回默认值", AppConfig.Parse("{ 不是 json").AutoSnap == 3);
 
-        bool sized = DragEngine.TailMismatch(want, new Native.RECT(100, 100, 420, 280), out _, out _, out int dw2, out int dh2);
-        Check("收尾对账：目标自己改了尺寸也算偏",
-            sized && dw2 == 20 && dh2 == -20, dw2 + "," + dh2);
+        // ---- 动作表：AltDrag 的八个动作 ----
+        Check("按住拖拽：动作表就是 AltDrag 那八个", Actions.All.Length == 8);
+        Check("按住拖拽：动作编号从 1 开始（0 留给「没有动作」）",
+            Actions.ToCode(Actions.Move) == 1 && Actions.ToCode(Actions.Nothing) == 8);
+        Check("按住拖拽：动作名大小写不敏感", Actions.ToCode("move") == Actions.ToCode(Actions.Move));
+
+        // ---- 旧引擎必须彻底不在：留着就等于队列还在 ----
+        var asm = typeof(SelfTest).Assembly;
+        Check("按住拖拽：旧的工作线程队列已经删掉",
+            asm.GetType("InputPlus.Modules.HoldDrag.DragWorker") == null
+            && asm.GetType("InputPlus.Modules.HoldDrag.DragEngine") == null);
+        Check("按住拖拽：旧的协调器已经删掉", asm.GetType("InputPlus.Modules.HoldDrag.Coordinator") == null);
+        Check("按住拖拽：引擎直接挂在钩子上（IInputSink）",
+            typeof(IInputSink).IsAssignableFrom(typeof(AltDragSink)));
+        Check("按住拖拽：抽帧补帧定时器还在（hooks.c 的 MOVE_TIMER）",
+            typeof(AltDragSink).GetMethod("StartMoveTimer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) != null);
+        Check("按住拖拽：单键捕获窗在（Enter 也能选）",
+            typeof(UI.Windows.TriggerKeyWindow).GetMethod("OnPreviewKeyDown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly) != null);
     }
 
-    // ---------------- 拖动只认「此刻的光标」 ----------------
-    // 用户的原话是"我手停了、鼠标都不动了，窗口还会跑一段时间，最后跑到不是我要的位置"。
-    // 病根：钩子 → 工作线程 → 目标程序这条链会排队，事件里带的坐标是"过去的坐标"，
-    // 把它写下去，窗口就是在追历史。AltDrag 的做法是每个事件到了现取 GetCursorPos。
-    //
-    // 这里用**真窗口 + 假光标**把这条规则钉死：事件里的坐标再怎么离谱，窗口也只认光标。
-    // 假光标省得为了跑一次自检去挪用户的鼠标；真窗口则保证走的是真正的 SetWindowPos 链路。
-    private static void TestHoldDragLiveCursor()
+    // ---------------- 黑名单：AltDrag 的 [Blacklist] ----------------
+
+    private static void TestHoldDragRules()
+    {
+        Check("按住拖拽：进程例外按程序名匹配", AppRules.MatchesProcesses("wps.exe", "wps.exe"));
+        Check("按住拖拽：进程例外带 .exe 和不带都认", AppRules.MatchesProcesses("wps", "wps.exe"));
+        Check("按住拖拽：进程例外支持通配", AppRules.MatchesProcesses("*team*", "teams.exe"));
+        Check("按住拖拽：进程例外空清单不拦任何程序", !AppRules.MatchesProcesses("", "chrome.exe"));
+        Check("按住拖拽：进程例外命中就不接管", AppRules.MatchesProcesses("chrome.exe", "Chrome.exe"));
+
+        Check("按住拖拽：窗口例外只要类名对得上就拦",
+            AppRules.MatchesWindows("|#32770", "explorer.exe", "#32770"));
+        Check("按住拖拽：窗口例外只要进程对得上也拦",
+            AppRules.MatchesWindows("explorer.exe|", "explorer.exe", "CabinetWClass"));
+        Check("按住拖拽：窗口例外两边都要对上",
+            !AppRules.MatchesWindows("explorer.exe|#32770", "explorer.exe", "CabinetWClass"));
+        Check("按住拖拽：窗口例外支持 * 任意",
+            AppRules.MatchesWindows("*|TaskSwitcherWnd", "anything.exe", "TaskSwitcherWnd"));
+
+        var cfg = AppConfig.Parse("");
+        Check("按住拖拽：默认窗口例外里带着 AltDrag 那几条",
+            AppRules.MatchesWindows(cfg.WindowBlacklist, "x.exe", "MultitaskingViewFrame")
+            && AppRules.MatchesWindows(cfg.WindowBlacklist, "x.exe", "#32770"),
+            cfg.WindowBlacklist);
+        CheckEqual("按住拖拽：例外清单换行/逗号/分号都当分隔符",
+            string.Join("|", AppRules.Rows("a.exe\nb.exe, c.exe; d.exe")), "a.exe|b.exe|c.exe|d.exe");
+    }
+
+    // ---------------- 真窗口 + 假光标：整条链路 ----------------
+
+    private static void TestHoldDragLive()
     {
         nint hwnd = IntPtr.Zero;
         uint tid = 0u;
-        var ready = new System.Threading.ManualResetEventSlim(initialState: false);
-        var pump = new System.Threading.Thread(() =>
+        var ready = new ManualResetEventSlim(initialState: false);
+        var pump = new Thread(() =>
         {
-            // 窗口必须建在一台会转消息的线程上：工作线程 SetWindowPos 时要跨线程发消息，
-            // 那边不抽消息就会把写窗口的那一帧卡死（测试反而会超时）。
-            hwnd = Native.CreateWindowExW(0u, "STATIC", "inputplus-drag-selftest", 0u, 100, 100, 300, 200, IntPtr.Zero, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
+            // 窗口必须建在一台会转消息的线程上：钩子这边同步 MoveWindow 时要跨线程发消息，
+            // 那边不抽消息，写窗口的那一帧就会卡住（测试反而超时）。
+            // 0x00CF0000 = WS_OVERLAPPEDWINDOW：有标题栏、有可调边框，跟普通窗口一样。
+            hwnd = Native.CreateWindowExW(0u, "STATIC", "inputplus-holddrag-selftest", 0x00CF0000u,
+                200, 200, 400, 300, IntPtr.Zero, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
             tid = Native.GetCurrentThreadId();
             ready.Set();
             Native.MSG msg;
@@ -244,296 +166,168 @@ public static partial class SelfTest
         pump.Start();
         ready.Wait(3000);
 
-        Func<Native.POINT?> previous = DragEngine.CursorProbeForTest;
-        DragEngine? engine = null;
+        Func<Native.POINT?>? previousCursor = AltDragSink.CursorProbeForTest;
+        AltDragSink? sink = null;
         try
         {
             if (hwnd == IntPtr.Zero)
             {
-                Check("按住拖拽跟手：自检窗口建不出来（跳过拖动行为断言）", true, "CreateWindowEx 返回 0");
+                Check("按住拖拽：自检窗口建不出来（跳过拖动行为断言）", true, "CreateWindowEx 返回 0");
                 return;
             }
-            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
 
-            var cfg = ConfigStore.Parse("");
-            cfg.SnapToEdges = false;
-            cfg.ShowDragHud = false;
-            cfg.ShowActivationFrame = false;
-            cfg.BringToFront = false;
-            cfg.ShakeMinimizeOthers = false;
-            cfg.MoveRate = 1;
-            DragDiag.Init(InputPlus.Core.AppPaths.DataDir);
-            engine = new DragEngine(() => cfg);
+            // 自检进程的 DPI 缩放会影响坐标换算：钉成 1，坐标就是物理像素。
+            CoordSpace.SetScaleForTest(1.0);
 
-            int fx = 1000;
-            int fy = 800;
-            DragEngine.CursorProbeForTest = () => new Native.POINT(fx, fy);
-            bool began = engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800));
-            Check("按住拖拽跟手：能开始拖动自检窗口", began);
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 200, 200, 400, 300, 0x0040u);
+            Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, 0x0011u);
+            Thread.Sleep(80);
+            Native.RECT start;
+            Native.GetWindowRect(hwnd, out start);
 
-            // ① 事件里的坐标离光标 600px：旧实现会把窗口拽过去，现在它必须纹丝不动
-            for (int i = 0; i < 8; i++)
-            {
-                engine.DeliverCursor(new Native.POINT(1600, 1200));
-            }
-            System.Threading.Thread.Sleep(180);
-            Native.GetWindowRect(hwnd, out Native.RECT r1);
-            Check("按住拖拽跟手：事件里的过期坐标不会把窗口带跑",
-                Math.Abs(r1.Left - 100) <= 1 && Math.Abs(r1.Top - 100) <= 1, r1.Left + "," + r1.Top);
-
-            // ② 光标真的走了 40,50 → 窗口必须正好跟 40,50（哪怕事件里给的是 0,0）
-            fx = 1040;
-            fy = 850;
-            engine.DeliverCursor(new Native.POINT(0, 0));
-            System.Threading.Thread.Sleep(180);
-            Native.GetWindowRect(hwnd, out Native.RECT r2);
-            Check("按住拖拽跟手：光标走 40,50，窗口跟着走 40,50",
-                Math.Abs(r2.Left - 140) <= 1 && Math.Abs(r2.Top - 150) <= 1, r2.Left + "," + r2.Top);
-
-            // ④ 一口气打 60 个移动事件：队列里始终只能有一条在途消息，
-            //    最后落点必须是"最后一次光标位置"，不多不少（旧实现会积压成串，松手后再补跑一段）
-            DragWorker.ResetStats();
-            fx = 500;
-            fy = 500;
-            for (int i = 0; i < 60; i++)
-            {
-                fx += 7;
-                fy += 5;
-                engine.DeliverCursor(new Native.POINT(fx, fy));
-            }
-            System.Threading.Thread.Sleep(250);
-            Native.GetWindowRect(hwnd, out Native.RECT r4);
-            Check("按住拖拽：连打 60 个移动事件后停在最后一个光标位置，不会再多跑一段",
-                Math.Abs(r4.Left - (fx - 900)) <= 1 && Math.Abs(r4.Top - (fy - 700)) <= 1, r4.Left + "," + r4.Top);
-            Check("按住拖拽：连打 60 个移动事件，线程消息队列里始终只有一条在途", DragWorker.MaxDrained == 0, DragWorker.MaxDrained.ToString());
-            Check("按住拖拽：从排进队列到开始写窗口不超过一帧", DragWorker.MaxLagMs <= 40, DragWorker.MaxLagMs + "ms");
-
-            // ③ 松手：收尾那一帧之后窗口必须还停在光标对应的位置
-            engine.End();
-            System.Threading.Thread.Sleep(300);
-            Native.GetWindowRect(hwnd, out Native.RECT r3);
-            Check("按住拖拽收尾：松手后停在光标对应的位置，不再自己往前跑",
-                Math.Abs(r3.Left - r4.Left) <= 1 && Math.Abs(r3.Top - r4.Top) <= 1, r3.Left + "," + r3.Top);
-
-            bool wrote = false;
-            string diagPath = DragDiag.Path;
-            try
-            {
-                wrote = diagPath.Length > 0 && System.IO.File.Exists(diagPath)
-                    && System.IO.File.ReadAllText(diagPath).Contains("收尾补写");
-            }
-            catch
-            {
-            }
-            Check("按住拖拽：拖动结束会往 drag-diag.txt 记一笔明文账", wrote, diagPath);
-
-            // ⑦ 收尾必须是同步的：松手那一帧以前是排给工作线程的，而 End 的 finally 立刻 Cleanup，
-            //    把 _session.Hwnd 清成 0 —— 工作项醒来时 IsWindow(0) 把它饿死，最后一帧没写下去，
-            //    ReconcileTail 拿着上一帧的旧矩形去"纠正"，松手瞬间窗口就被拽回去一截。
-            //    现在 End() 返回时那一帧已经落地：这里连 sleep 都不给，第一次 GetWindowRect 就得是终值。
-            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
-            fx = 1000;
-            fy = 800;
-            Check("按住拖拽收尾同步：能开始第二次拖动", engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800)));
-            System.Threading.Thread.Sleep(40);
-            fx = 1180;
-            fy = 940;
-            engine.DeliverCursor(new Native.POINT(fx, fy));
-            System.Threading.Thread.Sleep(120);
-            fx = 1220;
-            fy = 970;
-            engine.DeliverCursor(new Native.POINT(fx, fy));
-            engine.End();
-            Native.GetWindowRect(hwnd, out Native.RECT r7);
-            Check("按住拖拽收尾同步：End() 一返回，窗口就已经停在最后一次光标位置",
-                Math.Abs(r7.Left - (fx - 900)) <= 1 && Math.Abs(r7.Top - (fy - 700)) <= 1, r7.Left + "," + r7.Top);
-
-            // ⑤ AltDrag 的 MOVE_TIMER（hooks.c:1849-1854、1999-2008）：抽帧开着的时候，
-            //    如果低层鼠标钩子被系统掐掉（光标还在动、钩子不再来事件），源码靠一个 100ms 定时器补一帧。
-            //    这里把 MoveRate 调成 2（每两个事件才写一次），然后只挪假光标、不喂事件：
-            //    定时器不干活的话，窗口就会停在原地等下一个事件。
-            engine.End();
-            System.Threading.Thread.Sleep(120);
-            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
-            cfg.MoveRate = 2;
-            fx = 1000;
-            fy = 800;
-            Check("按住拖拽补帧：抽帧 2 时还能开始拖动",
-                engine.Begin(hwnd, move: true, button: 0, pt: new Native.POINT(1000, 800)));
-            System.Threading.Thread.Sleep(60);
-            fx = 1060;
-            fy = 840;
-            System.Threading.Thread.Sleep(320);
-            Native.GetWindowRect(hwnd, out Native.RECT r5);
-            Check("按住拖拽补帧：钩子不再来事件时，100ms 定时器把窗口补到光标位置",
-                Math.Abs(r5.Left - 160) <= 1 && Math.Abs(r5.Top - 140) <= 1, r5.Left + "," + r5.Top);
-            engine.End();
-            System.Threading.Thread.Sleep(120);
-
-            // ⑥ AutoRemaximize=2 的一秒还原（hooks.c:1974-1997）：先解锁，再按光标在新显示器里的
-            //    相对位置重算 offset，然后 SW_RESTORE。这里单独钉住"解锁 + 比例 + 真的退出了最大化"。
-            Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 300, 200, 4u);
-            Native.WINDOWPLACEMENT wp = new Native.WINDOWPLACEMENT
-            {
-                length = System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.WINDOWPLACEMENT))
-            };
-            Native.GetWindowPlacement(hwnd, ref wp);
-            wp.showCmd = Native.SW_MAXIMIZE;
-            Native.SetWindowPlacement(hwnd, ref wp);
-            var alt = new AltState
-            {
-                OriginWidth = 800,
-                OriginHeight = 600,
-                Locked = true
-            };
-            Native.POINT probe = new Native.POINT(200, 150);
-            Native.MONITORINFO mi = Native.GetMonitorInfoAt(probe);
-            int wantOffsetX = (int)Math.Round((double)(probe.X - mi.rcMonitor.Left) / (double)mi.rcMonitor.Width * 800.0);
-            bool restored = AltDragCore.RestoreAfterRemaximize(alt, hwnd, probe);
-            Check("按住拖拽重最大化后还原：解锁并退出最大化", restored && !alt.Locked && !Native.IsZoomed(hwnd));
-            Check("按住拖拽重最大化后还原：offset 按光标在新显示器里的比例重算",
-                alt.OffsetX == wantOffsetX, alt.OffsetX + " vs " + wantOffsetX);
-        }
-        finally
-        {
-            DragEngine.CursorProbeForTest = previous;
-            try
-            {
-                engine?.Dispose();
-            }
-            catch
-            {
-            }
-            if (hwnd != IntPtr.Zero)
-            {
-                Native.DestroyWindow(hwnd);
-            }
-            if (tid != 0u)
-            {
-                Native.PostThreadMessageW(tid, 18u, IntPtr.Zero, IntPtr.Zero);
-            }
-            try
-            {
-                pump.Join(1000);
-            }
-            catch
-            {
-            }
-            ready.Dispose();
-        }
-    }
-    // ---------------- 临时探针：缩放的两个轴到底有没有动 ----------------
-    // ---------------- 缩放：两轴都得能动 ----------------
-    // AltDrag 的九宫格（hooks.c:1700-1710）在"只有一条轴落在中间带"时会把那一轴锁死：
-    // 抓左边框中段上下拖，只有宽度会变。用户手上的预期是"按住触发键随便拖，两个方向都能调"，
-    // 所以移植里把锁死的那一轴换成了"离得近的那条边"（上半→上边、下半→下边、左半→左边、右半→右边），
-    // 两轴都落在中间带时仍然走 AltDrag 的四向对称扩张。这一段真起一个窗口拖给它看。
-    private static void TestHoldDragResizeAxes()
-    {
-        nint hwnd = IntPtr.Zero;
-        var ready = new System.Threading.ManualResetEventSlim(initialState: false);
-        var pump = new System.Threading.Thread(() =>
-        {
-            hwnd = Native.CreateWindowExW(0u, "STATIC", "inputplus-resize-axes", 0x00CF0000u, 100, 100, 400, 300, IntPtr.Zero, IntPtr.Zero, Native.GetModuleHandleW(null), IntPtr.Zero);
-            ready.Set();
-            Native.MSG msg;
-            while (Native.GetMessageW(out msg, IntPtr.Zero, 0u, 0u) > 0)
-            {
-                Native.DispatchMessageW(ref msg);
-            }
-        });
-        pump.IsBackground = true;
-        pump.Start();
-        ready.Wait(3000);
-        if (hwnd == IntPtr.Zero)
-        {
-            Check("缩放：窗口建不出来", false);
-            return;
-        }
-
-        var previous = DragEngine.CursorProbeForTest;
-        DragEngine engine = null!;
-        try
-        {
-            var cfg = ConfigStore.Parse("");
-            cfg.SnapToEdges = false;
-            cfg.ShowDragHud = false;
-            cfg.ShowActivationFrame = false;
-            cfg.BringToFront = false;
-            cfg.ShakeMinimizeOthers = false;
+            var cfg = AppConfig.Parse("");
+            cfg.TriggerKey = "K:0x0D";
+            cfg.SwallowTrigger = false;
+            cfg.ActionLeft = Actions.Move;
+            cfg.ActionRight = Actions.Resize;
+            cfg.ActionMiddle = Actions.Nothing;
+            cfg.AutoSnap = 0;
+            cfg.AeroSnap = false;
+            cfg.AutoRemaximize = 0;
+            cfg.AutoFocus = false;
             cfg.MoveRate = 1;
             cfg.ResizeRate = 1;
-            engine = new DragEngine(() => cfg);
+            sink = new AltDragSink(() => cfg);
 
-            int fx = 0;
-            int fy = 0;
-            DragEngine.CursorProbeForTest = () => new Native.POINT(fx, fy);
-
-            Native.RECT Run(int gx, int gy, int dx, int dy)
-            {
-                Native.SetWindowPos(hwnd, IntPtr.Zero, 100, 100, 400, 300, 4u);
-                System.Threading.Thread.Sleep(60);
-                fx = gx;
-                fy = gy;
-                engine.Begin(hwnd, move: false, button: 1, pt: new Native.POINT(gx, gy));
-                for (int i = 1; i <= 6; i++)
-                {
-                    fx = gx + dx * i / 6;
-                    fy = gy + dy * i / 6;
-                    engine.DeliverCursor(new Native.POINT(fx, fy));
-                    System.Threading.Thread.Sleep(20);
-                }
-                System.Threading.Thread.Sleep(150);
-                Native.GetWindowRect(hwnd, out Native.RECT r1);
-                engine.End();
-                System.Threading.Thread.Sleep(120);
-                return r1;
-            }
+            int fx = start.Left + 200;
+            int fy = start.Top + 150;
+            AltDragSink.CursorProbeForTest = () => new Native.POINT(fx, fy);
 
             static bool Near(int a, int b) => Math.Abs(a - b) <= 2;
-            static string Fmt(Native.RECT r) => r.Left + "," + r.Top + "," + r.Width + "x" + r.Height;
+            static string Fmt(Native.RECT r) => r.Left + "," + r.Top + " " + r.Width + "x" + r.Height;
 
-            // 底边中段往下拖 60：只动高，宽度和上边不许动。
-            Native.RECT bottom = Run(300, 395, 0, 60);
-            Check("缩放：抓底边往下拖只改高", Near(bottom.Top, 100) && Near(bottom.Height, 360) && Near(bottom.Width, 400), Fmt(bottom));
+            // ---- 触发键 ----
+            var enterDown = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+            Check("按住拖拽：默认不吞 Enter", !sink.OnKeyboard(true, ref enterDown));
+            cfg.SwallowTrigger = true;
+            var enterDown2 = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+            Check("按住拖拽：打开「吞掉触发键」后按住 Enter 被吞掉", sink.OnKeyboard(true, ref enterDown2));
+            cfg.SwallowTrigger = false;
 
-            // 左边框中段（上下拖本来是被 AltDrag 锁死的那种）：宽和高都得跟着动。
-            Native.RECT leftMid = Run(105, 250, -40, 60);
-            Check("缩放：抓左边框中段也能改高", Near(leftMid.Width, 440) && Near(leftMid.Height, 360), Fmt(leftMid));
-            Check("缩放：抓左边框中段改高时不挪上边", Near(leftMid.Top, 100) && Near(leftMid.Left, 60), Fmt(leftMid));
+            // ---- 移动：按下 → 跟手 → 手停就停 ----
+            var down = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            Check("按住拖拽：按住 Enter + 左键按下能接管窗口", sink.OnMouse(Native.WM_LBUTTONDOWN, ref down));
+            Check("按住拖拽：接管的是鼠标下的那个窗口", sink.TargetForTest == hwnd, sink.TargetForTest.ToString());
+            Check("按住拖拽：左键按下后就已经在拖动", sink.IsDragging);
 
-            // 右边框中段往左拖：只改宽，高不许被带跑。
-            Native.RECT rightMid = Run(495, 250, -60, 0);
-            Check("缩放：抓右边框中段横拖只改宽", Near(rightMid.Width, 340) && Near(rightMid.Height, 300), Fmt(rightMid));
+            fx += 40;
+            fy += 30;
+            var move = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_MOUSEMOVE, ref move);
+            Native.GetWindowRect(hwnd, out Native.RECT moved);
+            // 关键：这里不 sleep。事件一返回窗口就得在新位置 —— 没有队列，就没有追帧。
+            Check("按住拖拽：鼠标事件一返回，窗口就已经在新的位置",
+                Near(moved.Left, start.Left + 40) && Near(moved.Top, start.Top + 30), Fmt(moved));
 
-            // 上边中段往下拖 60：上边跟着走、高变小，宽度也跟着动（另一轴不再锁死）。
-            Native.RECT topMid = Run(300, 105, 40, 60);
-            Check("缩放：抓上边中段下拖，上边跟着走", Near(topMid.Top, 160) && Near(topMid.Height, 240), Fmt(topMid));
-            Check("缩放：抓上边中段也能改宽", Near(topMid.Width, 440), Fmt(topMid));
+            long frames = sink.FramesWritten;
+            Thread.Sleep(300);
+            Native.GetWindowRect(hwnd, out Native.RECT still);
+            Check("按住拖拽：手停下来，窗口也停下来（不会自己再跑一段）",
+                Near(still.Left, moved.Left) && Near(still.Top, moved.Top), Fmt(still));
+            Check("按住拖拽：没人在偷偷补帧", sink.FramesWritten == frames, (sink.FramesWritten - frames).ToString());
 
-            // 抓窗口正中：AltDrag 的四向对称扩张，原样保留。
-            Native.RECT center = Run(300, 250, 40, 60);
-            Check("缩放：抓正中仍是四向对称扩张",
-                Near(center.Left, 60) && Near(center.Top, 40) && Near(center.Width, 480) && Near(center.Height, 420), Fmt(center));
+            // ---- 松手 ----
+            var up = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_LBUTTONUP, ref up);
+            Check("按住拖拽：松开鼠标就结束拖动", !sink.IsDragging);
+            fx += 200;
+            fy += 200;
+            var afterUp = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_MOUSEMOVE, ref afterUp);
+            Thread.Sleep(80);
+            Native.GetWindowRect(hwnd, out Native.RECT afterUpRect);
+            Check("按住拖拽：松手之后的鼠标移动不再动窗口", Near(afterUpRect.Left, still.Left), Fmt(afterUpRect));
+
+            // ---- 缩放：抓底边往下拖，只长高 ----
+            Thread.Sleep(600);      // 越过双击判定窗口（GetDoubleClickTime 默认 500ms）
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 200, 200, 400, 300, 0x0014u);
+            Thread.Sleep(60);
+            Native.GetWindowRect(hwnd, out start);
+            fx = start.Left + 200;
+            fy = start.Bottom - 4;
+            var rdown = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            Check("按住拖拽：右键按在底边能开始改大小", sink.OnMouse(Native.WM_RBUTTONDOWN, ref rdown) && sink.IsDragging);
+            fy += 60;
+            var rmove = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_MOUSEMOVE, ref rmove);
+            Native.GetWindowRect(hwnd, out Native.RECT resized);
+            Check("按住拖拽：抓底边往下 60，高度跟着长 60",
+                Near(resized.Height, start.Height + 60) && Near(resized.Top, start.Top) && Near(resized.Width, start.Width), Fmt(resized));
+            var rup = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_RBUTTONUP, ref rup);
+            Check("按住拖拽：松开右键结束缩放", !sink.IsDragging);
+
+            // ---- Esc：立刻收手 ----
+            Thread.Sleep(600);
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 200, 200, 400, 300, 0x0014u);
+            Thread.Sleep(60);
+            Native.GetWindowRect(hwnd, out start);
+            fx = start.Left + 200;
+            fy = start.Top + 150;
+            var edown = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_LBUTTONDOWN, ref edown);
+            fx += 40;
+            fy += 30;
+            var emove = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_MOUSEMOVE, ref emove);
+            Native.GetWindowRect(hwnd, out Native.RECT beforeEsc);
+            var esc = new Native.KBDLLHOOKSTRUCT { vkCode = 0x1B, scanCode = 0x01 };
+            Check("按住拖拽：Esc 不吞（别的程序还能用它）", !sink.OnKeyboard(true, ref esc));
+            Check("按住拖拽：Esc 立刻结束拖动", !sink.IsDragging);
+            fx += 300;
+            fy += 300;
+            var emove2 = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_MOUSEMOVE, ref emove2);
+            Native.GetWindowRect(hwnd, out Native.RECT afterEsc);
+            Check("按住拖拽：Esc 之后窗口停在原地", Near(afterEsc.Left, beforeEsc.Left) && Near(afterEsc.Top, beforeEsc.Top), Fmt(afterEsc));
+            var eup = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_LBUTTONUP, ref eup);
+
+            // ---- Shift：临时把吸附拉到最高档 ----
+            Thread.Sleep(600);
+            cfg.AutoSnap = 1;
+            Native.SetWindowPos(hwnd, IntPtr.Zero, 200, 200, 400, 300, 0x0014u);
+            Thread.Sleep(60);
+            Native.GetWindowRect(hwnd, out start);
+            fx = start.Left + 200;
+            fy = start.Top + 150;
+            var sdown = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_LBUTTONDOWN, ref sdown);
+            Check("按住拖拽：起拖时吸附档位取配置", sink.SnapForTest == 1, sink.SnapForTest.ToString());
+            var shiftDown = new Native.KBDLLHOOKSTRUCT { vkCode = 0x10, scanCode = 0x2A };
+            sink.OnKeyboard(true, ref shiftDown);
+            Check("按住拖拽：拖的时候按 Shift 拉到最高档", sink.SnapForTest == 3, sink.SnapForTest.ToString());
+            var shiftUp = new Native.KBDLLHOOKSTRUCT { vkCode = 0x10, scanCode = 0x2A };
+            sink.OnKeyboard(false, ref shiftUp);
+            Check("按住拖拽：松开 Shift 回到配置档位", sink.SnapForTest == 1, sink.SnapForTest.ToString());
+            var sup = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
+            sink.OnMouse(Native.WM_LBUTTONUP, ref sup);
+            Check("按住拖拽：收尾干净（不在拖动）", !sink.IsDragging);
         }
         finally
         {
-            DragEngine.CursorProbeForTest = previous;
+            AltDragSink.CursorProbeForTest = previousCursor;
+            try { sink?.Dispose(); } catch { }
             try
             {
-                engine?.Dispose();
+                if (hwnd != IntPtr.Zero)
+                {
+                    Native.SetWindowPos(hwnd, Native.HWND_NOTOPMOST, 0, 0, 0, 0, 0x0011u);
+                    Native.DestroyWindow(hwnd);
+                }
             }
-            catch
-            {
-            }
-            try
-            {
-                Native.DestroyWindow(hwnd);
-            }
-            catch
-            {
-            }
+            catch { }
+            try { CoordSpace.Init(); } catch { }
         }
     }
-
 }

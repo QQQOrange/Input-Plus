@@ -1,10 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Threading;
 using InputPlus.Core;
 using InputPlus.Modules.HoldDrag;
@@ -15,13 +12,13 @@ namespace InputPlus.UI.Views;
 /// <summary>
 /// 「按住拖拽」页。
 ///
-/// 引擎是 HoldDrag 原样搬进来的（<see cref="Coordinator"/> + <see cref="HookEngine"/>），
+/// 引擎是 AltDrag 的 hooks.c 原样搬进来的（<see cref="AltDragSink"/> + <see cref="HookEngine"/>），
 /// 这一页只做两件事：开关它、把它的参数摆出来。
 ///
 /// 参数不是一对一镜像成 InputPlus 的字段，而是整份 JSON 存在
 /// <see cref="Core.Settings.AppSettings.HoldDragJson"/> 里：
 ///   · 引擎自己那份 <see cref="AppConfig"/> 是唯一真相，页面拿它的副本编辑；
-///   · 改完写回 JSON → 引擎重新解析 + OnConfigChanged，**不重装钩子**
+///   · 改完写回 JSON → 引擎重新解析，<b>不重装钩子</b>
 ///     （触发键、阈值、黑名单都是每次事件现读，重装只会让正在拖的窗口断掉）；
 ///   · 于是它天然跟着密码库、云端备份、整份导入导出走。
 /// </summary>
@@ -52,152 +49,140 @@ internal partial class HoldDragView : UserControl
 
     // ---------------- 选项表 ----------------
 
-    private static List<HoldDragPick> TriggerPicks()
-    {
-        // 常用触发键；KeysUtil 认识任何 "K:0xNN" / 鼠标侧键 "M:1"/"M:2"。
-        string[] ids =
-        {
-            "K:0x0D", "K:0x20", "K:LShift", "K:RShift", "K:LCtrl", "K:RCtrl",
-            "K:LAlt", "K:RAlt", "K:0x5B", "K:0x09", "K:0x14", "M:1", "M:2",
-        };
-        var list = new List<HoldDragPick>();
-        foreach (string id in ids) list.Add(new HoldDragPick(id, Loc.T(KeysUtil.DisplayName(id))));
-        return list;
-    }
-
+    /// <summary>下拉一律用 ComboBoxItem{Content,Tag}：这套主题的自定义模板不认 DisplayMemberPath。</summary>
     private void BuildChoices()
     {
-        /* 下拉项一律用 ComboBoxItem：Content 放显示名，Tag 放配置里的 id。
-           不用对象 + DisplayMemberPath —— 这套自定义模板的 ContentPresenter
-           只认 SelectionBoxItemTemplate，属性设了也不生效，界面会退化成打印
-           对象本身（第一版截图里整排下拉都是 HoldDragPick { Id = ..., Title = ... }）。 */
-        Fill(TriggerBox, TriggerPicks());
-        Fill(ModeBox, new List<HoldDragPick>
-        {
-            new("Hold", Loc.T("按住")),
-            new("Toggle", Loc.T("切换")),
-        });
+        FillActionBox(LeftBox);
+        FillActionBox(RightBox);
+        FillActionBox(MiddleBox);
+        FillActionBox(X1Box);
+        FillActionBox(X2Box);
 
-        var actions = new List<HoldDragPick>();
-        foreach (string id in Actions.All) actions.Add(new HoldDragPick(id, Loc.T(Actions.DisplayName(id))));
-        Fill(LeftBox, actions);
-        Fill(MiddleBox, actions);
-        Fill(RightBox, actions);
+        AutoSnapBox.Items.Add(Item(Loc.T("关"), "0"));
+        AutoSnapBox.Items.Add(Item(Loc.T("只贴屏幕边和任务栏"), "1"));
+        AutoSnapBox.Items.Add(Item(Loc.T("再加别的窗口的外侧"), "2"));
+        AutoSnapBox.Items.Add(Item(Loc.T("再加别的窗口的内侧（默认）"), "3"));
 
-        var styles = new List<HoldDragPick>();
-        foreach (string id in FrameStyles.All) styles.Add(new HoldDragPick(id, Loc.T(FrameStyles.DisplayName(id))));
-        Fill(StyleBox, styles);
-
-        var colors = new List<HoldDragPick>();
-        foreach (var c in FrameColors.All) colors.Add(new HoldDragPick(c.Id, Loc.T(c.Name)));
-        Fill(ColorBox, colors);
-
+        AutoRemaxBox.Items.Add(Item(Loc.T("关"), "0"));
+        AutoRemaxBox.Items.Add(Item(Loc.T("开（拖到别的屏上就最大化）"), "1"));
+        AutoRemaxBox.Items.Add(Item(Loc.T("开，并且一秒后自动还原大小"), "2"));
     }
 
-    private static void Fill(ComboBox box, List<HoldDragPick> picks)
+    private static ComboBoxItem Item(string text, string tag) =>
+        new() { Content = text, Tag = tag };
+
+    private static void FillActionBox(ComboBox box)
     {
-        box.Items.Clear();
-        foreach (var pick in picks) box.Items.Add(new ComboBoxItem { Content = pick.Title, Tag = pick.Id });
+        foreach (string id in Actions.All)
+        {
+            box.Items.Add(Item(Actions.DisplayName(id), id));
+        }
     }
 
-    /// <summary>按 id 选中一项（id 不在表里就清空，避免下拉显示成别的值）。</summary>
-    private static void Select(ComboBox box, string? id)
+    private static void Select(ComboBox box, string? tag)
     {
-        foreach (object item in box.Items)
+        foreach (object o in box.Items)
         {
-            if (item is ComboBoxItem row && string.Equals(row.Tag as string, id, StringComparison.OrdinalIgnoreCase))
+            if (o is ComboBoxItem it && string.Equals(it.Tag as string, tag, StringComparison.OrdinalIgnoreCase))
             {
-                box.SelectedItem = row;
+                box.SelectedItem = it;
                 return;
             }
         }
-        box.SelectedIndex = -1;
+        if (box.Items.Count > 0)
+        {
+            box.SelectedIndex = 0;
+        }
     }
 
-    private static string? IdOf(ComboBox? box) => (box?.SelectedItem as ComboBoxItem)?.Tag as string;
-
-    // ---------------- 回填 ----------------
+    // ---------------- 读 / 写 ----------------
 
     public void Refresh()
     {
         if (_host == null) return;
-        _cfg = _host.HoldDrag.EditableConfig();
-        Fill();
+        try
+        {
+            _cfg = _host.HoldDrag.EditableConfig();
+            Fill();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = Loc.T("读设置失败：") + ex.Message;
+        }
     }
 
-    /// <summary>把 <see cref="_cfg"/> 摊到控件上（重新读设置时用 Refresh，出图时用这个）。</summary>
     private void Fill()
     {
         if (_host == null || _cfg == null) return;
-
+        AppConfig cfg = _cfg;
         _sync = true;
         try
         {
             EnabledBox.IsChecked = _host.Settings.HoldDragEnabled;
-
-            Select(TriggerBox, _cfg.TriggerKeyId);
-            Select(ModeBox, _cfg.TriggerMode);
-            HoldMsBox.Text = Num(_cfg.HoldMs);
-
-            Select(LeftBox, _cfg.ActionLeft);
-            Select(RightBox, _cfg.ActionRight);
-            Select(MiddleBox, _cfg.ActionMiddle);
-
-            FrameBox.IsChecked = _cfg.ShowActivationFrame;
-            Select(StyleBox, _cfg.FrameStyleId);
-            Select(ColorBox, _cfg.FrameColorId);
-            ThicknessBox.Text = Num(_cfg.FrameThickness);
-            RadiusBox.Text = Num(_cfg.FrameRadius);
-            OpacityBox.Text = Num(_cfg.FrameOpacity);
-
-            // AltDrag 的四档：0 关 / 1 只吸屏幕 / 2 再吸窗口外侧 / 3 再吸窗口内侧。
-            Select(SnapLevelBox, (_cfg.SnapToEdges ? Math.Clamp(_cfg.SnapLevel, 1, 3) : 0).ToString(CultureInfo.InvariantCulture));
-            SnapBox2.Text = Num(_cfg.SnapThreshold);
-            AeroBox.IsChecked = _cfg.AeroSnap;
-            TilingBox.IsChecked = _cfg.KeyboardTiling;
-            ShakeBox.IsChecked = _cfg.ShakeMinimizeOthers;
-            HudBox.IsChecked = _cfg.ShowDragHud;
-            HudPosBox.IsChecked = _cfg.DragHudShowPosition;
-            HintBox.IsChecked = _cfg.ShowTriggerHint;
-
-            DblMaxBox.IsChecked = _cfg.DoubleClickLeftMaximize;
-            DblCloseBox.IsChecked = _cfg.DoubleClickRightZone;
-            RestoreBox.IsChecked = _cfg.RestoreMaximizedWhenMoved;
-            TopBox.IsChecked = _cfg.BringToFront;
-            FullBox.IsChecked = _cfg.AllowFullscreenWindows;
-            ExitFullBox.IsChecked = _cfg.ExitFullscreenOnTrigger;
-            OwnBox.IsChecked = _cfg.AllowDragOwnWindows;
-            UndoBox.IsChecked = _cfg.UndoEnabled;
-
-
-            BlacklistBox.Text = _cfg.Blacklist ?? "";
-            RulesBox.Text = _cfg.AppRules ?? "";
-            BuildLists();
+            TriggerKeyButton.Content = KeysUtil.DisplayName(cfg.TriggerKey);
+            SwallowBox.IsChecked = cfg.SwallowTrigger;
+            Select(LeftBox, cfg.ActionLeft);
+            Select(RightBox, cfg.ActionRight);
+            Select(MiddleBox, cfg.ActionMiddle);
+            Select(X1Box, cfg.ActionX1);
+            Select(X2Box, cfg.ActionX2);
+            Select(AutoSnapBox, Num(cfg.AutoSnap));
+            SnapThresholdBox.Text = Num(cfg.SnapThreshold);
+            AeroBox.IsChecked = cfg.AeroSnap;
+            Select(AutoRemaxBox, Num(cfg.AutoRemaximize));
+            AutoFocusBox.IsChecked = cfg.AutoFocus;
+            MoveRateBox.Text = Num(cfg.MoveRate);
+            ResizeRateBox.Text = Num(cfg.ResizeRate);
+            ProcessBlacklistBox.Text = cfg.ProcessBlacklist;
+            WindowBlacklistBox.Text = cfg.WindowBlacklist;
         }
-        finally { _sync = false; }
-
-        UpdateStatus();
+        finally
+        {
+            _sync = false;
+        }
+        RefreshStatus();
     }
 
-    private static string Num(int v) => v.ToString(CultureInfo.InvariantCulture);
+    private void RefreshStatus()
+    {
+        if (_host == null) return;
+        var svc = _host.HoldDrag;
+        string state;
+        if (!_host.Settings.HoldDragEnabled)
+        {
+            state = Loc.T("已关闭");
+        }
+        else if (svc.Installed)
+        {
+            state = Loc.T("正在接管鼠标");
+        }
+        else
+        {
+            state = Loc.T("没有启动");
+        }
 
-    // ---------------- 写回 ----------------
+        string text = state + " · " + Loc.T("钩子被系统重装 ") + svc.Rescues.ToString(CultureInfo.InvariantCulture) + Loc.T(" 次");
+        if (!string.IsNullOrEmpty(svc.LastError))
+        {
+            text += "\n" + Loc.T("上次出错：") + svc.LastError;
+        }
+        StatusText.Text = text;
+    }
 
     private void ScheduleCommit()
     {
-        if (_sync || _host == null || _cfg == null) return;
-        _commitTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(420) };
-        if (_commitTimer.Tag == null)
-        {
-            _commitTimer.Tag = "wired";
-            _commitTimer.Tick += (_, _) =>
-            {
-                _commitTimer!.Stop();
-                CommitNow();
-            };
-        }
+        if (_sync || _cfg == null || _host == null) return;
+        _commitTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _commitTimer.Tick -= OnCommitTick;
+        _commitTimer.Tick += OnCommitTick;
         _commitTimer.Stop();
         _commitTimer.Start();
+    }
+
+    private void OnCommitTick(object? sender, EventArgs e)
+    {
+        _commitTimer?.Stop();
+        CommitNow();
     }
 
     private void CommitNow()
@@ -210,88 +195,90 @@ internal partial class HoldDragView : UserControl
         }
         catch (Exception ex)
         {
-            CoreLog.Swallow(ex, "应用按住拖拽参数");
+            StatusText.Text = Loc.T("保存失败：") + ex.Message;
+            return;
         }
-        UpdateStatus();
+        RefreshStatus();
     }
+
+    // ---------------- 控件事件 ----------------
 
     private void OnEnabledChanged(object sender, RoutedEventArgs e)
     {
         if (_sync || _host == null) return;
         _host.Settings.HoldDragEnabled = EnabledBox.IsChecked == true;
-        // 开关要立刻生效（装/卸钩子），不能等防抖。
         _host.SaveSettings();
-        UpdateStatus();
+        RefreshStatus();
     }
 
-    private void OnToggleField(object sender, RoutedEventArgs e)
+    private void OnPickTriggerKey(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _cfg == null) return;
+        var win = new UI.Windows.TriggerKeyWindow(_cfg.TriggerKey);
+        if (Window.GetWindow(this) is { } owner) win.Owner = owner;
+        if (win.ShowDialog() != true || string.IsNullOrEmpty(win.SelectedKey)) return;
+        _cfg.TriggerKey = win.SelectedKey!;
+        TriggerKeyButton.Content = KeysUtil.DisplayName(_cfg.TriggerKey);
+        ScheduleCommit();
+    }
+
+    private void OnResetTriggerKey(object sender, RoutedEventArgs e)
     {
         if (_sync || _cfg == null) return;
-        bool on = (sender as CheckBox)?.IsChecked == true;
-        switch ((sender as CheckBox)?.Tag as string)
-        {
-            case "ShowActivationFrame": _cfg.ShowActivationFrame = on; break;
-            case "AeroSnap": _cfg.AeroSnap = on; break;
-            case "KeyboardTiling": _cfg.KeyboardTiling = on; break;
-            case "ShakeMinimizeOthers": _cfg.ShakeMinimizeOthers = on; break;
-            case "ShowDragHud": _cfg.ShowDragHud = on; break;
-            case "DragHudShowPosition": _cfg.DragHudShowPosition = on; break;
-            case "ShowTriggerHint": _cfg.ShowTriggerHint = on; break;
-            case "DoubleClickLeftMaximize": _cfg.DoubleClickLeftMaximize = on; break;
-            case "DoubleClickRightZone": _cfg.DoubleClickRightZone = on; break;
-            case "RestoreMaximizedWhenMoved": _cfg.RestoreMaximizedWhenMoved = on; break;
-            case "BringToFront": _cfg.BringToFront = on; break;
-            case "AllowFullscreenWindows": _cfg.AllowFullscreenWindows = on; break;
-            case "ExitFullscreenOnTrigger": _cfg.ExitFullscreenOnTrigger = on; break;
-            case "AllowDragOwnWindows": _cfg.AllowDragOwnWindows = on; break;
-            case "UndoEnabled": _cfg.UndoEnabled = on; break;
-            default: return;
-        }
+        _cfg.TriggerKey = KeysUtil.DefaultTrigger;
+        TriggerKeyButton.Content = KeysUtil.DisplayName(_cfg.TriggerKey);
         ScheduleCommit();
     }
 
     private void OnComboChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_sync || _cfg == null) return;
-        if (sender is not ComboBox box) return;
-        string? value = IdOf(box);
-        if (string.IsNullOrEmpty(value)) return;
-
-        switch (box.Tag as string)
+        if (sender is not ComboBox box || box.SelectedItem is not ComboBoxItem item) return;
+        string tag = (box.Tag as string) ?? "";
+        string value = (item.Tag as string) ?? "";
+        switch (tag)
         {
-            case "TriggerKeyId": _cfg.TriggerKeyId = value; break;
-            case "TriggerMode": _cfg.TriggerMode = value; break;
             case "ActionLeft": _cfg.ActionLeft = value; break;
             case "ActionRight": _cfg.ActionRight = value; break;
             case "ActionMiddle": _cfg.ActionMiddle = value; break;
-            case "FrameStyleId": _cfg.FrameStyleId = value; break;
-            case "FrameColorId": _cfg.FrameColorId = value; break;
-            case "SnapLevel":
-                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int level)) return;
-                _cfg.SnapLevel = Math.Clamp(level, 0, 3);
-                // 0 档就是"关闭"：AltDrag 的 AutoSnap=0。两个字段始终同步，别让它们各自为政。
-                _cfg.SnapToEdges = _cfg.SnapLevel > 0;
+            case "ActionX1": _cfg.ActionX1 = value; break;
+            case "ActionX2": _cfg.ActionX2 = value; break;
+            case "AutoSnap":
+                _cfg.AutoSnap = ParseInt(value, _cfg.AutoSnap);
+                break;
+            case "AutoRemaximize":
+                _cfg.AutoRemaximize = ParseInt(value, _cfg.AutoRemaximize);
                 break;
             default: return;
         }
         ScheduleCommit();
     }
 
-    /// <summary>数字框共用：Tag 就是 AppConfig 上的字段名，能解析才写。</summary>
+    private void OnToggleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_sync || _cfg == null) return;
+        if (sender is not CheckBox box) return;
+        bool on = box.IsChecked == true;
+        switch (box.Tag as string)
+        {
+            case "SwallowTrigger": _cfg.SwallowTrigger = on; break;
+            case "AeroSnap": _cfg.AeroSnap = on; break;
+            case "AutoFocus": _cfg.AutoFocus = on; break;
+            default: return;
+        }
+        ScheduleCommit();
+    }
+
     private void OnNumberChanged(object sender, TextChangedEventArgs e)
     {
         if (_sync || _cfg == null) return;
-        var box = sender as TextBox;
-        if (!int.TryParse(box?.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v)) return;
-
-        switch (box!.Tag as string)
+        if (sender is not TextBox box) return;
+        if (!int.TryParse(box.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n)) return;
+        switch (box.Tag as string)
         {
-            case "HoldMs": _cfg.HoldMs = v; break;
-            case "FrameThickness": _cfg.FrameThickness = v; break;
-            case "FrameRadius": _cfg.FrameRadius = v; break;
-            case "FrameOpacity": _cfg.FrameOpacity = v; break;
-            case "SnapThreshold": _cfg.SnapThreshold = v; break;
-            case "CornerPercent": _cfg.CornerPercent = v; break;
+            case "SnapThreshold": _cfg.SnapThreshold = Math.Clamp(n, 0, 200); break;
+            case "MoveRate": _cfg.MoveRate = Math.Clamp(n, 1, 8); break;
+            case "ResizeRate": _cfg.ResizeRate = Math.Clamp(n, 1, 8); break;
             default: return;
         }
         ScheduleCommit();
@@ -300,61 +287,48 @@ internal partial class HoldDragView : UserControl
     private void OnTextChanged(object sender, TextChangedEventArgs e)
     {
         if (_sync || _cfg == null) return;
-        if (ReferenceEquals(sender, BlacklistBox)) _cfg.Blacklist = BlacklistBox.Text ?? "";
-        else if (ReferenceEquals(sender, RulesBox)) _cfg.AppRules = RulesBox.Text ?? "";
-        else return;
-        BuildLists();      // 右栏清单是这两个框现算出来的，手打一行也要立刻反映过去
+        if (sender is not TextBox box) return;
+        string text = box.Text.Replace("\r\n", "\n");
+        switch (box.Tag as string)
+        {
+            case "ProcessBlacklist": _cfg.ProcessBlacklist = text; break;
+            case "WindowBlacklist": _cfg.WindowBlacklist = text; break;
+            default: return;
+        }
         ScheduleCommit();
     }
 
-    // ---------------- 挑程序：两个入口与手打共用同一条校验 ----------------
-
-    /// <summary>
-    /// 把新条目并进「一行一条」的清单：去空白、忽略大小写去重、保持原顺序。
-    /// 黑名单与规则框都用它 —— 手打和挑选走同一段逻辑，不会一边去重一边不去重。
-    /// </summary>
-    internal static string AppendToken(string? existing, string? token)
+    private void OnResetDefaults(object sender, RoutedEventArgs e)
     {
-        string add = (token ?? "").Trim();
-        var lines = SplitTokens(existing);
-        if (add.Length == 0) return string.Join("\n", lines);
-        if (!lines.Any(s => string.Equals(s, add, StringComparison.OrdinalIgnoreCase))) lines.Add(add);
-        return string.Join("\n", lines);
+        if (_host == null) return;
+        var fresh = new AppConfig();
+        _cfg = fresh;
+        Fill();
+        CommitNow();
     }
 
-    /// <summary>按程序规则：同名（= 前面那段）就换行为，否则追加一条。</summary>
-    internal static string UpsertRule(string? existing, string? program, string? mode)
-    {
-        string name = (program ?? "").Trim();
-        string m = string.IsNullOrWhiteSpace(mode) ? "Ignore" : mode.Trim();
-        var lines = SplitTokens(existing);
-        if (name.Length == 0) return string.Join("\n", lines);
+    // ---------------- 加程序例外 ----------------
 
-        int at = lines.FindIndex(s =>
+    private void OnPickProcess(object sender, RoutedEventArgs e) => AddProcess(PickProgramName(false));
+
+    private void OnPickWindow(object sender, RoutedEventArgs e) => AddProcess(PickProgramName(true));
+
+    private void AddProcess(string name)
+    {
+        if (_host == null || _cfg == null || string.IsNullOrWhiteSpace(name)) return;
+        var lines = new System.Collections.Generic.List<string>(AppRules.Rows(_cfg.ProcessBlacklist));
+        if (lines.Exists(s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase)))
         {
-            int eq = s.IndexOf('=');
-            string key = (eq < 0 ? s : s[..eq]).Trim();
-            return string.Equals(key, name, StringComparison.OrdinalIgnoreCase);
-        });
-        string entry = name + "=" + m;
-        if (at >= 0) lines[at] = entry;
-        else lines.Add(entry);
-        return string.Join("\n", lines);
+            _host.Notify(Loc.T("这个程序已经在例外列表里了"));
+            return;
+        }
+        lines.Add(name);
+        _cfg.ProcessBlacklist = string.Join("\n", lines);
+        ProcessBlacklistBox.Text = _cfg.ProcessBlacklist;
+        CommitNow();
     }
 
-    /// <summary>
-    /// 拆「一行一条」：换行和分号都算分隔符。
-    /// 分号是 HoldDrag 引擎自己的写法（<c>wps.exe=Ignore; code.exe=MoveOnly</c>），
-    /// 所以手打用分号、页面上一条一行，两边都认。
-    /// </summary>
-    private static List<string> SplitTokens(string? text) =>
-        (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Replace(';', '\n')
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => s.Trim())
-            .Where(s => s.Length > 0)
-            .ToList();
-
-    /// <summary>挑一个程序的名字（不是全路径：黑名单/规则认的是程序名）。取消返回空。</summary>
+    /// <summary>挑一个程序的名字（不是全路径：例外列表认的是程序名）。取消返回空。</summary>
     private string PickProgramName(bool byWindow)
     {
         if (byWindow)
@@ -364,7 +338,7 @@ internal partial class HoldDragView : UserControl
             picker.ShowDialog();
 
             IntPtr h = picker.PickedWindow;
-            if (h == IntPtr.Zero) return "";                 // 用户按了 Esc
+            if (h == IntPtr.Zero) return "";
 
             var info = Core.Windows.WindowService.Describe(h);
             if (info == null || string.IsNullOrEmpty(info.ExePath))
@@ -377,7 +351,7 @@ internal partial class HoldDragView : UserControl
 
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = Loc.T("选择要单独设置的程序"),
+            Title = Loc.T("选择要从接管里排除的程序"),
             Filter = "程序 (*.exe)|*.exe|所有文件 (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -390,235 +364,58 @@ internal partial class HoldDragView : UserControl
         try { return System.IO.Path.GetFileName(path); } catch { return ""; }
     }
 
-    private void OnBlacklistPickFile(object sender, RoutedEventArgs e) => AddToBlacklist(PickProgramName(false));
+    private static int ParseInt(string? s, int fallback) =>
+        int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) ? n : fallback;
 
-    private void OnBlacklistPickWindow(object sender, RoutedEventArgs e) => AddToBlacklist(PickProgramName(true));
+    private static string Num(int value) => value.ToString(CultureInfo.InvariantCulture);
 
-    private void AddToBlacklist(string name)
-    {
-        if (_sync || _cfg == null) return;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            _host?.Notify(Loc.T("没挑到程序：可以用「选择程序…」直接选 exe"));
-            return;
-        }
-
-        string merged = AppendToken(BlacklistBox.Text, name);
-        if (string.Equals(merged, BlacklistBox.Text ?? "", StringComparison.Ordinal))
-        {
-            _host?.Notify(Loc.F("{0} 已经在程序例外里了", name));
-            return;
-        }
-        BlacklistBox.Text = merged;     // TextChanged 会写进 _cfg 并安排一次落盘
-        _host?.Notify(Loc.F("已加入程序例外：{0}", name));
-    }
-
-    private void OnRulePickFile(object sender, RoutedEventArgs e) => AddToRules(PickProgramName(false));
-
-    private void OnRulePickWindow(object sender, RoutedEventArgs e) => AddToRules(PickProgramName(true));
-
-    private void AddToRules(string name)
-    {
-        if (_sync || _cfg == null) return;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            _host?.Notify(Loc.T("没挑到程序：可以用「选择程序…」直接选 exe"));
-            return;
-        }
-
-        string mode = (RuleModeBox?.SelectedItem as ComboBoxItem)?.Tag as string ?? "Ignore";
-        RulesBox.Text = UpsertRule(RulesBox.Text, name, mode);
-        _host?.Notify(Loc.F("已加入规则：{0}", name + "=" + mode));
-    }
-
-    // ---------------- 右栏清单：程序例外 / 按程序规则 ----------------
-    // 配置里这两块都是「一行一条」的纯文本，清单只是它的视图：
-    // 挑程序、手打、点「恢复 / 删除」都改同一份文本，改完立刻重建行，
-    // 所以不会出现「清单和文本框各说一套」的状态。
-
-    private void BuildLists()
-    {
-        if (ExceptionList == null || RuleList == null) return;
-
-        var exceptions = SplitTokens(_cfg?.Blacklist);
-        var exRows = new List<HoldDragListRow>(exceptions.Count);
-        foreach (string name in exceptions)
-            exRows.Add(new HoldDragListRow(name, Loc.T("完全不接管"), name));
-        ExceptionList.ItemsSource = exRows;
-        ExceptionEmpty.Visibility = exRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-        var ruleRows = new List<HoldDragListRow>();
-        foreach (string entry in SplitTokens(_cfg?.AppRules))
-        {
-            int eq = entry.IndexOf('=');
-            string name = (eq < 0 ? entry : entry[..eq]).Trim();
-            string mode = (eq < 0 ? "" : entry[(eq + 1)..]).Trim();
-            if (name.Length == 0) continue;
-            ruleRows.Add(new HoldDragListRow(name, AppRules.DisplayName(mode.Length == 0 ? "Ignore" : mode), entry));
-        }
-        RuleList.ItemsSource = ruleRows;
-        RuleEmpty.Visibility = ruleRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>从「一行一条」的清单里删掉某一条（忽略大小写、忽略首尾空白）。</summary>
-    internal static string RemoveToken(string? existing, string? token)
-    {
-        string drop = (token ?? "").Trim();
-        var lines = SplitTokens(existing);
-        if (drop.Length == 0) return string.Join("\n", lines);
-        lines.RemoveAll(s => string.Equals(s, drop, StringComparison.OrdinalIgnoreCase));
-        return string.Join("\n", lines);
-    }
-
-    /// <summary>从「按程序规则」里删掉某条（比对 = 前面那段程序名）。</summary>
-    internal static string RemoveRule(string? existing, string? token)
-    {
-        int eq = (token ?? "").IndexOf('=');
-        string name = (eq < 0 ? (token ?? "") : token![..eq]).Trim();
-        var lines = SplitTokens(existing);
-        if (name.Length == 0) return string.Join("\n", lines);
-        lines.RemoveAll(s =>
-        {
-            int at = s.IndexOf('=');
-            string key = (at < 0 ? s : s[..at]).Trim();
-            return string.Equals(key, name, StringComparison.OrdinalIgnoreCase);
-        });
-        return string.Join("\n", lines);
-    }
-
-    private void OnRemoveException(object sender, RoutedEventArgs e)
-    {
-        if (_cfg == null) return;
-        string? value = (sender as FrameworkElement)?.Tag as string;
-        if (string.IsNullOrWhiteSpace(value)) return;
-
-        _cfg.Blacklist = RemoveToken(_cfg.Blacklist, value);
-        BlacklistBox.Text = _cfg.Blacklist;     // TextChanged 会再写一次 _cfg 并安排落盘
-        BuildLists();
-        _host?.Notify(Loc.F("已从程序例外里拿掉：{0}", value));
-    }
-
-    private void OnRemoveRule(object sender, RoutedEventArgs e)
-    {
-        if (_cfg == null) return;
-        string? value = (sender as FrameworkElement)?.Tag as string;
-        if (string.IsNullOrWhiteSpace(value)) return;
-
-        _cfg.AppRules = RemoveRule(_cfg.AppRules, value);
-        RulesBox.Text = _cfg.AppRules;
-        BuildLists();
-        _host?.Notify(Loc.F("已删掉规则：{0}", value));
-    }
-
-    /// <summary>
-    /// 出图用：把右栏（程序例外 / 按程序规则）滚到最下面，好拍清单末尾与「怎么用」那几段。
-    /// 必须点名 RightScroll —— 按视觉树找「第一个」ScrollViewer 会先撞上左栏那个，
-    /// 结果右栏没动、清单第二条被视口裁掉。
-    /// </summary>
-    internal void ScrollListsForRender()
-    {
-        RightScroll?.ScrollToEnd();
-    }
-
-    /// <summary>
-    /// 出图用：滚到「吸附与手感」那一栏（四档吸附 + 阈值 + Aero 开关都在这儿）。
-    /// 直接 BringIntoView 会把标题顶到视口最上沿、只露半截，所以先按元素位置算一个偏移。
-    /// </summary>
-    internal void ScrollSnapForRender()
-    {
-        if (SnapLevelBox == null) return;
-        // 不用 BringIntoView：它只保证"刚好露出"，而且滚动是排队等布局的，
-        // 紧接着再改偏移会被它覆盖。这里直接按元素在滚动内容里的位置算目标偏移。
-        DependencyObject? cur = SnapLevelBox;
-        while (cur != null && cur is not ScrollViewer)
-        {
-            cur = VisualTreeHelper.GetParent(cur);
-        }
-        if (cur is not ScrollViewer sv) return;
-        double y = SnapLevelBox.TransformToAncestor(sv).Transform(new Point(0, 0)).Y;
-        sv.ScrollToVerticalOffset(sv.VerticalOffset + y - 150);
-    }
-
-    private void OnResetDefaults(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        _cfg = new AppConfig();
-        Refresh();
-        CommitNow();
-        _host.Notify(Loc.T("按住拖拽已恢复默认参数（开关状态没变）"));
-    }
-
-    // ---------------- 状态行 ----------------
-
-    private void UpdateStatus()
-    {
-        if (_host == null || StatusText == null) return;
-        var svc = _host.HoldDrag;
-
-        if (!_host.Settings.HoldDragEnabled)
-        {
-            StatusText.Text = Loc.T("已关闭：钩子没有装上，鼠标和键盘的行为一点都没变。");
-            return;
-        }
-        if (!svc.Installed)
-        {
-            StatusText.Text = string.IsNullOrEmpty(svc.LastError)
-                ? Loc.T("已启用，但钩子还没装上。")
-                : Loc.F("已启用，但钩子装不上：{0}", svc.LastError);
-            return;
-        }
-
-        string trigger = Loc.T(KeysUtil.DisplayName(_cfg?.TriggerKeyId ?? ""));
-        string mode = string.Equals(_cfg?.TriggerMode, "Toggle", StringComparison.OrdinalIgnoreCase)
-            ? Loc.T("按一下进入 / 再按一下退出")
-            : Loc.T("按住才生效");
-        StatusText.Text = Loc.F("运行中：{0}（{1}）已接管。", trigger, mode);
-        if (svc.Rescues > 0)
-            StatusText.Text += " " + Loc.F("钩子被系统摘掉后已自动救回 {0} 次。", svc.Rescues);
-    }
-
-    /// <summary>出图用：把开关与几个参数摆成好看的样子（只改内存，不落盘）。</summary>
+    /* ---- 出图用的三个小钩子（--render 走这里，正常运行时没人调） ----
+       这一页默认是关着的、参数也是默认值，直接拍出来是一屏灰字；
+       这里只改界面上的显示，不写设置，拍完页面照旧。 */
     internal void SetSampleForRender()
     {
-        if (_host == null) return;
-        _cfg = _host.HoldDrag.EditableConfig();
-
-        /* 先掐住回写：动这些控件会触发各自的 Changed，那一步会真写设置。 */
-        _sync = true;
-        try
+        if (_cfg == null)
         {
-            /* 总开关保持关：右栏状态行是按真实设置写的，勾上会出现
-               「开关是开着的、状态却说已关闭」的矛盾截图。出厂本来就是关，
-               截图也照实拍关的样子。 */
-            EnabledBox.IsChecked = false;
-            _cfg.TriggerKeyId = "K:0x0D";
-            _cfg.HoldMs = 300;
-            _cfg.ActionLeft = "Move";
-            _cfg.ActionRight = "Resize";
-            _cfg.ActionMiddle = "Maximize";
-            _cfg.FrameStyleId = "Dashed";
-            _cfg.FrameColorId = "Accent";
-            _cfg.Blacklist = "game.exe\nobs64.exe";
-            _cfg.AppRules = "wps.exe=Ignore; code.exe=MoveOnly";
+            return;
         }
-        finally { _sync = false; }
-
+        _cfg.TriggerKey = "K:LAlt";
+        _cfg.SwallowTrigger = false;
+        _cfg.ActionLeft = Actions.Move;
+        _cfg.ActionMiddle = Actions.Resize;
+        _cfg.ActionRight = Actions.Resize;
+        _cfg.ActionX1 = Actions.Center;
+        _cfg.ActionX2 = Actions.Nothing;
+        _cfg.AutoSnap = 3;
+        _cfg.SnapThreshold = 20;
+        _cfg.AeroSnap = true;
+        _cfg.AutoRemaximize = 1;
+        _cfg.AutoFocus = false;
+        _cfg.MoveRate = 2;
+        _cfg.ResizeRate = 3;
+        _cfg.ProcessBlacklist = "wps.exe" + Environment.NewLine + "code.exe";
         Fill();
-        UpdateLayout();
+        RefreshStatus();
+    }
+
+    internal void ScrollSnapForRender()
+    {
+        if (LeftScroll == null)
+        {
+            return;
+        }
+        // BringIntoView 在还没排完版时会被忽略，这里直接按控件坐标算偏移。
+        Point at = SnapThresholdBox.TranslatePoint(new Point(0.0, 0.0), LeftScroll);
+        LeftScroll.ScrollToVerticalOffset(LeftScroll.VerticalOffset + at.Y - 120.0);
+    }
+
+    internal void ScrollListsForRender()
+    {
+        if (LeftScroll == null)
+        {
+            return;
+        }
+        // 让「程序例外」标题落在顶部，出图时不会把上一节的标题切一半。
+        Point at = ProcessBlacklistBox.TranslatePoint(new Point(0.0, 0.0), LeftScroll);
+        LeftScroll.ScrollToVerticalOffset(LeftScroll.VerticalOffset + at.Y - 370.0);
     }
 }
-/// <summary>
-/// 下拉框的一项：Id 是配置里存的值，Title 是给人看的中文名。
-///
-/// 它**不直接喂给 ComboBox**（喂对象会踩两个坑：DisplayMemberPath 在这套自定义模板里
-/// 不生效，且裁剪下发版里私有类型走 TypeDescriptor 也可能读不到属性，界面会退化成
-/// 打印 HoldDragPick { Id = ..., Title = ... }）。<see cref="Fill"/> 会把它翻译成
-/// ComboBoxItem（Content=Title、Tag=Id），界面永远只看到字符串。
-/// </summary>
-public sealed record HoldDragPick(string Id, string Title);
-
-/// <summary>
-/// 右栏清单的一行：Name 是程序名，StateText 是行为说明，
-/// Value 是配置里原样的那一条（点「恢复 / 删除」时按它定位，手打的多余空格也不会错删）。
-/// </summary>
-public sealed record HoldDragListRow(string Name, string StateText, string Value);

@@ -1,111 +1,104 @@
-#nullable disable
-#pragma warning disable CS0649, CS8632, CS0414, CA1416
-﻿// HoldDrag · Core/AppRules.cs
-//
-// 按程序规则：对某个 exe 单独指定行为，比"黑名单"细一档。
-//
-// 配置格式（分号分隔，大小写不敏感）：
-//   wps.exe=Ignore; code.exe=MoveOnly; game.exe=NoFrame
-//
-// 规则类型：
-//   Ignore      完全不接管（等同黑名单）
-//   MoveOnly    只允许移动，右键缩放不接管
-//   ResizeOnly  只允许缩放，左键移动不接管
-//   NoFrame     接管但**不画外框**（比如全屏视频、绘图软件）
-
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace InputPlus.Modules.HoldDrag;
 
+/// <summary>
+/// 原版 [Blacklist] 那套：按进程映像名 / 进程+类名决定"这扇窗完全不接管"。
+///
+/// 原来的 AppRules 是 Input-Plus 自己的"按程序规则"（Ignore / MoveOnly / ResizeOnly / NoFrame），
+/// 那是旧引擎的功能面，AltDrag 只有"接管 / 不接管"两档，所以整份换掉。
+/// </summary>
 internal static class AppRules
 {
-	internal const string Ignore = "Ignore";
-
-	internal const string MoveOnly = "MoveOnly";
-
-	internal const string ResizeOnly = "ResizeOnly";
-
-	internal const string NoFrame = "NoFrame";
-
-	internal static readonly string[] All = new string[4] { "Ignore", "MoveOnly", "ResizeOnly", "NoFrame" };
+	private static readonly Dictionary<nint, (string Process, string ClassName)> Cache = new Dictionary<nint, (string, string)>();
 
 	private static readonly object Gate = new object();
 
-	private static Dictionary<string, string> _map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-	/// <summary>带通配符（* 和 ?）的规则，按写字顺序匹配。</summary>
-	private static List<(System.Text.RegularExpressions.Regex Pattern, string Mode)> _wildcards = new List<(System.Text.RegularExpressions.Regex, string)>();
-
-	private static readonly Dictionary<(nint Hwnd, long Tick), string> Cache = new Dictionary<(nint, long), string>();
-
-	private static long _cacheTick;
-
-	public static string DisplayName(string mode)
+	internal static (string Process, string ClassName) Describe(nint hwnd)
 	{
-		return mode switch
+		if (hwnd == IntPtr.Zero)
 		{
-			"Ignore" => Loc.T("完全不接管"), 
-			"MoveOnly" => Loc.T("只允许移动"), 
-			"ResizeOnly" => Loc.T("只允许缩放"), 
-			"NoFrame" => Loc.T("接管但不画外框"), 
-			_ => mode, 
-		};
-	}
-
-	/// <summary>解析并保存规则表；非法条目直接丢弃（不让手写错误把功能整体搞坏）。</summary>
-	public static void Apply(string spec)
-	{
-		Dictionary<string, string> dictionary = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-		if (!string.IsNullOrWhiteSpace(spec))
-		{
-			string[] array = spec.Split(new char[2] { ';', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-			foreach (string text in array)
-			{
-				string[] array2 = text.Split(new char[1] { '=' }, 2);
-				if (array2.Length != 2)
-				{
-					continue;
-				}
-				string text2 = array2[0].Trim();
-				string text3 = array2[1].Trim();
-				if (text2.Length == 0 || !IsValid(text3))
-				{
-					continue;
-				}
-				dictionary[text2] = NormalizeMode(text3);
-			}
-		}
-		List<(System.Text.RegularExpressions.Regex, string)> list = new List<(System.Text.RegularExpressions.Regex, string)>();
-		foreach (KeyValuePair<string, string> item in dictionary)
-		{
-			if (item.Key.IndexOf('*') < 0 && item.Key.IndexOf('?') < 0)
-			{
-				continue;
-			}
-			try
-			{
-				string text = "^" + System.Text.RegularExpressions.Regex.Escape(item.Key).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-				list.Add((new System.Text.RegularExpressions.Regex(text, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant), item.Value));
-			}
-			catch (Exception ex)
-			{
-				Log.Error(ex);
-			}
+			return (string.Empty, string.Empty);
 		}
 		lock (Gate)
 		{
-			_map = dictionary;
-			_wildcards = list;
-			Cache.Clear();
+			if (Cache.TryGetValue(hwnd, out var value))
+			{
+				return value;
+			}
+		}
+		string pure = ProcessNameOf(hwnd);
+		string classNameW = ClassNameOf(hwnd);
+		lock (Gate)
+		{
+			if (Cache.Count > 256)
+			{
+				Cache.Clear();
+			}
+			Cache[hwnd] = (pure, classNameW);
+		}
+		return (pure, classNameW);
+	}
+
+	internal static string ClassNameOf(nint hwnd)
+	{
+		StringBuilder stringBuilder = new StringBuilder(256);
+		if (Native.GetClassNameW(hwnd, stringBuilder, stringBuilder.Capacity) <= 0)
+		{
+			return string.Empty;
+		}
+		return stringBuilder.ToString();
+	}
+
+	/// <summary>进程映像名，带 .exe（原版 ini 里就是这么写的，例如 "chrome.exe"）。</summary>
+	internal static string ProcessNameOf(nint hwnd)
+	{
+		try
+		{
+			uint pid;
+			Native.GetWindowThreadProcessId(hwnd, out pid);
+			if (pid == 0u)
+			{
+				return string.Empty;
+			}
+			using Process process = Process.GetProcessById((int)pid);
+			string text = process.ProcessName;
+			return text.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? text : (text + ".exe");
+		}
+		catch (Exception)
+		{
+			return string.Empty;
 		}
 	}
 
-	public static bool IsValid(string mode)
+	internal static bool IsOwnWindow(nint hwnd)
 	{
-		for (int i = 0; i < All.Length; i++)
+		uint pid;
+		Native.GetWindowThreadProcessId(hwnd, out pid);
+		return pid == (uint)Environment.ProcessId;
+	}
+
+	/// <summary>命中任何一条黑名单就不接管。null/空配置 = 只走原版默认的那几条。</summary>
+	internal static bool IsBlacklisted(AppConfig cfg, nint hwnd)
+	{
+		var (text, text2) = Describe(hwnd);
+		if (MatchesProcesses(cfg.ProcessBlacklist, text))
 		{
-			if (string.Equals(All[i], mode, StringComparison.OrdinalIgnoreCase))
+			return true;
+		}
+		return MatchesWindows(cfg.WindowBlacklist, text, text2);
+	}
+
+	/// <summary>[Blacklist] ProcessBlacklist：一行（或逗号）一条进程映像名，支持 * 与 ?。</summary>
+	internal static bool MatchesProcesses(string? list, string process)
+	{
+		foreach (string item in Rows(list))
+		{
+			if (Wildcard(item, process) || Wildcard(item, StripExe(process)))
 			{
 				return true;
 			}
@@ -113,121 +106,74 @@ internal static class AppRules
 		return false;
 	}
 
-	public static string NormalizeMode(string mode)
+	/// <summary>[Blacklist] Blacklist：一条 "进程|类名"，两边都可以是空或 *。</summary>
+	internal static bool MatchesWindows(string? list, string process, string className)
 	{
-		for (int i = 0; i < All.Length; i++)
+		foreach (string item in Rows(list))
 		{
-			if (string.Equals(All[i], mode, StringComparison.OrdinalIgnoreCase))
+			int num = item.IndexOf('|');
+			string text = item;
+			string text2 = (num < 0) ? string.Empty : item.Substring(num + 1).Trim();
+			if (num >= 0)
 			{
-				return All[i];
+				text = item.Substring(0, num).Trim();
 			}
-		}
-		return Ignore;
-	}
-
-	public static int Count
-	{
-		get
-		{
-			lock (Gate)
+			if (Wildcard(text, process) || Wildcard(text, StripExe(process)))
 			{
-				return _map.Count;
-			}
-		}
-	}
-
-	/// <summary>把规范写回成一行（保存到配置用）。</summary>
-	public static string Normalize(string spec)
-	{
-		Apply(spec);
-		lock (Gate)
-		{
-			List<string> list = new List<string>();
-			foreach (KeyValuePair<string, string> item in _map)
-			{
-				list.Add(item.Key + "=" + item.Value);
-			}
-			list.Sort(StringComparer.OrdinalIgnoreCase);
-			return string.Join(";", list);
-		}
-	}
-
-	public static string ModeForExe(string exe)
-	{
-		if (string.IsNullOrEmpty(exe))
-		{
-			return null;
-		}
-		lock (Gate)
-		{
-			if (_map.TryGetValue(exe, out var value))
-			{
-				return value;
-			}
-			foreach (var wildcard in _wildcards)
-			{
-				if (wildcard.Pattern.IsMatch(exe))
+				if (Wildcard(text2, className))
 				{
-					return wildcard.Mode;
+					return true;
 				}
 			}
 		}
-		return null;
+		return false;
 	}
 
-	/// <summary>窗口对应的规则（带 2 秒缓存：FindTarget 在鼠标移动时会被高频调用）。</summary>
-	public static string ModeForWindow(nint hwnd)
+	/// <summary>一行一条文本 → 干净的条目列表（去空行、去首尾空白）。界面和匹配共用。</summary>
+	internal static List<string> Rows(string? text)
 	{
-		if (hwnd == IntPtr.Zero)
+		List<string> list = new List<string>();
+		if (string.IsNullOrWhiteSpace(text))
 		{
-			return null;
+			return list;
 		}
-		long tickCount = Environment.TickCount64;
-		lock (Gate)
+		string[] array = text.Split(new char[4] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+		foreach (string text2 in array)
 		{
-			if (Cache.TryGetValue((hwnd, tickCount / 2000), out var value))
+			string text3 = text2.Trim();
+			if (text3.Length != 0)
 			{
-				return value;
+				list.Add(text3);
 			}
 		}
-		string text = null;
+		return list;
+	}
+
+	private static string StripExe(string process)
+	{
+		return process.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? process.Substring(0, process.Length - 4) : process;
+	}
+
+	/// <summary>空/通配符都是"任何值"；带 * ? 的走正则，其余按忽略大小写的整串比较。</summary>
+	private static bool Wildcard(string pattern, string value)
+	{
+		string text = pattern.Trim();
+		if (text.Length == 0 || text == "*")
+		{
+			return true;
+		}
+		if (text.IndexOf('*') < 0 && text.IndexOf('?') < 0)
+		{
+			return string.Equals(text, value, StringComparison.OrdinalIgnoreCase);
+		}
 		try
 		{
-			string text2 = WindowActions.ProcessExeName(hwnd);
-			text = ModeForExe(text2);
+			string text2 = "^" + Regex.Escape(text).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+			return Regex.IsMatch(value, text2, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 		}
-		catch
+		catch (Exception)
 		{
+			return false;
 		}
-		lock (Gate)
-		{
-			if (_cacheTick != tickCount / 2000)
-			{
-				_cacheTick = tickCount / 2000;
-				Cache.Clear();
-			}
-			Cache[(hwnd, tickCount / 2000)] = text;
-		}
-		return text;
-	}
-
-	public static bool ShouldIgnore(nint hwnd)
-	{
-		return string.Equals(ModeForWindow(hwnd), Ignore, StringComparison.OrdinalIgnoreCase);
-	}
-
-	public static bool AllowsMove(nint hwnd)
-	{
-		return !string.Equals(ModeForWindow(hwnd), ResizeOnly, StringComparison.OrdinalIgnoreCase);
-	}
-
-	public static bool AllowsResize(nint hwnd)
-	{
-		return !string.Equals(ModeForWindow(hwnd), MoveOnly, StringComparison.OrdinalIgnoreCase);
-	}
-
-	public static bool AllowsFrame(nint hwnd)
-	{
-		return !string.Equals(ModeForWindow(hwnd), NoFrame, StringComparison.OrdinalIgnoreCase);
 	}
 }

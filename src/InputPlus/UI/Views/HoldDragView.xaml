@@ -30,7 +30,7 @@
                     </Border>
                     <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{loc:T '按住拖拽'}" Style="{StaticResource Text.H3}" />
-                        <TextBlock Text="{loc:T '按住触发键，左键拖动窗口、右键调整大小、中键最大化；松手即完成。引擎来自 HoldDrag。'}"
+                        <TextBlock Text="{loc:T '按住触发键不放，左键拖动窗口、右键改大小；贴边半屏、拖到别的屏自动最大化。引擎照搬 AltDrag。'}"
                                    Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
                     </StackPanel>
                 </StackPanel>
@@ -46,7 +46,7 @@
 
         <!-- 左：参数 -->
         <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}" Padding="18,10,18,14" Margin="0,0,14,0">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer x:Name="LeftScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,0,12,0">
 
                     <TextBlock Text="{loc:T '触发'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
@@ -59,56 +59,19 @@
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
                             <TextBlock Text="{loc:T '触发键'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住它才开始接管鼠标。默认是 Enter（回车），可以换成空格、Shift、鼠标侧键等。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <ComboBox Grid.Column="1" x:Name="TriggerBox" Style="{StaticResource ComboBox.Base}"
-                                  Width="190" VerticalAlignment="Center"
-                                  SelectionChanged="OnComboChanged" Tag="TriggerKeyId" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '触发方式'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '「按住」=按着不放才生效（松手结束）；「切换」=按一下进入、再按一下退出。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <ComboBox Grid.Column="1" x:Name="ModeBox" Style="{StaticResource ComboBox.Base}"
-                                  Width="140" VerticalAlignment="Center"
-                                  SelectionChanged="OnComboChanged" Tag="TriggerMode" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '长按时长'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住多久才算「按住」（越短越跟手，越不容易和普通点击抢）。'}"
+                            <TextBlock Text="{loc:T '按住它才开始接管鼠标。点右边按钮，按哪个键就是哪个键 —— Enter 回车、空格、Shift、F 键都行。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBox x:Name="HoldMsBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                     TextChanged="OnNumberChanged" Tag="HoldMs" />
-                            <TextBlock Text="{loc:T '毫秒'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
-                                       VerticalAlignment="Center" />
+                            <Button x:Name="TriggerKeyButton" Style="{StaticResource Button.Base}" Padding="14,6"
+                                    MinWidth="150" Content="{loc:T 'Enter 回车'}" Click="OnPickTriggerKey" />
+                            <Button x:Name="TriggerResetButton" Style="{StaticResource Button.Ghost}" Padding="10,7"
+                                    Margin="8,0,0,0" Content="{loc:T '默认'}" Click="OnResetTriggerKey"
+                                    ToolTip="{loc:T '恢复成 Enter 回车'}" />
                         </StackPanel>
                     </Grid>
 
                     <Border Style="{StaticResource Divider}" />
-
-                    <TextBlock Text="{loc:T '三个按键各做一件事'}" Style="{StaticResource Text.Secondary}"
-                               FontWeight="SemiBold" Margin="0,10,0,2" />
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -116,42 +79,91 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '左键拖'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '吞掉触发键'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '打开后，按住触发键时别的程序收不到这个键（不会顺手打出一个回车）。'}"
+                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" x:Name="SwallowBox" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="OnToggleChanged" Tag="SwallowTrigger" />
+                    </Grid>
+
+                    <TextBlock Text="{loc:T '鼠标动作'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
+                               Margin="0,10,0,2" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '左键'}" Style="{StaticResource Text.Body}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" x:Name="LeftBox" Style="{StaticResource ComboBox.Base}"
                                   Width="190" VerticalAlignment="Center"
                                   SelectionChanged="OnComboChanged" Tag="ActionLeft" />
                     </Grid>
 
+                    <Border Style="{StaticResource Divider}" />
+
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '右键拖'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '右键'}" Style="{StaticResource Text.Body}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" x:Name="RightBox" Style="{StaticResource ComboBox.Base}"
                                   Width="190" VerticalAlignment="Center"
                                   SelectionChanged="OnComboChanged" Tag="ActionRight" />
                     </Grid>
 
+                    <Border Style="{StaticResource Divider}" />
+
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '中键拖'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '中键'}" Style="{StaticResource Text.Body}" />
                         </StackPanel>
                         <ComboBox Grid.Column="1" x:Name="MiddleBox" Style="{StaticResource ComboBox.Base}"
                                   Width="190" VerticalAlignment="Center"
                                   SelectionChanged="OnComboChanged" Tag="ActionMiddle" />
                     </Grid>
 
-                    <Border Style="{StaticResource Divider}" Margin="0,6,0,0" />
+                    <Border Style="{StaticResource Divider}" />
 
-                    <TextBlock Text="{loc:T '外框'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '侧键 X1（后退）'}" Style="{StaticResource Text.Body}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" x:Name="X1Box" Style="{StaticResource ComboBox.Base}"
+                                  Width="190" VerticalAlignment="Center"
+                                  SelectionChanged="OnComboChanged" Tag="ActionX1" />
+                    </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '侧键 X2（前进）'}" Style="{StaticResource Text.Body}" />
+                        </StackPanel>
+                        <ComboBox Grid.Column="1" x:Name="X2Box" Style="{StaticResource ComboBox.Base}"
+                                  Width="190" VerticalAlignment="Center"
+                                  SelectionChanged="OnComboChanged" Tag="ActionX2" />
+                    </Grid>
+
+                    <TextBlock Text="{loc:T '贴边'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
                                Margin="0,10,0,2" />
 
                     <Grid>
@@ -160,12 +172,13 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '显示激活外框'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住触发键时，给要操作的窗口描一圈，告诉你现在拖的是谁。'}"
+                            <TextBlock Text="{loc:T '吸附'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '窗口边靠近屏幕边、任务栏、别的窗口时自动贴上去。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="FrameBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="ShowActivationFrame" Click="OnToggleField" />
+                        <ComboBox Grid.Column="1" x:Name="AutoSnapBox" Width="240" HorizontalAlignment="Right" Style="{StaticResource ComboBox.Base}"
+                                  VerticalAlignment="Center"
+                                  SelectionChanged="OnComboChanged" Tag="AutoSnap" />
                     </Grid>
 
                     <Border Style="{StaticResource Divider}" />
@@ -176,84 +189,16 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '外框样式'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '三套画法：虚线环、细线环、流光边'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <ComboBox Grid.Column="1" x:Name="StyleBox" Style="{StaticResource ComboBox.Base}"
-                                  Width="160" VerticalAlignment="Center"
-                                  SelectionChanged="OnComboChanged" Tag="FrameStyleId" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '外框颜色'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '「跟随系统强调色」会随 Windows 主题色一起变。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <ComboBox Grid.Column="1" x:Name="ColorBox" Style="{StaticResource ComboBox.Base}"
-                                  Width="160" VerticalAlignment="Center"
-                                  SelectionChanged="OnComboChanged" Tag="FrameColorId" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '粗细'}" Style="{StaticResource Text.Body}" VerticalAlignment="Center" />
-                            <TextBox x:Name="ThicknessBox" Style="{StaticResource TextBox.Base}" Width="54"
-                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center" Margin="10,0,0,0"
-                                     TextChanged="OnNumberChanged" Tag="FrameThickness" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,8,16,8" HorizontalAlignment="Right">
-                            <TextBlock Text="{loc:T '圆角'}" Style="{StaticResource Text.Body}" VerticalAlignment="Center" />
-                            <TextBox x:Name="RadiusBox" Style="{StaticResource TextBox.Base}" Width="54"
-                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center" Margin="10,0,0,0"
-                                     TextChanged="OnNumberChanged" Tag="FrameRadius" />
-                            <TextBlock Text="{loc:T '不透明度'}" Style="{StaticResource Text.Body}" VerticalAlignment="Center"
-                                       Margin="14,0,0,0" />
-                            <TextBox x:Name="OpacityBox" Style="{StaticResource TextBox.Base}" Width="54"
-                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center" Margin="10,0,0,0"
-                                     TextChanged="OnNumberChanged" Tag="FrameOpacity" />
-                        </StackPanel>
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" Margin="0,6,0,0" />
-
-                    <TextBlock Text="{loc:T '吸附与手感'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
-                               Margin="0,10,0,2" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '吸附档位'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T 'AltDrag 的四档：只吸屏幕边缘与任务栏、再吸其它窗口的外侧、再吸窗口内侧。右边的数字是吸附阈值（像素）。'}"
+                            <TextBlock Text="{loc:T '吸附距离'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '离边缘多远以内算「贴上了」，就是 AltDrag.ini 里的 SnapThreshold。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <ComboBox x:Name="SnapLevelBox" Style="{StaticResource ComboBox.Base}" Width="150"
-                                      VerticalAlignment="Center" SelectionChanged="OnComboChanged" Tag="SnapLevel">
-                                <ComboBoxItem Content="{loc:T '关闭'}" Tag="0" />
-                                <ComboBoxItem Content="{loc:T '只吸屏幕'}" Tag="1" />
-                                <ComboBoxItem Content="{loc:T '屏幕 + 窗口外侧'}" Tag="2" />
-                                <ComboBoxItem Content="{loc:T '屏幕 + 窗口两侧'}" Tag="3" />
-                            </ComboBox>
-                            <TextBox x:Name="SnapBox2" Style="{StaticResource TextBox.Base}" Width="50"
-                                     MinHeight="30" Padding="6,2" VerticalContentAlignment="Center" Margin="10,0,0,0"
+                            <TextBox x:Name="SnapThresholdBox" Style="{StaticResource TextBox.Base}" Width="70"
+                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
                                      TextChanged="OnNumberChanged" Tag="SnapThreshold" />
+                            <TextBlock Text="{loc:T '像素'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
+                                       VerticalAlignment="Center" />
                         </StackPanel>
                     </Grid>
 
@@ -265,99 +210,15 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '贴边分屏与最大化'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '像 Aero 那样：拖到屏幕左右边缘各占半屏、拖到顶部最大化。和上面的吸附档位互不影响。'}"
+                            <TextBlock Text="{loc:T 'Aero 贴边'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '拖到屏幕顶边最大化、拖到左右边或顶角各占半屏/四分之一屏。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
                         <CheckBox Grid.Column="1" x:Name="AeroBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="AeroSnap" Click="OnToggleField" />
+                                  VerticalAlignment="Center" Click="OnToggleChanged" Tag="AeroSnap" />
                     </Grid>
 
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '键盘分屏'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住触发键时按方向键，把窗口按比例贴到左/右半屏。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="TilingBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="KeyboardTiling" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '摇一摇最小化其它窗口'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '抓着窗口左右快速晃两下，桌面上其它窗口全部最小化。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="ShakeBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="ShakeMinimizeOthers" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '拖动时显示位置'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '拖动过程中在鼠标旁显示窗口的位置与尺寸。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="HudBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="ShowDragHud" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <!-- 原来这一项和上面共用一个开关位，只给了 ToolTip 没给文字，
-                         看上去就像"同一个设置有两个开关"。拆成独立一行。 -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '显示窗口坐标'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '拖动时在尺寸后面再显示左上角坐标；关掉只显示尺寸。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="HudPosBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="DragHudShowPosition" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '按住触发键时给出提示'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '触发键按下后，在屏幕角落闪一条「已就绪」，避免以为没生效。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="HintBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="ShowTriggerHint" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" Margin="0,6,0,0" />
-
-                    <TextBlock Text="{loc:T '双击与窗口行为'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
+                    <TextBlock Text="{loc:T '多显示器与焦点'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
                                Margin="0,10,0,2" />
 
                     <Grid>
@@ -366,12 +227,13 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '双击左键最大化'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住触发键双击左键 = 最大化 / 还原。'}"
+                            <TextBlock Text="{loc:T '拖到别的屏幕就最大化'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '把最大化的窗口拖到另一块屏上，直接在那块屏上最大化（AutoRemaximize）。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="DblMaxBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="DoubleClickLeftMaximize" Click="OnToggleField" />
+                        <ComboBox Grid.Column="1" x:Name="AutoRemaxBox" Width="240" HorizontalAlignment="Right" Style="{StaticResource ComboBox.Base}"
+                                  VerticalAlignment="Center"
+                                  SelectionChanged="OnComboChanged" Tag="AutoRemaximize" />
                     </Grid>
 
                     <Border Style="{StaticResource Divider}" />
@@ -382,12 +244,34 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '双击右键角落关闭'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '按住触发键双击右键 = 关闭窗口（点右上角那块区域才算）。'}"
+                            <TextBlock Text="{loc:T '起拖时激活窗口'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '按下鼠标就把目标窗口提到最前（AutoFocus=1）。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="DblCloseBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="DoubleClickRightZone" Click="OnToggleField" />
+                        <CheckBox Grid.Column="1" x:Name="AutoFocusBox" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="OnToggleChanged" Tag="AutoFocus" />
+                    </Grid>
+
+                    <TextBlock Text="{loc:T '刷新率'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
+                               Margin="0,10,0,2" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '移动抽帧'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '每 N 个鼠标事件才写一次窗口（MoveRate）。1 = 每个事件都跟手。'}"
+                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBox x:Name="MoveRateBox" Style="{StaticResource TextBox.Base}" Width="70"
+                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
+                                     TextChanged="OnNumberChanged" Tag="MoveRate" />
+                            <TextBlock Text="{loc:T '个事件'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
                     </Grid>
 
                     <Border Style="{StaticResource Divider}" />
@@ -398,101 +282,43 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '移动最大化窗口时先还原'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '和系统拖标题栏的手感一致：一拖就还原，松手落在你拖到的位置。'}"
+                            <TextBlock Text="{loc:T '缩放抽帧'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '改大小时每 N 个鼠标事件才写一次窗口（ResizeRate）。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="RestoreBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="RestoreMaximizedWhenMoved" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '拖动时置顶'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '拖动中的窗口临时提到最前面，松手恢复原来的层级。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBox x:Name="ResizeRateBox" Style="{StaticResource TextBox.Base}" Width="70"
+                                     MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
+                                     TextChanged="OnNumberChanged" Tag="ResizeRate" />
+                            <TextBlock Text="{loc:T '个事件'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
+                                       VerticalAlignment="Center" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="TopBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="BringToFront" Click="OnToggleField" />
                     </Grid>
 
-                    <Border Style="{StaticResource Divider}" />
+                    <TextBlock Text="{loc:T '程序例外'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
+                               Margin="0,10,0,2" />
 
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '允许拖全屏窗口'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '全屏视频、游戏一般不许拖；打开这一项就能拖，但可能会被它们抢回焦点。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="FullBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="AllowFullscreenWindows" Click="OnToggleField" />
-                    </Grid>
+                    <TextBlock Text="{loc:T '这些程序里的窗口不接管（按进程名，一行一个）。AltDrag 的黑名单就是这一份。'}"
+                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,2,0,0" />
+                    <TextBox x:Name="ProcessBlacklistBox" Style="{StaticResource TextBox.Base}" Height="88"
+                             Margin="0,6,0,0" AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                             TextChanged="OnTextChanged" Tag="ProcessBlacklist" />
+                    <controls:AppPickButtons Margin="0,6,0,0" HorizontalAlignment="Stretch"
+                                             PickFile="OnPickProcess" PickWindow="OnPickWindow" />
 
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '按下触发键先退出全屏'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '全屏窗口先把全屏退掉，再接管拖动，免得和它抢焦点。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="ExitFullBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="ExitFullscreenOnTrigger" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '允许拖 Input Plus 自己的窗口'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '关掉之后设置窗口自己也拖不动（防止误拖）。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="OwnBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="AllowDragOwnWindows" Click="OnToggleField" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '松手后可撤销'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '拖完的一小会儿内可以撤销这一步（Alt+Z 风格）。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="UndoBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="UndoEnabled" Click="OnToggleField" />
-                    </Grid>
+                    <TextBlock Text="{loc:T '窗口例外（进程名|窗口类名，如 *|TaskSwitcherWnd）'}"
+                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,14,0,0" />
+                    <TextBox x:Name="WindowBlacklistBox" Style="{StaticResource TextBox.Base}" Height="88"
+                             Margin="0,6,0,12" AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                             TextChanged="OnTextChanged" Tag="WindowBlacklist" />
 
                 </StackPanel>
             </ScrollViewer>
         </Border>
 
-        <!-- 右：程序例外 + 按程序规则 + 状态 + 用法 + 恢复默认
-             版式照「平滑滚动」右栏：两个挑程序的按钮 + 一行一条的清单。
-             这两块原来在左栏最底下，得自己往下翻才看得见，现在挪到右边常驻栏里。 -->
+        <!-- 右：状态 + 用法 -->
         <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="18,16">
             <Grid>
                 <Grid.RowDefinitions>
@@ -502,142 +328,37 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0">
-                    <TextBlock Text="{loc:T '当前状态'}" Style="{StaticResource Text.Secondary}"
-                               FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:T '当前状态'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold" />
                     <TextBlock x:Name="StatusText" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
-                               Margin="0,8,0,0" />
+                               Margin="0,6,0,0" />
                 </StackPanel>
 
-                <ScrollViewer x:Name="RightScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                <ScrollViewer Grid.Row="1" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,0,18,0">
+                        <TextBlock Text="{loc:T '怎么用'}" Style="{StaticResource Text.Body}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="{loc:T '按住触发键不放，然后用鼠标左键拖窗口、右键改大小。拖的时候松不松触发键都行，松鼠标才算结束。'}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Text="{loc:T '拖的时候按住 Shift 强制贴边（比设置里的档位更高一档），按住空格临时关掉贴边。'}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Text="{loc:T '按住触发键双击左键：窗口最大化/还原。双击右键：按现在的窗口大小贴成半屏或四分之一屏。'}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Text="{loc:T '按住 Ctrl 拖：光标被锁在当前这块屏幕里。按住触发键时按一下 Ctrl，会让接下来拖的那个窗口重新接管一次。'}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Text="{loc:T '拖动中按 Esc 立刻收手（窗口停在原地，不会继续跟着走）。'}" />
 
-                        <TextBlock Text="{loc:T '程序例外'}" Style="{StaticResource Text.Secondary}"
-                                   FontWeight="SemiBold" />
-                        <TextBlock Text="{loc:T '列表里的程序完全不接管；没列出来的都按左边的参数接管。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                        <controls:AppPickButtons x:Name="ExceptionPicker" Margin="0,8,0,0"
-                                                 HorizontalAlignment="Stretch"
-                                                 PickFile="OnBlacklistPickFile"
-                                                 PickWindow="OnBlacklistPickWindow" />
+                        <Border Style="{StaticResource Divider}" Margin="0,14,0,4" />
 
-                        <ItemsControl x:Name="ExceptionList" Margin="0,4,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                                            Padding="0,8">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource Text.Tertiary}"
-                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
-                                            </StackPanel>
-                                            <Button Grid.Column="1" Content="{loc:T '恢复'}" Tag="{Binding Value}"
-                                                    Click="OnRemoveException"
-                                                    Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="8,0,0,0"
-                                                    ToolTip="{loc:T '把它从程序例外里拿掉，恢复接管。'}" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <TextBlock x:Name="ExceptionEmpty" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
-                                   Margin="0,8,0,0"
-                                   Text="{loc:T '还没有例外程序：所有程序都按左边的参数接管。'}" />
-
-                        <TextBlock Text="{loc:T '手动输入（一行一个程序名，支持 * 通配）'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,4" />
-                        <TextBox x:Name="BlacklistBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
-                                 MaxHeight="64" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 VerticalContentAlignment="Top" Padding="8,6"
-                                 TextChanged="OnTextChanged" />
-
-                        <Border Style="{StaticResource Divider}" Margin="0,12,0,0" />
-
-                        <TextBlock Text="{loc:T '按程序规则'}" Style="{StaticResource Text.Secondary}"
-                                   FontWeight="SemiBold" Margin="0,12,0,0" />
-                        <TextBlock Text="{loc:T '比程序例外细一档：wps.exe=Ignore; code.exe=MoveOnly; game.exe=NoFrame（分号分隔，大小写不限）。'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <TextBlock Text="{loc:T '新加的规则是'}" Style="{StaticResource Text.Tertiary}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <ComboBox x:Name="RuleModeBox" Style="{StaticResource ComboBox.Base}" Width="148"
-                                      SelectedIndex="0">
-                                <ComboBoxItem Content="{loc:T '完全不接管'}" Tag="Ignore" />
-                                <ComboBoxItem Content="{loc:T '只允许移动'}" Tag="MoveOnly" />
-                                <ComboBoxItem Content="{loc:T '只允许缩放'}" Tag="ResizeOnly" />
-                                <ComboBoxItem Content="{loc:T '接管但不画外框'}" Tag="NoFrame" />
-                            </ComboBox>
-                        </StackPanel>
-                        <controls:AppPickButtons x:Name="RulesPicker" Margin="0,8,0,0"
-                                                 HorizontalAlignment="Stretch"
-                                                 PickFile="OnRulePickFile"
-                                                 PickWindow="OnRulePickWindow" />
-
-                        <ItemsControl x:Name="RuleList" Margin="0,4,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
-                                            Padding="0,8">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource Text.Tertiary}"
-                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
-                                            </StackPanel>
-                                            <Button Grid.Column="1" Content="{loc:T '删除'}" Tag="{Binding Value}"
-                                                    Click="OnRemoveRule"
-                                                    Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="8,0,0,0" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <TextBlock x:Name="RuleEmpty" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
-                                   Margin="0,8,0,0"
-                                   Text="{loc:T '还没有按程序规则：所有程序都用同一套拖动方式。'}" />
-
-                        <TextBlock Text="{loc:T '手动输入（wps.exe=Ignore; code.exe=MoveOnly）'}"
-                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,4" />
-                        <TextBox x:Name="RulesBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
-                                 MaxHeight="64" AcceptsReturn="True" TextWrapping="NoWrap"
-                                 VerticalScrollBarVisibility="Auto"
-                                 VerticalContentAlignment="Top" Padding="8,6"
-                                 TextChanged="OnTextChanged" />
-
-                        <Border Style="{StaticResource Divider}" Margin="0,12,0,0" />
-
-                        <TextBlock Text="{loc:T '怎么用'}" Style="{StaticResource Text.Secondary}"
-                                   FontWeight="SemiBold" Margin="0,12,0,0" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="{loc:T '按住触发键 → 在目标窗口上按左键拖动（移动）、按右键拖动（改大小）、按中键（最大化 / 还原）→ 松手完成。'}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="{loc:T '不想拖窗口时直接松开触发键：这次点击会照常发给窗口，不会丢。'}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="{loc:T '和外接屏幕配合：拖到屏幕边缘停住，会自动贴边；拖动时按方向键可以分屏。'}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="{loc:T '和鼠标手势互不干扰：手势要按住起始键画笔画，按住拖拽要按住触发键按鼠标键，两套钩子各认各的事件。'}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,4"
-                                   Text="{loc:T '如果某个程序拖不动，先看它的窗口是不是管理员权限运行（提权窗口普通权限的钩子接管不了）。'}" />
+                        <TextBlock Text="{loc:T '跟 AltDrag 的关系'}" Style="{StaticResource Text.Body}" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="{loc:T '拖拽几何（贴边、Aero 半屏、缩放九宫格、双击、多显示器还原）逐行照搬 AltDrag 的 hooks.c：鼠标事件进来就同步算位置、同步写窗口，没有中间队列，所以手一停窗口就停。'}" />
                     </StackPanel>
                 </ScrollViewer>
 
-                <StackPanel Grid.Row="2">
-                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
-                    <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Padding="9,4"
-                            Margin="0,10,0,0" HorizontalAlignment="Left"
-                            Click="OnResetDefaults" />
+                <StackPanel Grid.Row="2" Margin="0,12,0,0">
+                    <Border Style="{StaticResource Divider}" Margin="0,0,0,10" />
+                    <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Padding="14,7"
+                            HorizontalAlignment="Left" Click="OnResetDefaults" />
                 </StackPanel>
             </Grid>
         </Border>

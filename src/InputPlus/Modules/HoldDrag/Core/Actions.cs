@@ -1,94 +1,80 @@
-#nullable disable
-#pragma warning disable CS0649, CS8632, CS0414, CA1416
-// HoldDrag · Core/Actions.cs
-
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
-using System.Drawing.Text;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Reflection;
-using System.Runtime;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
-using System.Security.Principal;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace InputPlus.Modules.HoldDrag;
 
+/// <summary>被拖拽的鼠标键。与 AltDrag.ini 的 [Input] 一节一一对应。</summary>
+internal enum MouseButton
+{
+	Left,
+	Middle,
+	Right,
+	X1,
+	X2
+}
+
+/// <summary>
+/// hooks.c:1131-1190 的 GetAction 那套：一个鼠标键配一个动作。
+/// 存的是字符串 id（配置里可读、可手改），引擎里用 <see cref="ToCode"/> 换成紧凑的整数。
+/// </summary>
 internal static class Actions
 {
-	public const string Move = "Move";
+	internal const string Move = "Move";
 
-	public const string Resize = "Resize";
+	internal const string Resize = "Resize";
 
-	public const string Maximize = "Maximize";
+	internal const string Close = "Close";
 
-	public const string Minimize = "Minimize";
+	internal const string Minimize = "Minimize";
 
-	public const string Close = "Close";
+	internal const string Lower = "Lower";
 
-	public const string Lower = "Lower";
+	internal const string AlwaysOnTop = "AlwaysOnTop";
 
-	public const string AlwaysOnTop = "AlwaysOnTop";
+	internal const string Center = "Center";
 
-	public const string Center = "Center";
+	internal const string Nothing = "Nothing";
 
-	public const string Nothing = "Nothing";
+	/// <summary>界面下拉里的顺序（也是 ToCode 的编号顺序）。</summary>
+	internal static readonly string[] All = new string[8] { Move, Resize, Close, Minimize, Lower, AlwaysOnTop, Center, Nothing };
 
-	public static readonly string[] All = new string[9] { "Move", "Resize", "Maximize", "Minimize", "Close", "Lower", "AlwaysOnTop", "Center", "Nothing" };
+	/// <summary>动作的整数编号；0 表示"没有动作"（hooks.c 的 ACTION_NONE）。</summary>
+	internal const int CodeNone = 0;
 
-	public static string DisplayName(string a)
+	internal static int ToCode(string? id)
 	{
-		return a switch
-		{
-			"Move" => Loc.T("移动窗口"), 
-			"Resize" => Loc.T("调整大小"), 
-			"Maximize" => Loc.T("最大化 / 还原"), 
-			"Minimize" => Loc.T("最小化"), 
-			"Close" => Loc.T("关闭窗口"), 
-			"Lower" => Loc.T("置于最底层"), 
-			"AlwaysOnTop" => Loc.T("置顶 / 取消置顶"), 
-			"Center" => Loc.T("在屏幕上居中"), 
-			"Nothing" => Loc.T("不绑定动作"), 
-			_ => a, 
-		};
+		int num = Array.IndexOf(All, Normalize(id));
+		return (num < 0) ? 0 : (num + 1);
 	}
 
-	public static bool IsValid(string a)
+	/// <summary>认不出来就落到 Nothing（原版默认值），绝不抛。</summary>
+	internal static string Normalize(string? id)
 	{
-		for (int i = 0; i < All.Length; i++)
+		if (string.IsNullOrWhiteSpace(id))
 		{
-			if (All[i] == a)
+			return Nothing;
+		}
+		foreach (string item in All)
+		{
+			if (string.Equals(item, id.Trim(), StringComparison.OrdinalIgnoreCase))
 			{
-				return true;
+				return item;
 			}
 		}
-		return false;
+		return Nothing;
 	}
 
-	public static bool IsDragAction(string a)
+	internal static string DisplayName(string? id)
 	{
-		if (!(a == "Move"))
+		return Normalize(id) switch
 		{
-			return a == "Resize";
-		}
-		return true;
+			"Move" => Loc.T("移动窗口"),
+			"Resize" => Loc.T("改窗口大小"),
+			"Close" => Loc.T("关闭窗口"),
+			"Minimize" => Loc.T("最小化"),
+			"Lower" => Loc.T("放到最下层"),
+			"AlwaysOnTop" => Loc.T("置顶 / 取消置顶"),
+			"Center" => Loc.T("居中"),
+			_ => Loc.T("什么都不做"),
+		};
 	}
 }

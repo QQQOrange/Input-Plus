@@ -301,7 +301,7 @@ public partial class MainWindow : Window
             "layers" => (Loc.T("触发键与层"), Loc.T("多触发键 · 10 层")),
             "gestures" => (Loc.T("鼠标手势"), Loc.T("画一笔 · 执行一个动作")),
             "scroll" => (Loc.T("平滑滚动"), Loc.T("滚轮 · 缓动曲线")),
-            "holddrag" => (Loc.T("按住拖拽"), Loc.T("长按触发键 · 拖动窗口")),
+            "holddrag" => (Loc.T("按住拖拽"), Loc.T("按住触发键 · 拖动 / 缩放窗口")),
             "backup" => (Loc.T("同步与备份"), Loc.T("WebDAV · 导入导出")),
             "settings" => (Loc.T("设置"), Loc.T("全局选项")),
             "test" => (Loc.T("测试"), Loc.T("按键 · 切层 · 诊断")),
