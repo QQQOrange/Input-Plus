@@ -898,6 +898,13 @@ public static class SettingsStore
             }
         }
 
+        /* 8：v1.3.0 换表时复用了几个老关键字（ba / db / re / st / tw / wa / so / me），
+         * 它们在老版本里指的是别的站点（百度备用 / 豆瓣 / Reddit / Stack Overflow /
+         * Twitter / WolframAlpha / 搜狗 / 韦氏词典）。按关键字合并的结果是：老条目保住了
+         * 自己的链接，却套上了新站点的图标，同一站点还各多出一条（db2 / re2 …）。
+         * 这里按"站点域名 + 路径"合并重复条目，并把图标改回与站点相符的那个。 */
+        int deduped = DedupeSearchBySite(s.Search);
+
         // 先清理"同一个站点、关键字却不同"的旧条目。
         //
         // 背景：早先版本亲手造过一批引擎（tr 翻译 / ai ChatGPT / yh Yahoo Japan …），
@@ -968,10 +975,17 @@ public static class SettingsStore
         if (legacyIconFixed > 0)
             CoreLog.Info($"旧图标路径清理：{legacyIconFixed} 个条目改用内置图标");
 
+        // 补完新引擎再校图标：老关键字撞名后留下的"豆瓣配 DBLP 的图"这类错位，
+        // 按站点域名改回正确的内置图标。
+        int iconsAligned = AlignSearchIconsBySite(s.Search);
+        if (iconsAligned > 0)
+            CoreLog.Info($"搜索指令图标纠正：{iconsAligned} 个条目的图标与站点不符，已改回");
+
         s.BuiltinEnginesVersion = DefaultSettings.BuiltinEnginesVersion;
-        if (added > 0 || upgraded > 0 || removedLegacy > 0)
+        if (added > 0 || upgraded > 0 || removedLegacy > 0 || deduped > 0)
             CoreLog.Info($"搜索引擎表更新：新增 {added} 个，图标升级 {upgraded} 个，" +
-                         Loc.F("清理旧条目 {0} 个（引擎表版本 → {1}）", removedLegacy, s.BuiltinEnginesVersion));
+                         Loc.F("清理旧条目 {0} 个、重复站点 {1} 个（引擎表版本 → {2}）",
+                               removedLegacy, deduped, s.BuiltinEnginesVersion));
         return true;
     }
 
@@ -1160,6 +1174,177 @@ public static class SettingsStore
         }
         return n;
     }
+
+    /// <summary>
+    /// 合并"同一个站点、链接却重复"的搜索指令。
+    ///
+    /// 为什么会有重复：v1.3.0 换成 QuickSearch 的引擎表时复用了几个老关键字
+    /// （ba / db / re / st / tw / wa / so / me），它们在老版本里指的是别的站点
+    /// （百度备用 / 豆瓣 / Reddit / Stack Overflow / Twitter / WolframAlpha / 搜狗 / 韦氏词典）。
+    /// 迁移按关键字合并，老条目保住自己的链接却套上了新站点的图标，同一站点还各多出一条，
+    /// 于是列表里出现两个豆瓣、两个 Reddit，链接一模一样。
+    ///
+    /// 判据用"站点域名 + 路径"：www. / 大小写 / 结尾斜杠 / 查询串的差异不算不同站点。
+    /// 只删"图标明显是别家"的那条；两条图标都对（用户自己另配的）时不动。
+    /// </summary>
+    private static int DedupeSearchBySite(List<QEntry> entries)
+    {
+        var icons = BuiltinIconBySite();
+
+        // 内置表里每个关键字现在指向哪个站点：条目自己的站点跟它对不上，就是撞名留下的旧货
+        var keySite = DefaultSettings.Create().Search
+            .Where(e => !IsDefaultEngine(e))
+            .GroupBy(e => e.Key ?? "", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => SearchSiteOf(g.First().Value), StringComparer.OrdinalIgnoreCase);
+
+        int removed = 0;
+
+        var groups = entries
+            .Where(e => !IsDefaultEngine(e))
+            .GroupBy(e => SearchSiteOf(e.Value), StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Key.Length > 0 && g.Count() > 1)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            if (!icons.TryGetValue(group.Key, out string? canonical)) continue;
+            if (string.IsNullOrEmpty(canonical)) continue;
+
+            // 要留的那条：图标与站点相符，而且它的关键字在内置表里就是指这个站点。
+            // 先挑这条，才不会把内置的 go 当成重复删掉、留下改名前的老键 gg。
+            QEntry? keeper =
+                group.FirstOrDefault(e => string.Equals(e.EngineIcon, canonical, StringComparison.OrdinalIgnoreCase)
+                                          && keySite.TryGetValue(e.Key ?? "", out string? ownSite)
+                                          && string.Equals(ownSite, group.Key, StringComparison.OrdinalIgnoreCase))
+                ?? group.FirstOrDefault(e => string.Equals(e.EngineIcon, canonical, StringComparison.OrdinalIgnoreCase));
+            if (keeper == null) continue;
+
+            foreach (var duplicate in group.ToList())
+            {
+                if (ReferenceEquals(duplicate, keeper)) continue;
+
+                // 关键字在内置表里指的是别的站点 = 撞名留下的旧条目。
+                // 例：db 在内置表里是 DBLP，这条却写着豆瓣 —— 一定是老版本残留。
+                bool hijacked = keySite.TryGetValue(duplicate.Key ?? "", out string? keySite_)
+                                && keySite_.Length > 0
+                                && !string.Equals(keySite_, group.Key, StringComparison.OrdinalIgnoreCase);
+
+                // 关键字已经不在内置表里、图标是别家的、备注还写着站点名：同一批机器生成的
+                bool stray = !keySite.ContainsKey(duplicate.Key ?? "")
+                             && !string.Equals(duplicate.EngineIcon, canonical, StringComparison.OrdinalIgnoreCase)
+                             && string.Equals((duplicate.Comment ?? "").Trim(),
+                                              (keeper.Comment ?? "").Trim(), StringComparison.Ordinal);
+
+                // 关键字不在内置表里，但备注和图标跟留下的那条一模一样：老版本改过名的残留（gg → go）
+                bool renamedLeftover = !keySite.ContainsKey(duplicate.Key ?? "")
+                                       && string.Equals(duplicate.EngineIcon, canonical, StringComparison.OrdinalIgnoreCase)
+                                       && string.Equals((duplicate.Comment ?? "").Trim(),
+                                                        (keeper.Comment ?? "").Trim(), StringComparison.Ordinal);
+
+                if (!hijacked && !stray && !renamedLeftover) continue;   // 用户自己另配的一条，保留
+
+                entries.Remove(duplicate);
+                removed++;
+                CoreLog.Info($"搜索指令 {duplicate.Key}（{duplicate.Comment}）与 {keeper.Key} 是同一个站点，移除重复的一条");
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// 把图标与站点不符的搜索指令改回正确的内置图标。
+    ///
+    /// 典型症状：条目写着"豆瓣"、链接是 douban.com，图标却是 DBLP 的
+    /// —— 老关键字撞名的后遗症。只有两种情况才改：
+    ///   * 图标是空的；
+    ///   * 图标属于别的站点（能查出来是谁的、且不是这个站点的）。
+    /// 用户手填的图标文件、以及认不出来的图标一律不动。
+    /// </summary>
+    private static int AlignSearchIconsBySite(List<QEntry> entries)
+    {
+        var icons = BuiltinIconBySite();
+        var iconDomains = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in DefaultSettings.Create().Search)
+        {
+            if (string.IsNullOrEmpty(b.EngineIcon)) continue;
+            if (!iconDomains.TryGetValue(b.EngineIcon, out HashSet<string>? set))
+                iconDomains[b.EngineIcon] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            set.Add(DomainOf(b.Value));
+        }
+
+        int n = 0;
+        foreach (var entry in entries)
+        {
+            if (IsDefaultEngine(entry)) continue;
+            if (!icons.TryGetValue(SearchSiteOf(entry.Value), out string? canonical)) continue;
+            if (string.IsNullOrEmpty(canonical)) continue;
+            if (string.Equals(entry.EngineIcon, canonical, StringComparison.OrdinalIgnoreCase)) continue;
+            // 用户自己指定了图标文件，按他的来
+            if (!string.IsNullOrWhiteSpace(entry.IconPath) && !IsOurGeneratedIcon(entry.IconPath)) continue;
+
+            string icon = entry.EngineIcon ?? "";
+            bool blank = icon.Length == 0;
+            bool foreign = !blank &&
+                           iconDomains.TryGetValue(icon, out HashSet<string>? domains) &&
+                           !domains.Contains(DomainOf(entry.Value));
+            if (!blank && !foreign) continue;
+
+            entry.EngineIcon = canonical;
+            if (IsOurGeneratedIcon(entry.IconPath)) entry.IconPath = "";
+            n++;
+            CoreLog.Info($"搜索指令 {entry.Key}（{entry.Comment}）的图标与站点不符，改用 {canonical}");
+        }
+
+        return n;
+    }
+
+    /// <summary>内置引擎表：站点签名 → 该站点的内置图标（同一站点只留一个）。</summary>
+    private static Dictionary<string, string> BuiltinIconBySite()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in DefaultSettings.Create().Search)
+        {
+            if (string.IsNullOrEmpty(b.EngineIcon)) continue;
+            string site = SearchSiteOf(b.Value);
+            if (site.Length == 0) continue;
+            map.TryAdd(site, b.EngineIcon);
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// 站点签名：域名 + 路径，用来判断两条搜索链接是不是同一个站点的搜索。
+    /// 忽略协议、www. 前缀、大小写、结尾斜杠和查询串；解析不出来时返回空串，
+    /// 调用方据此跳过判定（宁可不合，也不误删）。
+    /// </summary>
+    internal static string SearchSiteOf(string url)
+    {
+        string host = DomainOf(url);
+        if (host.Length == 0) return "";
+
+        string path = "";
+        try
+        {
+            string s = (url ?? "").Trim();
+            int scheme = s.IndexOf("://", StringComparison.Ordinal);
+            if (scheme >= 0) s = s[(scheme + 3)..];
+            int slash = s.IndexOf('/');
+            if (slash >= 0) path = s[slash..];
+            int cut = path.IndexOfAny(new[] { '?', '#' });
+            if (cut >= 0) path = path[..cut];
+            path = path.TrimEnd('/').ToLowerInvariant();
+        }
+        catch
+        {
+            path = "";
+        }
+
+        return host + (path.Length == 0 ? "/" : path);
+    }
+
+    private static bool IsDefaultEngine(QEntry e) =>
+        e.Key != null && e.Key.Equals("default", StringComparison.OrdinalIgnoreCase);
 
     private static int MergeBuiltinEntries(List<QEntry> target, List<QEntry> builtins)
     {
@@ -1776,8 +1961,11 @@ public static class DefaultSettings
     ///       图标全部换为其内置 PNG
     ///   5 = 旧条目改用内置图标（替换掉磁盘上的 svg 图标路径）
     ///   6 = B 站搜索关键字 bili 改为 bilis，bili 留给常用网址首页
+    ///   7 = 清掉指向已删除 svg 的死图标路径，按站点补内置图标
+    ///   8 = 合并同一站点的重复条目（老关键字撞名留下的豆瓣 / Reddit / 搜狗 …），
+    ///       并把图标改回与站点相符的那个
     /// </summary>
-    public const int BuiltinEnginesVersion = 7;
+    public const int BuiltinEnginesVersion = 8;
 
     /// <summary>
     /// 3 = 内置网址条目补 EngineIcon（图标随程序走，不再依赖站点 favicon 缓存）

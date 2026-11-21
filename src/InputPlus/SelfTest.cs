@@ -101,6 +101,7 @@ public static partial class SelfTest
 
         Section("Qbar 图标");
         TestLegacyIconPathRevival();
+        TestSearchSiteDedupe();
 
         Section("表达式求值");
         TestEvaluator();

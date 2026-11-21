@@ -590,6 +590,114 @@ public static partial class SelfTest
     }
 
     /// <summary>
+    /// 老关键字撞名会留下"同一个站点、两条一样的链接"：豆瓣 / Reddit / 搜狗 …
+    /// 而且活下来的那条还套着别人的图标（豆瓣挂 DBLP 的图）。
+    ///
+    /// 这条自检按真实用户的设置样子造一份数据，要求迁移后：
+    ///   · 同一站点的搜索链接只剩一条（用户自己另配的、图标也正确的那条保留）；
+    ///   · 图标改回与站点相符的内置图标；
+    ///   · 被腾出来的关键字由内置表补回来。
+    /// </summary>
+    private static void TestSearchSiteDedupe()
+    {
+        var s = DefaultSettings.Create();
+        s.BuiltinEnginesVersion = 7;
+
+        // 模拟 v1.2 时代的老条目：关键字还在，链接是原来的站点，图标却是撞名后套上去的
+        s.Search.RemoveAll(e => e.Key is "db" or "db2" or "re" or "so" or "ba");
+        s.Search.Add(new QEntry
+        {
+            Key = "db", Value = "https://www.douban.com/search?q={q}",
+            Comment = "豆瓣", EngineIcon = "dblp",
+        });
+        s.Search.Add(new QEntry
+        {
+            Key = "db2", Value = "https://www.douban.com/search?q={q}",
+            Comment = "豆瓣", EngineIcon = "dou_ban",
+        });
+        s.Search.Add(new QEntry
+        {
+            Key = "re", Value = "https://www.reddit.com/search/?q={q}",
+            Comment = "Reddit", EngineIcon = "researchgate",
+        });
+        s.Search.Add(new QEntry
+        {
+            Key = "so", Value = "https://www.sogou.com/web?query={q}",
+            Comment = "搜狗", EngineIcon = "360",
+        });
+        // 老版本的"百度（备用）"：链接是百度，图标却是撞名后的 Bandcamp
+        s.Search.Add(new QEntry
+        {
+            Key = "ba", Value = "https://www.baidu.com/s?wd={q}",
+            Comment = "百度（备用）", EngineIcon = "bandcamp",
+        });
+        // 老版本的关键字改过名（gg → go）：两条的链接 / 图标 / 备注一模一样。
+        // 特意塞到列表最前面 —— 真实配置里老条目就排在前面，留下来的必须是内置的 go。
+        s.Search.RemoveAll(e => e.Key == "gg");
+        s.Search.Insert(0, new QEntry
+        {
+            Key = "gg", Value = "https://www.google.com/search?q={q}",
+            Comment = "Google", EngineIcon = "google",
+        });
+        // 用户自己另配的一条：链接和内置的一样、图标也是对的，不能被当成重复删掉
+        s.Search.Add(new QEntry
+        {
+            Key = "dby", Value = "https://www.douban.com/search?q={q}",
+            Comment = "豆瓣（自己加的）", EngineIcon = "dou_ban",
+        });
+
+        SettingsStore.MigrateBuiltinEnginesForTest(s);
+
+        // 按"域名+路径"比对，不能用 Contains —— 豆瓣电影/豆瓣读书是 search.douban.com，
+        // 微信搜狗是 weixin.sogou.com，都是别的站点，不该算进同一组
+        string doubanSite = SettingsStore.SearchSiteOf("https://www.douban.com/search?q={q}");
+        var douban = s.Search.Where(e => SettingsStore.SearchSiteOf(e.Value) == doubanSite).ToList();
+        Check("豆瓣条目还在", douban.Count > 0, douban.Count.ToString());
+        Check("豆瓣的重复链接只剩用户另配的那条",
+            douban.All(e => e.EngineIcon == "dou_ban") && douban.Count == 2,
+            string.Join(" / ", douban.Select(e => e.Key + ":" + e.EngineIcon)));
+        CheckEqual("挂错图标的旧豆瓣条目已被合并", douban.Any(e => e.Key == "db"), false);
+
+        string redditSite = SettingsStore.SearchSiteOf("https://www.reddit.com/search/?q={q}");
+        var reddit = s.Search.Where(e => SettingsStore.SearchSiteOf(e.Value) == redditSite).ToList();
+        CheckEqual("Reddit 只留一条", reddit.Count, 1);
+        CheckEqual("Reddit 用红色外星人图标", reddit.FirstOrDefault()?.EngineIcon ?? "", "reddit");
+
+        string sogouSite = SettingsStore.SearchSiteOf("https://www.sogou.com/web?query={q}");
+        var sogou = s.Search.Where(e => SettingsStore.SearchSiteOf(e.Value) == sogouSite).ToList();
+        CheckEqual("搜狗只留一条", sogou.Count, 1);
+        CheckEqual("搜狗用搜狗的图标（不是 360）", sogou.FirstOrDefault()?.EngineIcon ?? "", "sou_gou");
+
+        CheckEqual("改过名的老关键字 gg 被并入 go", s.Search.Any(e => e.Key == "gg"), false);
+        Check("用户另配的 dby 还在", s.Search.Any(e => e.Key == "dby"));
+
+        // 被腾出来的短关键字要由内置表补回来，用户不会平白少一个引擎
+        var ba = s.Search.FirstOrDefault(e => e.Key == "ba");
+        Check("腾出来的 ba 补成了 Bandcamp", ba != null);
+        CheckEqual("ba 指向 bandcamp.com", ba?.Value ?? "", "https://bandcamp.com/search?q={q}");
+
+        // 全表不许有"关键字被别的站点占着"的条目：那正是这轮要清掉的东西
+        var keySite = DefaultSettings.Create().Search
+            .Where(e => !e.Key.Equals("default", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => SettingsStore.SearchSiteOf(g.First().Value),
+                StringComparer.OrdinalIgnoreCase);
+        var hijacked = s.Search
+            .Where(e => !e.Key.Equals("default", StringComparison.OrdinalIgnoreCase))
+            .Where(e => keySite.TryGetValue(e.Key, out string? site) && site.Length > 0
+                        && site != SettingsStore.SearchSiteOf(e.Value))
+            .Select(e => e.Key + "→" + SettingsStore.SearchSiteOf(e.Value))
+            .ToList();
+        Check("迁移后没有关键字被别的站点占着的条目",
+            hijacked.Count == 0, string.Join(" / ", hijacked));
+
+        // 幂等
+        int count = s.Search.Count;
+        SettingsStore.MigrateBuiltinEnginesForTest(s);
+        CheckEqual("去重是幂等的", s.Search.Count, count);
+    }
+
+    /// <summary>
     /// 数据目录必须**跟着软件走**，迁移要只搬用户数据，加密导出要带全字段。
     ///
     /// 这三条都是"用户看不见但一错就很难受"的地方：

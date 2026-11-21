@@ -94,6 +94,14 @@ public static partial class SelfTest
         int withQ = engines.Count(e => e.Value.Contains("{q}"));
         CheckEqual("所有引擎链接都含 {q}", withQ, engines.Count);
 
+        // 内置表里不能有两条指向同一站点同一路径的搜索 ——
+        // 之前撞名留下的"两个豆瓣 / 两个 Reddit"就是这么来的，
+        // 用户看到的是同一份搜索结果排了两行。
+        int dupSites = engines
+            .GroupBy(e => SettingsStore.SearchSiteOf(e.Value), StringComparer.OrdinalIgnoreCase)
+            .Count(g => g.Key.Length > 0 && g.Count() > 1);
+        CheckEqual("引擎表里没有重复站点的搜索链接", dupSites, 0);
+
         // 引擎表版本号必须是有效数字（用于老用户自动补齐缺失引擎）
         Check("引擎表版本号 >= 1", DefaultSettings.BuiltinEnginesVersion >= 1,
             DefaultSettings.BuiltinEnginesVersion.ToString());
