@@ -523,3 +523,16 @@ $env:INPUTPLUS_RENDER_PAGES='qbar'
 - 别名只覆盖内置六条；自定义过滤器改名后没有别名。
 - `--qbar-command` 的 `{current_folder}` 用进程当前目录演示；真实执行时取前台资源管理器目录，取不到就为空。
 - 冷启动第一条查询的检索阶段可达 138–176 ms（Everything 首次查询 + 路径补扫），warm 后回到 20–33 ms；预算 p95 ≤ 50 ms 仍是 warm 口径。
+
+### v1.3（2026-11-21 15:45）发版验收
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 构建 | `dotnet build src/InputPlus/InputPlus.csproj -c Release` | 0 警告 / 0 错误 |
+| 自检（dev） | `INPUTPLUS_DATA=D:/tmp/ipst13 … --selftest` | 6464 项 / 0 失败 |
+| 自检（dist） | `dist/1.3/InputPlus.exe --selftest` | 6464 项 / 0 失败 |
+| 本地发版 | `tools/release.ps1` | dist/1.3 四形态，全部 1.3.0.0 |
+| 部署 | 覆盖 `D:\software\myself\InputPlus.exe` 后重启 | FileVersion 1.3.0.0 |
+| 线上 | `git push origin main` + `git tag v1.3` + GitHub Release | release 非 draft，4 个 asset `state=uploaded` |
+
+手工步骤：①属性面板看 1.3.0.0；②Qbar 打 `doc:` 应出 chip 且只剩文档；③`qbar > 命令` 里 `ol hello` 能开词典。

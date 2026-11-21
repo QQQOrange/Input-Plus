@@ -488,3 +488,11 @@ https://www.voidtools.com/support/everything/sdk/ ，另加「软件默认以管
 **下一步 / 已知限制**
 - 过滤器改名的「别名」目前只覆盖内置六条；自定义过滤器改名后仍按新名走（无别名概念）。
 - `--qbar-query` 的单次端到端在真机冷启动时能到 165–199ms（Everything 首次查询 + 路径补扫），warm 后 50ms 上下。
+
+## 2026-11-21 15:45 发版 v1.3（版本号归一 + 线上同步）
+
+- **做了什么**：版本号从 1.7.7 统一改成 **1.3**（csproj `<Version>1.3</Version>` / `FileVersion` `AssemblyVersion` 1.3.0.0），CHANGELOG 顶部新增 v1.3 段（说明是重新起号、功能为 1.7.7 的延续）。本地 `tools/release.ps1` 出 dist/1.3 四形态，覆盖安装位置 `D:\software\myself\InputPlus.exe`；线上 `git push origin main` + `git tag v1.3` + GitHub Release「v1.3」并上传四个产物。
+- **怎么验**：构建 0 警告 0 错误；dev 与 dist 各跑一遍 `--selftest` → 6464 项 / 0 失败；安装位置 FileVersion 读回 1.3.0.0；GitHub API 读回 release 非 draft、4 个 asset 均 `state=uploaded`。
+- **数字**：InputPlus.exe 9,083,535 B sha256 4f6b8bc2befd58daef00d2cd157e3552ebb7d6b726dd36ab1775e5147d0b675f；x64-Win7 145.1MB / x86-Win10-Win11 8.6MB / x86-Win7 134.8MB。
+- **已知限制**：版本号从 1.7.7 降到 1.3，若用户机器记录过 1.7.x，属性面板会显示更小的号（代码里已无按字符串比较的降级逻辑，设置不受影响）。
+- **下一步**：无。
