@@ -535,6 +535,61 @@ public static partial class SelfTest
     }
 
     /// <summary>
+    /// 早先版本把图标渲染成 &lt;数据目录&gt;/icons/*.svg，升级后文件不再生成，
+    /// 配置里的路径就成了死引用 —— Gmail、Yahoo Japan 两条因此在 Qbar 里一直是空白。
+    ///
+    /// 迁移要按站点补内置图标，同时**不能碰用户手填的图标路径**。
+    /// </summary>
+    private static void TestLegacyIconPathRevival()
+    {
+        var s = DefaultSettings.Create();
+        s.BuiltinEnginesVersion = 0;
+
+        string legacyDir = Path.Combine(Path.GetTempPath(), "icons");
+        s.Search.RemoveAll(e => e.Key is "gm" or "yh" or "keep");
+        s.Search.Add(new QEntry
+        {
+            Key = "gm",
+            Value = "https://mail.google.com/mail/u/0/#search/{q}",
+            Comment = "Gmail",
+            IconPath = Path.Combine(legacyDir, "gmail.svg"),
+        });
+        s.Search.Add(new QEntry
+        {
+            Key = "yh",
+            Value = "https://www.yahoo.co.jp/search?p={q}",
+            Comment = "Yahoo Japan",
+            IconPath = Path.Combine(legacyDir, "yahoo.svg"),
+        });
+        // 用户自己的图标（文件不存在但路径不是我们的 svg 产物）保持原样
+        s.Search.Add(new QEntry
+        {
+            Key = "keep",
+            Value = "https://example.com/s?q={q}",
+            Comment = "自己的",
+            IconPath = @"D:\pics\mine.png",
+        });
+
+        SettingsStore.MigrateBuiltinEnginesForTest(s);
+
+        var gm = s.Search.FirstOrDefault(e => e.Key == "gm");
+        var yh = s.Search.FirstOrDefault(e => e.Key == "yh");
+        var keep = s.Search.FirstOrDefault(e => e.Key == "keep");
+
+        Check("Gmail 条目还在", gm != null);
+        CheckEqual("Gmail 的死图标路径被清空", gm?.IconPath ?? "", "");
+        CheckEqual("Gmail 用上内置图标", gm?.EngineIcon ?? "", "gmail");
+        CheckEqual("Yahoo Japan 用红色 Y!（不是全球站紫色）", yh?.EngineIcon ?? "", "yahoo_jp");
+        CheckEqual("Yahoo Japan 的死图标路径被清空", yh?.IconPath ?? "", "");
+        CheckEqual("用户自己的图标路径不动", keep?.IconPath ?? "", @"D:\pics\mine.png");
+        CheckEqual("用户自己的条目不会被塞内置图标", keep?.EngineIcon ?? "", "");
+        Check("内置 gmail 图标确实存在",
+            Core.Icons.IconCache.FromResource("gmail") != null);
+        Check("内置 yahoo_jp 图标确实存在",
+            Core.Icons.IconCache.FromResource("yahoo_jp") != null);
+    }
+
+    /// <summary>
     /// 数据目录必须**跟着软件走**，迁移要只搬用户数据，加密导出要带全字段。
     ///
     /// 这三条都是"用户看不见但一错就很难受"的地方：

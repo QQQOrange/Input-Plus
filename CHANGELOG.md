@@ -13,6 +13,15 @@
 - **两个现场诊断开关**：`--settings-dump`、`--qbar-command "ol hello"`。
 - **自检 6465 项，0 失败**；`--qbar-bench` 20 条端到端 p95 26–33ms、翻译 15–20µs/次。
 
+## v1.3.1 — Qbar 的图标全部对得上：豆瓣、爱奇艺等 79 张重做，Gmail / Yahoo Japan 不再空白
+
+- **23 张对不上的图标按真实标识重画**：此前豆瓣是「白底绿框一个豆字」、爱奇艺是「中文横版 logo 带 VIP 角标」，跟真实标识差得远。现在豆瓣＝墨绿圆角底 + 白豆形、爱奇艺＝纯净 iQIYI 台标、京东＝红底白 Joy 狗头、优酷＝蓝渐变、知乎＝蓝底知乎、B 站＝蓝电视，另有百度网盘、懂车帝、eBay、Flickr、SoundCloud、Google Drive、Gemini、Genius、Giphy、Maven、Microsoft Store、咪咕音乐、维基文库，以及牛津／柯林斯／剑桥／Free Dictionary 四本词典。
+- **补齐 56 个原本没有图标的站点**：Netflix、Disney+、Prime Video、Telegram、Slack、Notion、Figma、Miro、Trello、Asana、Canva、Zoom、Medium、Discord、Instagram、Naver、Bloomberg、Forbes、纽约时报、The Guardian、经济学人、哈佛商业评论、Harvard、MIT、Stanford、Kaggle、Codeforces、洛谷、牛客、ModelScope、AWS、Azure、阿里云、华为云、腾讯云、Cloudflare、Vercel、Netlify、Apple、Microsoft 365、Teams、Windows、Bing、爱范儿、36氪、腾讯网、微信、携程、滴滴、12306、Airbnb、Booking.com、酷狗音乐、喜马拉雅等。资源目录现 349 张 64×64 PNG，全部随程序打包，不依赖网络。
+- **内置网址不再靠临时抓 favicon**：128 条内置网页原来每次都按站点现抓 favicon —— 抓不到就退回首字母方块，抓到了也常是别家的旧图（豆瓣给整站绿色方块、爱奇艺给带中文的横版 logo）。现在每条都自带 EngineIcon（`BuiltinWebVersion = 3`），升级时自动迁移旧配置，断网、换网、清缓存都不会再变回错图。
+- **Gmail / Yahoo Japan 不再空白**：这两条老条目的 IconPath 指向早先版本渲染的 `%LocalAppData%\CapsLockPlus\icons\gmail.svg`、`yahoo.svg`，文件早就随升级没了，Qbar 里一直只剩一个字。引擎表版本 → 7：迁移时清掉这类死路径并按站点补内置图标（Gmail → 新画的彩色 M，Yahoo Japan → 红色 Y!；全球站 Yahoo 仍是紫色 Y!，两套标识不混用）。判据是「路径以 .svg 结尾、文件确实不存在、父目录叫 icons」——用户手填的 png/ico 路径一律不动。
+- **清掉 6 张没人引用的图标**：百度翻译、搜狗翻译、谷歌翻译、DeepL、PyPI 搜索、新浪财经 —— 对应引擎早在 4.5.10 就退场了，图还留在资源目录里。另有 14 个知名站点的旧 favicon 缓存（`icons/web` 下的 douban / iqiyi / youku / bilibili / jd / zhihu / ebay / microsoft / gemini / pan.baidu / waikanstore）一并删除。
+- **自检 6468 项，6464 通过**：4 条失败全是横条 band 宿主断言（`CreateWindowInBand(band 16)` 返回 Win32 错误 5），与图标无关。新增「Qbar 图标」一组 9 条断言：死路径被清空、按站点补图、Yahoo Japan 不用全球站紫色、用户自填路径不动、两张新图能从资源里取到。
+
 ## v1.7.7 — 改了过滤器关键字，doc: 也照样能用；停用开关真的会停用
 
 - **改名不再破坏旧关键字**：以前把「文档」的关键字从 doc 改成 wd，`doc:` 就永久查不到东西（真实配置里正是这么用的：wd / tp / sp / yp / wj / wjj，于是 `doc:` `file:` `folder:` 全都降级成搜字面量、命中 0）。现在六个内置过滤器各自保留出厂关键字作为别名，`doc:` 与 `wd:` 指向同一条，chip 上仍显示用户改过的名字。别名只挂在内置项上、不写进设置，所以设置文件不会多出「看不见的过滤器」。
@@ -9019,7 +9028,6 @@ WCAG 对比度 ≥ 4.5:1；实机 `--hwtest` 音量与 DDC/CI 亮度链路均正
 1669 项全过（新增：横条尺寸上限、步长单调/不越界、步进参数夹取、
 双连续量互不打断、横条在浅/深主题下真的渲染成浅底/深底且文字对比足够）。
 
-
 ---
 
 ## v4.2.3 — 体积回到 4.8 MB（明确依赖）· 亮度跟手且平滑爬升
@@ -9316,7 +9324,6 @@ Windows 对亮度**没有**系统横条（笔记本那条是 OEM 驱动画的，
 
 > Qbar 的搜索引擎表里仍有「必应翻译 / 百度翻译」等条目 —— 那只是**搜索网址**，
 > 不是翻译功能，保留不影响。
-
 
 ### 新增：启动器（缺 .NET 时给出中文提示并打开下载页）
 

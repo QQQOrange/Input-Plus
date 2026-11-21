@@ -99,6 +99,9 @@ public static partial class SelfTest
         TestSearchEngines();
         TestEngineMigration();
 
+        Section("Qbar 图标");
+        TestLegacyIconPathRevival();
+
         Section("表达式求值");
         TestEvaluator();
 

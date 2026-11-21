@@ -961,6 +961,13 @@ public static class SettingsStore
             }
         }
 
+        /* 还有两条老条目指着早先版本渲染出来的 svg（%LocalAppData%\CapsLockPlus\icons\gmail.svg、
+         * yahoo.svg），那些文件随版本升级早就没了，Qbar 里一直是空白图标 —— 图标和站点对不上
+         * 的投诉里就剩这两处。按站点补上内置图标，只清自家生成的路径。 */
+        int legacyIconFixed = ReviveLegacyIconPaths(s.Search);
+        if (legacyIconFixed > 0)
+            CoreLog.Info($"旧图标路径清理：{legacyIconFixed} 个条目改用内置图标");
+
         s.BuiltinEnginesVersion = DefaultSettings.BuiltinEnginesVersion;
         if (added > 0 || upgraded > 0 || removedLegacy > 0)
             CoreLog.Info($"搜索引擎表更新：新增 {added} 个，图标升级 {upgraded} 个，" +
@@ -996,11 +1003,19 @@ public static class SettingsStore
 
         if (s.BuiltinWebVersion < DefaultSettings.BuiltinWebVersion)
         {
-            int added = MergeBuiltinEntries(s.Web, DefaultSettings.BuiltinWebEntries());
+            var builtinWeb = DefaultSettings.BuiltinWebEntries();
+            int added = MergeBuiltinEntries(s.Web, builtinWeb);
+            /* 老用户的常用网址条目早就固化了：老版本的内置项只有 Key / Value，
+             * 没有 EngineIcon，Qbar 只能去抓站点 favicon —— 抓到的旧图、以及
+             * 豆瓣 / 爱奇艺那种"图标和网站对不上"的缓存图就是这么来的。
+             * 这里把内置图标补到已有条目上（只补空值），从此图标随程序走。 */
+            int iconUpgraded = UpgradeBuiltinWebIcons(s.Web, builtinWeb);
             s.BuiltinWebVersion = DefaultSettings.BuiltinWebVersion;
             changed = true;
             if (added > 0)
                 CoreLog.Info($"常用网址表更新：新增 {added} 个（版本 → {s.BuiltinWebVersion}）");
+            if (iconUpgraded > 0)
+                CoreLog.Info($"常用网址图标升级：{iconUpgraded} 个改用内置图标");
         }
 
         changed |= ResolveLegacyQbarKeyConflicts(s);
@@ -1075,6 +1090,75 @@ public static class SettingsStore
         }
 
         return changed;
+    }
+
+    /// <summary>
+    /// 给已有的“常用网址”条目补上内置图标。
+    ///
+    /// 只补 EngineIcon 为空、且 Key + Value 都与内置项一致的条目：
+    /// 用户把网址改成自己公司内网、或者换了站点，就不去塞一个不相干的图标。
+    /// 用户自己填过 EngineIcon / IconPath 的一律不动。
+    /// </summary>
+    private static int UpgradeBuiltinWebIcons(List<QEntry> target, List<QEntry> builtins)
+    {
+        int n = 0;
+        foreach (var builtin in builtins)
+        {
+            if (string.IsNullOrWhiteSpace(builtin.Key) || string.IsNullOrEmpty(builtin.EngineIcon)) continue;
+
+            var existing = target.FirstOrDefault(
+                e => e.Key.Equals(builtin.Key, StringComparison.OrdinalIgnoreCase));
+            if (existing == null) continue;
+            if (!string.IsNullOrEmpty(existing.EngineIcon)) continue;
+            if (!string.Equals(existing.Value, builtin.Value, StringComparison.OrdinalIgnoreCase)) continue;
+
+            existing.EngineIcon = builtin.EngineIcon;
+            // 同搜索引擎表：程序早年生成的 svg 图标路径要清掉，否则会盖掉内置图标
+            if (IsOurGeneratedIcon(existing.IconPath)) existing.IconPath = "";
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// 清掉"指向已经不存在的 svg"的图标路径，并按站点补内置图标。
+    ///
+    /// 早先版本把图标渲染成 &lt;数据目录&gt;/icons/*.svg（那时数据目录还叫 CapsLockPlus），
+    /// 升级后这些文件不再生成，配置里的路径就成了死引用：Qbar 取图返回 null，
+    /// 条目只剩一个字。Gmail、Yahoo Japan 两条正是这么空着的。
+    /// 判据是"路径以 .svg 结尾、文件确实不存在、父目录叫 icons" —— 自家生成的产物，
+    /// 用户手填的 png/ico 路径不会被碰。
+    /// </summary>
+    private static int ReviveLegacyIconPaths(List<QEntry> entries)
+    {
+        int n = 0;
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.IconPath)) continue;
+            if (!entry.IconPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)) continue;
+            if (File.Exists(entry.IconPath)) continue;
+
+            string dir;
+            try { dir = Path.GetDirectoryName(Path.GetFullPath(entry.IconPath)) ?? ""; }
+            catch { continue; }
+            if (!string.Equals(Path.GetFileName(dir), "icons", StringComparison.OrdinalIgnoreCase)) continue;
+
+            if (string.IsNullOrEmpty(entry.EngineIcon))
+            {
+                string host = DomainOf(entry.Value);
+                entry.EngineIcon = host switch
+                {
+                    "mail.google.com" or "gmail.com" => "gmail",
+                    // Yahoo Japan 是红色 Y!，全球站是紫色 —— 两套标识不能混用
+                    "yahoo.co.jp" or "search.yahoo.co.jp" => "yahoo_jp",
+                    "yahoo.com" or "search.yahoo.com" => "yahoo",
+                    _ => "",
+                };
+            }
+            entry.IconPath = "";
+            n++;
+        }
+        return n;
     }
 
     private static int MergeBuiltinEntries(List<QEntry> target, List<QEntry> builtins)
@@ -1693,9 +1777,12 @@ public static class DefaultSettings
     ///   5 = 旧条目改用内置图标（替换掉磁盘上的 svg 图标路径）
     ///   6 = B 站搜索关键字 bili 改为 bilis，bili 留给常用网址首页
     /// </summary>
-    public const int BuiltinEnginesVersion = 6;
+    public const int BuiltinEnginesVersion = 7;
 
-    public const int BuiltinWebVersion = 2;
+    /// <summary>
+    /// 3 = 内置网址条目补 EngineIcon（图标随程序走，不再依赖站点 favicon 缓存）
+    /// </summary>
+    public const int BuiltinWebVersion = 3;
 
     /// <summary>
     /// 内置常用网址表。新增时把 <see cref="BuiltinWebVersion"/> +1，
@@ -1703,136 +1790,136 @@ public static class DefaultSettings
     /// </summary>
     public static List<QEntry> BuiltinWebEntries() => new()
     {
-new() { Key = "github", Value = "https://github.com", Comment = "GitHub" },
-            new() { Key = "gitlab", Value = "https://gitlab.com", Comment = "GitLab" },
-            new() { Key = "giteecom", Value = "https://gitee.com", Comment = "Gitee" },
-            new() { Key = "stackoverflow", Value = "https://stackoverflow.com", Comment = "Stack Overflow" },
-            new() { Key = "csdnnet", Value = "https://www.csdn.net", Comment = "CSDN" },
-            new() { Key = "juejinim", Value = "https://juejin.cn", Comment = "稀土掘金" },
-            new() { Key = "segmentfault", Value = "https://segmentfault.com", Comment = "SegmentFault" },
-            new() { Key = "v2ex", Value = "https://www.v2ex.com", Comment = "V2EX" },
-            new() { Key = "sspaicom", Value = "https://sspai.com", Comment = "少数派" },
-            new() { Key = "36kr", Value = "https://36kr.com", Comment = "36氪" },
-            new() { Key = "huxiu", Value = "https://www.huxiu.com", Comment = "虎嗅" },
-            new() { Key = "ifanr", Value = "https://www.ifanr.com", Comment = "爱范儿" },
-            new() { Key = "thepaper", Value = "https://www.thepaper.cn", Comment = "澎湃新闻" },
-            new() { Key = "zhihu", Value = "https://www.zhihu.com", Comment = "知乎" },
-            new() { Key = "douban", Value = "https://www.douban.com", Comment = "豆瓣" },
-            new() { Key = "baike", Value = "https://baike.baidu.com", Comment = "百度百科" },
-            new() { Key = "wikipedia", Value = "https://zh.wikipedia.org", Comment = "维基百科" },
-            new() { Key = "bilibili", Value = "https://www.bilibili.com", Comment = "哔哩哔哩" },
+new() { Key = "github", Value = "https://github.com", Comment = "GitHub", EngineIcon = "github" },
+            new() { Key = "gitlab", Value = "https://gitlab.com", Comment = "GitLab", EngineIcon = "gitlab" },
+            new() { Key = "giteecom", Value = "https://gitee.com", Comment = "Gitee", EngineIcon = "gitee" },
+            new() { Key = "stackoverflow", Value = "https://stackoverflow.com", Comment = "Stack Overflow", EngineIcon = "stackoverflow_gu_ge" },
+            new() { Key = "csdnnet", Value = "https://www.csdn.net", Comment = "CSDN", EngineIcon = "csdn" },
+            new() { Key = "juejinim", Value = "https://juejin.cn", Comment = "稀土掘金", EngineIcon = "jue_jin" },
+            new() { Key = "segmentfault", Value = "https://segmentfault.com", Comment = "SegmentFault", EngineIcon = "segmentfault" },
+            new() { Key = "v2ex", Value = "https://www.v2ex.com", Comment = "V2EX", EngineIcon = "v2ex_gu_ge" },
+            new() { Key = "sspaicom", Value = "https://sspai.com", Comment = "少数派", EngineIcon = "shao_shu_pai" },
+            new() { Key = "36kr", Value = "https://36kr.com", Comment = "36氪", EngineIcon = "36kr" },
+            new() { Key = "huxiu", Value = "https://www.huxiu.com", Comment = "虎嗅", EngineIcon = "hu_xiu" },
+            new() { Key = "ifanr", Value = "https://www.ifanr.com", Comment = "爱范儿", EngineIcon = "ifanr" },
+            new() { Key = "thepaper", Value = "https://www.thepaper.cn", Comment = "澎湃新闻", EngineIcon = "peng_pai_xin_wen" },
+            new() { Key = "zhihu", Value = "https://www.zhihu.com", Comment = "知乎", EngineIcon = "zhi_hu" },
+            new() { Key = "douban", Value = "https://www.douban.com", Comment = "豆瓣", EngineIcon = "dou_ban" },
+            new() { Key = "baike", Value = "https://baike.baidu.com", Comment = "百度百科", EngineIcon = "bai_du_bai_ke" },
+            new() { Key = "wikipedia", Value = "https://zh.wikipedia.org", Comment = "维基百科", EngineIcon = "wei_ji_bai_ke" },
+            new() { Key = "bilibili", Value = "https://www.bilibili.com", Comment = "哔哩哔哩", EngineIcon = "bi_li_bi_li" },
             // bili 同时是搜索指令表里的 B 站搜索；网址表优先，
             // 输入 bili + 空格直接得到首页地址，而不是“B 站搜索”标签。
-            new() { Key = "bili", Value = "https://www.bilibili.com", Comment = "哔哩哔哩" },
-            new() { Key = "youku", Value = "https://www.youku.com", Comment = "优酷" },
-            new() { Key = "iqiyicom", Value = "https://www.iqiyi.com", Comment = "爱奇艺" },
-            new() { Key = "tencentvideo", Value = "https://v.qq.com", Comment = "腾讯视频" },
-            new() { Key = "mgtv", Value = "https://www.mgtv.com", Comment = "芒果 TV" },
-            new() { Key = "netflix", Value = "https://www.netflix.com", Comment = "Netflix" },
-            new() { Key = "disneyplus", Value = "https://www.disneyplus.com", Comment = "Disney+" },
-            new() { Key = "primevideo", Value = "https://www.primevideo.com", Comment = "Prime Video" },
-            new() { Key = "youtube", Value = "https://www.youtube.com", Comment = "YouTube" },
-            new() { Key = "twitch", Value = "https://www.twitch.tv", Comment = "Twitch" },
-            new() { Key = "spotifyweb", Value = "https://open.spotify.com", Comment = "Spotify" },
-            new() { Key = "wyy", Value = "https://music.163.com", Comment = "网易云音乐" },
-            new() { Key = "qqmusic", Value = "https://y.qq.com", Comment = "QQ 音乐" },
-            new() { Key = "kugou", Value = "https://www.kugou.com", Comment = "酷狗音乐" },
-            new() { Key = "kuwo", Value = "https://www.kuwo.cn", Comment = "酷我音乐" },
-            new() { Key = "ximalaya", Value = "https://www.ximalaya.com", Comment = "喜马拉雅" },
-            new() { Key = "weread", Value = "https://weread.qq.com", Comment = "微信读书" },
-            new() { Key = "taobao", Value = "https://www.taobao.com", Comment = "淘宝" },
-            new() { Key = "tmall", Value = "https://www.tmall.com", Comment = "天猫" },
-            new() { Key = "jdcom", Value = "https://www.jd.com", Comment = "京东" },
-            new() { Key = "pinduoduo", Value = "https://www.pinduoduo.com", Comment = "拼多多" },
-            new() { Key = "suning", Value = "https://www.suning.com", Comment = "苏宁易购" },
-            new() { Key = "vipcom", Value = "https://www.vip.com", Comment = "唯品会" },
-            new() { Key = "amazon", Value = "https://www.amazon.com", Comment = "Amazon" },
-            new() { Key = "ebay", Value = "https://www.ebay.com", Comment = "eBay" },
-            new() { Key = "aliexpress", Value = "https://www.aliexpress.com", Comment = "AliExpress" },
-            new() { Key = "1688", Value = "https://www.1688.com", Comment = "1688" },
-            new() { Key = "booking", Value = "https://www.booking.com", Comment = "Booking.com" },
-            new() { Key = "airbnb", Value = "https://www.airbnb.com", Comment = "Airbnb" },
-            new() { Key = "ctrip", Value = "https://www.ctrip.com", Comment = "携程" },
-            new() { Key = "12306", Value = "https://www.12306.cn", Comment = "12306" },
-            new() { Key = "didi", Value = "https://www.didiglobal.com", Comment = "滴滴" },
-            new() { Key = "amap", Value = "https://www.amap.com", Comment = "高德地图" },
-            new() { Key = "baidumap", Value = "https://map.baidu.com", Comment = "百度地图" },
-            new() { Key = "weibo", Value = "https://weibo.com", Comment = "微博" },
-            new() { Key = "xiaohongshu", Value = "https://www.xiaohongshu.com", Comment = "小红书" },
-            new() { Key = "douyin", Value = "https://www.douyin.com", Comment = "抖音" },
-            new() { Key = "kuaishou", Value = "https://www.kuaishou.com", Comment = "快手" },
-            new() { Key = "wechatweb", Value = "https://weixin.qq.com", Comment = "微信" },
-            new() { Key = "qqcom", Value = "https://www.qq.com", Comment = "腾讯网" },
-            new() { Key = "telegramweb", Value = "https://telegram.org", Comment = "Telegram" },
-            new() { Key = "discordweb", Value = "https://discord.com", Comment = "Discord" },
-            new() { Key = "twitter", Value = "https://twitter.com", Comment = "Twitter / X" },
-            new() { Key = "xcom", Value = "https://x.com", Comment = "X" },
-            new() { Key = "reddit", Value = "https://www.reddit.com", Comment = "Reddit" },
-            new() { Key = "facebook", Value = "https://www.facebook.com", Comment = "Facebook" },
-            new() { Key = "instagram", Value = "https://www.instagram.com", Comment = "Instagram" },
-            new() { Key = "linkedin", Value = "https://www.linkedin.com", Comment = "LinkedIn" },
-            new() { Key = "tiktok", Value = "https://www.tiktok.com", Comment = "TikTok" },
-            new() { Key = "medium", Value = "https://medium.com", Comment = "Medium" },
-            new() { Key = "notion", Value = "https://www.notion.so", Comment = "Notion" },
-            new() { Key = "figma", Value = "https://www.figma.com", Comment = "Figma" },
-            new() { Key = "canva", Value = "https://www.canva.com", Comment = "Canva" },
-            new() { Key = "miro", Value = "https://miro.com", Comment = "Miro" },
-            new() { Key = "trello", Value = "https://trello.com", Comment = "Trello" },
-            new() { Key = "asana", Value = "https://asana.com", Comment = "Asana" },
-            new() { Key = "slackweb", Value = "https://slack.com", Comment = "Slack" },
-            new() { Key = "zoomweb", Value = "https://zoom.us", Comment = "Zoom" },
-            new() { Key = "teamsweb", Value = "https://www.microsoft.com/microsoft-teams", Comment = "Microsoft Teams" },
-            new() { Key = "google", Value = "https://www.google.com", Comment = "Google" },
-            new() { Key = "baidu", Value = "https://www.baidu.com", Comment = "百度" },
-            new() { Key = "bing", Value = "https://www.bing.com", Comment = "Bing" },
-            new() { Key = "duckduckgo", Value = "https://duckduckgo.com", Comment = "DuckDuckGo" },
-            new() { Key = "yandex", Value = "https://yandex.com", Comment = "Yandex" },
-            new() { Key = "naver", Value = "https://www.naver.com", Comment = "Naver" },
-            new() { Key = "yahoo", Value = "https://www.yahoo.com", Comment = "Yahoo" },
-            new() { Key = "office", Value = "https://www.office.com", Comment = "Microsoft 365" },
-            new() { Key = "microsoft", Value = "https://www.microsoft.com", Comment = "Microsoft" },
-            new() { Key = "apple", Value = "https://www.apple.com", Comment = "Apple" },
-            new() { Key = "windows", Value = "https://www.microsoft.com/windows", Comment = "Windows" },
-            new() { Key = "azure", Value = "https://azure.microsoft.com", Comment = "Azure" },
-            new() { Key = "aws", Value = "https://aws.amazon.com", Comment = "AWS" },
-            new() { Key = "aliyuncom", Value = "https://www.aliyun.com", Comment = "阿里云" },
-            new() { Key = "tencentcloud", Value = "https://cloud.tencent.com", Comment = "腾讯云" },
-            new() { Key = "huaweicloud", Value = "https://www.huaweicloud.com", Comment = "华为云" },
-            new() { Key = "vercel", Value = "https://vercel.com", Comment = "Vercel" },
-            new() { Key = "netlify", Value = "https://www.netlify.com", Comment = "Netlify" },
-            new() { Key = "cloudflare", Value = "https://www.cloudflare.com", Comment = "Cloudflare" },
-            new() { Key = "npm", Value = "https://www.npmjs.com", Comment = "npm" },
-            new() { Key = "nuget", Value = "https://www.nuget.org", Comment = "NuGet" },
-            new() { Key = "dockerhub", Value = "https://hub.docker.com", Comment = "Docker Hub" },
-            new() { Key = "huggingface", Value = "https://huggingface.co", Comment = "Hugging Face" },
-            new() { Key = "modelscope", Value = "https://www.modelscope.cn", Comment = "ModelScope" },
-            new() { Key = "kaggle", Value = "https://www.kaggle.com", Comment = "Kaggle" },
-            new() { Key = "leetcodecn", Value = "https://leetcode.cn", Comment = "力扣" },
-            new() { Key = "nowcoder", Value = "https://www.nowcoder.com", Comment = "牛客" },
-            new() { Key = "luogu", Value = "https://www.luogu.com.cn", Comment = "洛谷" },
-            new() { Key = "codeforces", Value = "https://codeforces.com", Comment = "Codeforces" },
-            new() { Key = "coursera", Value = "https://www.coursera.org", Comment = "Coursera" },
-            new() { Key = "udemy", Value = "https://www.udemy.com", Comment = "Udemy" },
-            new() { Key = "bbc", Value = "https://www.bbc.com", Comment = "BBC" },
-            new() { Key = "cnn", Value = "https://www.cnn.com", Comment = "CNN" },
-            new() { Key = "reuters", Value = "https://www.reuters.com", Comment = "Reuters" },
-            new() { Key = "nytimes", Value = "https://www.nytimes.com", Comment = "纽约时报" },
-            new() { Key = "theguardian", Value = "https://www.theguardian.com", Comment = "The Guardian" },
-            new() { Key = "economist", Value = "https://www.economist.com", Comment = "经济学人" },
-            new() { Key = "bloomberg", Value = "https://www.bloomberg.com", Comment = "Bloomberg" },
-            new() { Key = "forbes", Value = "https://www.forbes.com", Comment = "Forbes" },
-            new() { Key = "hbr", Value = "https://hbr.org", Comment = "哈佛商业评论" },
-            new() { Key = "mit", Value = "https://www.mit.edu", Comment = "MIT" },
-            new() { Key = "stanford", Value = "https://www.stanford.edu", Comment = "Stanford" },
-            new() { Key = "harvard", Value = "https://www.harvard.edu", Comment = "Harvard" },
-            new() { Key = "arxiv", Value = "https://arxiv.org", Comment = "arXiv" },
-            new() { Key = "claudeai", Value = "https://claude.ai", Comment = "Claude" },
-            new() { Key = "deepseekchat", Value = "https://chat.deepseek.com", Comment = "DeepSeek" },
-            new() { Key = "geminiapp", Value = "https://gemini.google.com", Comment = "Gemini" },
-            new() { Key = "pplx", Value = "https://www.perplexity.ai", Comment = "Perplexity" },
-            new() { Key = "kimichat", Value = "https://kimi.moonshot.cn", Comment = "Kimi" },
-            new() { Key = "doubaocom", Value = "https://www.doubao.com", Comment = "豆包" },
-            new() { Key = "chatgpt", Value = "https://chatgpt.com", Comment = "ChatGPT" },
+            new() { Key = "bili", Value = "https://www.bilibili.com", Comment = "哔哩哔哩", EngineIcon = "bi_li_bi_li" },
+            new() { Key = "youku", Value = "https://www.youku.com", Comment = "优酷", EngineIcon = "you_ku" },
+            new() { Key = "iqiyicom", Value = "https://www.iqiyi.com", Comment = "爱奇艺", EngineIcon = "ai_qi_yi" },
+            new() { Key = "tencentvideo", Value = "https://v.qq.com", Comment = "腾讯视频", EngineIcon = "teng_xun_shi_pin" },
+            new() { Key = "mgtv", Value = "https://www.mgtv.com", Comment = "芒果 TV", EngineIcon = "mang_guo_tv" },
+            new() { Key = "netflix", Value = "https://www.netflix.com", Comment = "Netflix", EngineIcon = "netflix" },
+            new() { Key = "disneyplus", Value = "https://www.disneyplus.com", Comment = "Disney+", EngineIcon = "disneyplus" },
+            new() { Key = "primevideo", Value = "https://www.primevideo.com", Comment = "Prime Video", EngineIcon = "primevideo" },
+            new() { Key = "youtube", Value = "https://www.youtube.com", Comment = "YouTube", EngineIcon = "youtube" },
+            new() { Key = "twitch", Value = "https://www.twitch.tv", Comment = "Twitch", EngineIcon = "twitch" },
+            new() { Key = "spotifyweb", Value = "https://open.spotify.com", Comment = "Spotify", EngineIcon = "spotify" },
+            new() { Key = "wyy", Value = "https://music.163.com", Comment = "网易云音乐", EngineIcon = "wang_yi_yun_yin_yue" },
+            new() { Key = "qqmusic", Value = "https://y.qq.com", Comment = "QQ 音乐", EngineIcon = "qq_yin_yue" },
+            new() { Key = "kugou", Value = "https://www.kugou.com", Comment = "酷狗音乐", EngineIcon = "kugou" },
+            new() { Key = "kuwo", Value = "https://www.kuwo.cn", Comment = "酷我音乐", EngineIcon = "ku_wo_yin_yue" },
+            new() { Key = "ximalaya", Value = "https://www.ximalaya.com", Comment = "喜马拉雅", EngineIcon = "ximalaya" },
+            new() { Key = "weread", Value = "https://weread.qq.com", Comment = "微信读书", EngineIcon = "wei_xin_du_shu" },
+            new() { Key = "taobao", Value = "https://www.taobao.com", Comment = "淘宝", EngineIcon = "tao_bao" },
+            new() { Key = "tmall", Value = "https://www.tmall.com", Comment = "天猫", EngineIcon = "tian_mao" },
+            new() { Key = "jdcom", Value = "https://www.jd.com", Comment = "京东", EngineIcon = "jing_dong" },
+            new() { Key = "pinduoduo", Value = "https://www.pinduoduo.com", Comment = "拼多多", EngineIcon = "pin_duo_duo" },
+            new() { Key = "suning", Value = "https://www.suning.com", Comment = "苏宁易购", EngineIcon = "su_ning_yi_gou" },
+            new() { Key = "vipcom", Value = "https://www.vip.com", Comment = "唯品会", EngineIcon = "wei_pin_hui" },
+            new() { Key = "amazon", Value = "https://www.amazon.com", Comment = "Amazon", EngineIcon = "ya_ma_xun" },
+            new() { Key = "ebay", Value = "https://www.ebay.com", Comment = "eBay", EngineIcon = "ebay" },
+            new() { Key = "aliexpress", Value = "https://www.aliexpress.com", Comment = "AliExpress", EngineIcon = "aliexpress" },
+            new() { Key = "1688", Value = "https://www.1688.com", Comment = "1688", EngineIcon = "1688" },
+            new() { Key = "booking", Value = "https://www.booking.com", Comment = "Booking.com", EngineIcon = "booking" },
+            new() { Key = "airbnb", Value = "https://www.airbnb.com", Comment = "Airbnb", EngineIcon = "airbnb" },
+            new() { Key = "ctrip", Value = "https://www.ctrip.com", Comment = "携程", EngineIcon = "ctrip" },
+            new() { Key = "12306", Value = "https://www.12306.cn", Comment = "12306", EngineIcon = "12306" },
+            new() { Key = "didi", Value = "https://www.didiglobal.com", Comment = "滴滴", EngineIcon = "didi" },
+            new() { Key = "amap", Value = "https://www.amap.com", Comment = "高德地图", EngineIcon = "gao_de_di_tu" },
+            new() { Key = "baidumap", Value = "https://map.baidu.com", Comment = "百度地图", EngineIcon = "bai_du_di_tu" },
+            new() { Key = "weibo", Value = "https://weibo.com", Comment = "微博", EngineIcon = "wei_bo" },
+            new() { Key = "xiaohongshu", Value = "https://www.xiaohongshu.com", Comment = "小红书", EngineIcon = "xiao_hong_shu" },
+            new() { Key = "douyin", Value = "https://www.douyin.com", Comment = "抖音", EngineIcon = "dou_yin" },
+            new() { Key = "kuaishou", Value = "https://www.kuaishou.com", Comment = "快手", EngineIcon = "kuai_shou" },
+            new() { Key = "wechatweb", Value = "https://weixin.qq.com", Comment = "微信", EngineIcon = "wechat" },
+            new() { Key = "qqcom", Value = "https://www.qq.com", Comment = "腾讯网", EngineIcon = "qqcom" },
+            new() { Key = "telegramweb", Value = "https://telegram.org", Comment = "Telegram", EngineIcon = "telegram" },
+            new() { Key = "discordweb", Value = "https://discord.com", Comment = "Discord", EngineIcon = "discord" },
+            new() { Key = "twitter", Value = "https://twitter.com", Comment = "Twitter / X", EngineIcon = "twitter" },
+            new() { Key = "xcom", Value = "https://x.com", Comment = "X", EngineIcon = "twitter" },
+            new() { Key = "reddit", Value = "https://www.reddit.com", Comment = "Reddit", EngineIcon = "reddit" },
+            new() { Key = "facebook", Value = "https://www.facebook.com", Comment = "Facebook", EngineIcon = "facebook" },
+            new() { Key = "instagram", Value = "https://www.instagram.com", Comment = "Instagram", EngineIcon = "instagram" },
+            new() { Key = "linkedin", Value = "https://www.linkedin.com", Comment = "LinkedIn", EngineIcon = "linkedin" },
+            new() { Key = "tiktok", Value = "https://www.tiktok.com", Comment = "TikTok", EngineIcon = "tiktok" },
+            new() { Key = "medium", Value = "https://medium.com", Comment = "Medium", EngineIcon = "medium" },
+            new() { Key = "notion", Value = "https://www.notion.so", Comment = "Notion", EngineIcon = "notion" },
+            new() { Key = "figma", Value = "https://www.figma.com", Comment = "Figma", EngineIcon = "figma" },
+            new() { Key = "canva", Value = "https://www.canva.com", Comment = "Canva", EngineIcon = "canva" },
+            new() { Key = "miro", Value = "https://miro.com", Comment = "Miro", EngineIcon = "miro" },
+            new() { Key = "trello", Value = "https://trello.com", Comment = "Trello", EngineIcon = "trello" },
+            new() { Key = "asana", Value = "https://asana.com", Comment = "Asana", EngineIcon = "asana" },
+            new() { Key = "slackweb", Value = "https://slack.com", Comment = "Slack", EngineIcon = "slack" },
+            new() { Key = "zoomweb", Value = "https://zoom.us", Comment = "Zoom", EngineIcon = "zoom" },
+            new() { Key = "teamsweb", Value = "https://www.microsoft.com/microsoft-teams", Comment = "Microsoft Teams", EngineIcon = "teams" },
+            new() { Key = "google", Value = "https://www.google.com", Comment = "Google", EngineIcon = "google" },
+            new() { Key = "baidu", Value = "https://www.baidu.com", Comment = "百度", EngineIcon = "bai_du" },
+            new() { Key = "bing", Value = "https://www.bing.com", Comment = "Bing", EngineIcon = "bing" },
+            new() { Key = "duckduckgo", Value = "https://duckduckgo.com", Comment = "DuckDuckGo", EngineIcon = "duckduckgo" },
+            new() { Key = "yandex", Value = "https://yandex.com", Comment = "Yandex", EngineIcon = "yandex" },
+            new() { Key = "naver", Value = "https://www.naver.com", Comment = "Naver", EngineIcon = "naver" },
+            new() { Key = "yahoo", Value = "https://www.yahoo.com", Comment = "Yahoo", EngineIcon = "yahoo" },
+            new() { Key = "office", Value = "https://www.office.com", Comment = "Microsoft 365", EngineIcon = "office" },
+            new() { Key = "microsoft", Value = "https://www.microsoft.com", Comment = "Microsoft", EngineIcon = "microsoft" },
+            new() { Key = "apple", Value = "https://www.apple.com", Comment = "Apple", EngineIcon = "apple" },
+            new() { Key = "windows", Value = "https://www.microsoft.com/windows", Comment = "Windows", EngineIcon = "windows" },
+            new() { Key = "azure", Value = "https://azure.microsoft.com", Comment = "Azure", EngineIcon = "azure" },
+            new() { Key = "aws", Value = "https://aws.amazon.com", Comment = "AWS", EngineIcon = "aws" },
+            new() { Key = "aliyuncom", Value = "https://www.aliyun.com", Comment = "阿里云", EngineIcon = "aliyun" },
+            new() { Key = "tencentcloud", Value = "https://cloud.tencent.com", Comment = "腾讯云", EngineIcon = "tencentcloud" },
+            new() { Key = "huaweicloud", Value = "https://www.huaweicloud.com", Comment = "华为云", EngineIcon = "huaweicloud" },
+            new() { Key = "vercel", Value = "https://vercel.com", Comment = "Vercel", EngineIcon = "vercel" },
+            new() { Key = "netlify", Value = "https://www.netlify.com", Comment = "Netlify", EngineIcon = "netlify" },
+            new() { Key = "cloudflare", Value = "https://www.cloudflare.com", Comment = "Cloudflare", EngineIcon = "cloudflare" },
+            new() { Key = "npm", Value = "https://www.npmjs.com", Comment = "npm", EngineIcon = "npm" },
+            new() { Key = "nuget", Value = "https://www.nuget.org", Comment = "NuGet", EngineIcon = "nuget" },
+            new() { Key = "dockerhub", Value = "https://hub.docker.com", Comment = "Docker Hub", EngineIcon = "docker_hub" },
+            new() { Key = "huggingface", Value = "https://huggingface.co", Comment = "Hugging Face", EngineIcon = "hugging_face" },
+            new() { Key = "modelscope", Value = "https://www.modelscope.cn", Comment = "ModelScope", EngineIcon = "modelscope" },
+            new() { Key = "kaggle", Value = "https://www.kaggle.com", Comment = "Kaggle", EngineIcon = "kaggle" },
+            new() { Key = "leetcodecn", Value = "https://leetcode.cn", Comment = "力扣", EngineIcon = "leetcode" },
+            new() { Key = "nowcoder", Value = "https://www.nowcoder.com", Comment = "牛客", EngineIcon = "nowcoder" },
+            new() { Key = "luogu", Value = "https://www.luogu.com.cn", Comment = "洛谷", EngineIcon = "luogu" },
+            new() { Key = "codeforces", Value = "https://codeforces.com", Comment = "Codeforces", EngineIcon = "codeforces" },
+            new() { Key = "coursera", Value = "https://www.coursera.org", Comment = "Coursera", EngineIcon = "coursera" },
+            new() { Key = "udemy", Value = "https://www.udemy.com", Comment = "Udemy", EngineIcon = "udemy" },
+            new() { Key = "bbc", Value = "https://www.bbc.com", Comment = "BBC", EngineIcon = "bbc" },
+            new() { Key = "cnn", Value = "https://www.cnn.com", Comment = "CNN", EngineIcon = "cnn" },
+            new() { Key = "reuters", Value = "https://www.reuters.com", Comment = "Reuters", EngineIcon = "lu_tou_she" },
+            new() { Key = "nytimes", Value = "https://www.nytimes.com", Comment = "纽约时报", EngineIcon = "nytimes" },
+            new() { Key = "theguardian", Value = "https://www.theguardian.com", Comment = "The Guardian", EngineIcon = "theguardian" },
+            new() { Key = "economist", Value = "https://www.economist.com", Comment = "经济学人", EngineIcon = "economist" },
+            new() { Key = "bloomberg", Value = "https://www.bloomberg.com", Comment = "Bloomberg", EngineIcon = "bloomberg" },
+            new() { Key = "forbes", Value = "https://www.forbes.com", Comment = "Forbes", EngineIcon = "forbes" },
+            new() { Key = "hbr", Value = "https://hbr.org", Comment = "哈佛商业评论", EngineIcon = "hbr" },
+            new() { Key = "mit", Value = "https://www.mit.edu", Comment = "MIT", EngineIcon = "mit" },
+            new() { Key = "stanford", Value = "https://www.stanford.edu", Comment = "Stanford", EngineIcon = "stanford" },
+            new() { Key = "harvard", Value = "https://www.harvard.edu", Comment = "Harvard", EngineIcon = "harvard" },
+            new() { Key = "arxiv", Value = "https://arxiv.org", Comment = "arXiv", EngineIcon = "arxiv" },
+            new() { Key = "claudeai", Value = "https://claude.ai", Comment = "Claude", EngineIcon = "claude" },
+            new() { Key = "deepseekchat", Value = "https://chat.deepseek.com", Comment = "DeepSeek", EngineIcon = "deepseek" },
+            new() { Key = "geminiapp", Value = "https://gemini.google.com", Comment = "Gemini", EngineIcon = "gemini" },
+            new() { Key = "pplx", Value = "https://www.perplexity.ai", Comment = "Perplexity", EngineIcon = "perplexity_ai" },
+            new() { Key = "kimichat", Value = "https://kimi.moonshot.cn", Comment = "Kimi", EngineIcon = "kimi" },
+            new() { Key = "doubaocom", Value = "https://www.doubao.com", Comment = "豆包", EngineIcon = "dou_bao" },
+            new() { Key = "chatgpt", Value = "https://chatgpt.com", Comment = "ChatGPT", EngineIcon = "chatgpt" },
     };
 
     public const int BuiltinRunVersion = 2;
