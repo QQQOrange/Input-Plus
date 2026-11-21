@@ -30,6 +30,11 @@ public partial class TriggerKeyWindow : Window
             Focus();
             Keyboard.Focus(this);
         };
+
+        /* 标题栏跟随主题 —— 和其它 12 个对话框一样。
+         * 这个窗没有 WindowChrome 的 XAML 声明，所以必须在这里挂一次，
+         * 否则深色主题下顶着一根系统白条（Windows 不会自己擦）。 */
+        Theme.WindowChrome.AttachTo(this);
     }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)

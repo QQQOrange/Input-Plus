@@ -32,8 +32,12 @@ public static class ElevationHelper
     {
         "--selftest", "--diag", "--render", "--render-diag",
         "--qbar", "--trace", "--svg2png", "--webdav-test",
+        "--qbar-query", "--qbar-bench", "--qbar-command", "--everything-status", "--settings-dump", "--holddrag-config",
         "--noelevate", "--elevated", "--updated",
     };
+
+    /// <summary>自检用：白名单快照。诊断开关每加一个都必须同步进来，否则命令行一跑就弹 UAC。</summary>
+    internal static IReadOnlyList<string> NoElevateArgsForTest => NoElevateArgs;
 
     public static bool IsElevated
     {
@@ -56,6 +60,12 @@ public static class ElevationHelper
     public static bool TryRelaunchElevated(string[] args)
     {
         if (IsElevated) return false;
+        /* 两条豁免：
+         *   ① NoElevateArgs —— 显式白名单（历史清单，读起来最直观）；
+         *   ② CliFlags.IsDiagnostic —— 诊断开关的**唯一真源**。以前只查白名单，
+         *      新增开关忘了同步就会在"默认管理员启动"下先弹一次 UAC 再跑自检，
+         *      命令行流程当场卡住。现在按类别兜底，新开关自动豁免。 */
+        if (CliFlags.IsDiagnostic(args)) return false;
         if (args.Any(a => NoElevateArgs.Contains(a, StringComparer.OrdinalIgnoreCase)))
             return false;
 

@@ -60,6 +60,20 @@ public sealed class GestureService : IDisposable
      * 跟手又不至于让 8ms 的轮询每一下都跑一遍 DP。 */
     private int _previewCount;
 
+    /* ── 多步手势（v1.5.0） ────────────────────────────────────────
+     * 按住触发键不放，一步接一步地做：画一笔 → 停一下 → 再画一笔 →
+     * 按一组键 → 滚一下 → 甩到屏幕角。停 300ms 就算上一笔收尾。
+     * 记下来的序列在松手时与 MouseGesture.Steps 逐项比对（见 PickSteps）。 */
+    private readonly List<GestureStep> _stepsDrawn = new();
+    private int _segStart;
+    private bool _multiExpected;
+    private const int StepPauseMs = 300;
+
+    /* 边缘双击转角落（WGestures 的 A/K.cs:505）：贴边连点两下也当一次角落手势，
+     * 不必把指针精确压进角里。这里记上一次"补发过的单击"的时间与位置。 */
+    private long _lastTapAt;
+    private GestureMath.Pt _lastTapPt;
+
     /* 防止“按住鼠标乱划”：滑动窗口里最多允许 20 次新手势，
      * 超过后短暂停用手势并提示，避免误触/脚本刷动作。 */
     private readonly Queue<long> _gestureBurst = new();
@@ -93,6 +107,12 @@ public sealed class GestureService : IDisposable
     private const uint MOD_NOREPEAT = 0x4000;
 
     private Action<MouseGesture>? _recordDone;
+
+    /* ── 匹配后替换（任务四）────────────────────────────────────
+     * 命中后先把屏幕上的原始轨迹换成存档的美化模板，过渡走完再执行动作。
+     * 过渡用一次性 DispatcherTimer 排队；期间用户又起了一笔手势就把定时器停掉
+     * （见 BeginStroke 里的 CancelMatchReplace），不许旧动作打断新手势。 */
+    private DispatcherTimer? _matchReplace;
 
     /* 手势专用鼠标钩子。
      *
@@ -132,6 +152,10 @@ public sealed class GestureService : IDisposable
             {
                 _hotArmed = false;
             }
+
+            /* 暂停期间连"开关鼠标手势"这颗热键也要停：全局暂停就该一根钩子都不留，
+             * 否则按一下快捷键又把手势打开了，看起来像暂停没生效。 */
+            ApplyHotkey();
         }
     }
 
@@ -179,6 +203,7 @@ public sealed class GestureService : IDisposable
             _gestureHook = new KeyboardHook();
             _gestureHook.GestureButtonEvent += OnButton;
             _gestureHook.GestureWheelEvent += OnWheel;
+            _gestureHook.KeySeen += OnKeySeen;
             _gestureHook.Start(mouseOnly: true);
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "安装手势鼠标钩子"); }
@@ -217,6 +242,18 @@ public sealed class GestureService : IDisposable
             if (InputPlus.Core.Actions.LegacyActionMigration.Apply(_host.Settings) > 0) _host.SaveSettings();
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "老动作换成正式动作"); }
+
+        /* 存量手势的模板补算。
+         * 为什么放在启动而不是只在手势页：用户报「美化没生效」时，他的配置里
+         * 一条 Beauty 都没有 —— 老数据只有手绘点，而补算原先挂在「第一次识别到」
+         * 和「打开手势列表」两处，他两个都没碰过，于是永远看不到标准图形。
+         * EnsureAll 幂等（版本号一致直接跳过），跑一遍 300ms 上下，放在空闲优先级不挡启动。 */
+        try
+        {
+            var stats = GestureBeauty.EnsureAll(_host.Settings.Gestures, _host.Settings.GestureOptions, "启动补算");
+            if (stats.Changed) _host.SaveSettings();
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "启动补算手势美化"); }
     }
 
     /// <summary>只在"没导过 + 自己还没手势 + 找得到 WGestures 配置"时导入一次。</summary>
@@ -260,12 +297,14 @@ public sealed class GestureService : IDisposable
             {
                 _gestureHook.GestureButtonEvent -= OnButton;
                 _gestureHook.GestureWheelEvent -= OnWheel;
+                _gestureHook.KeySeen -= OnKeySeen;
                 _gestureHook.Dispose();
                 _gestureHook = null;
             }
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "卸载手势钩子"); }
 
+        CancelMatchReplace();
         _poll?.Stop();
         _linger?.Stop();
         _hotWatch?.Stop();
@@ -314,6 +353,76 @@ public sealed class GestureService : IDisposable
 
     // ───────────────────────── 钩子入口 ─────────────────────────
 
+    /// <summary>
+    /// 「按住拖拽」的触发键是不是正按着。按着就把鼠标让给它 —— 一个键一件事，
+    /// 不能让两套功能抢同一颗鼠标键（AppHost 里 HoldDrag 比手势晚建，所以要判空）。
+    /// </summary>
+    private bool HoldDragHoldsTrigger()
+    {
+        try { return _host.HoldDrag?.IsTriggerHeld == true; }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 开了「全屏程序里不接管」时，前台是不是全屏程序。挂在钩子热路径上，
+    /// 所以只做几次很轻的 User32 查询，任何异常都当成"不是全屏"。
+    /// </summary>
+    private bool FullscreenBlocksGestures()
+    {
+        GestureOptions? o;
+        try { o = _host.Settings.GestureOptions; }
+        catch { return false; }
+        if (o == null || !o.DisableInFullscreen) return false;
+        try { return ForegroundIsFullscreen(); }
+        catch { return false; }
+    }
+
+    /// <summary>判"真全屏"要用的窗口事实。拆成纯数据是为了自检能直接喂，不用真开个游戏。</summary>
+    internal readonly record struct FullscreenFacts(string ClassName, bool Zoomed, bool Iconic, int Style);
+
+    /// <summary>
+    /// 这个前台窗口算不算"真全屏"（独占全屏 / 无边框全屏）。三条同时成立才算：
+    ///
+    /// 1) 矩形盖住**整块显示器** —— 只盖住工作区（被任务栏截掉一条）的不算；
+    /// 2) **不是最大化** —— 用户要的就是"最大化的窗口里照常能画手势"，
+    ///    最大化只铺满工作区，本来就该归普通窗口；
+    /// 3) **没有标题栏、也不能拖边框** —— 真全屏和无边框全屏都把这俩去掉了；
+    ///    一个带边框的普通窗口就算被手动拉到整屏，也还是普通窗口。
+    ///
+    /// 桌面（Progman/WorkerW）和任务栏不算 —— 它们铺满，但不是"程序"。
+    /// </summary>
+    internal static bool IsTrueFullscreen(FullscreenFacts facts, NativeMethods.RECT wr, NativeMethods.RECT monitor)
+    {
+        if (facts.ClassName is "Progman" or "WorkerW" or "Shell_TrayWnd" or "SHELLDLL_DefView") return false;
+        if (facts.Iconic || facts.Zoomed) return false;
+        if ((facts.Style & (NativeMethods.WS_CAPTION | NativeMethods.WS_THICKFRAME)) != 0) return false;
+
+        // 允许 2px 误差：无边框全屏常常比屏幕小一两个像素
+        return wr.Left <= monitor.Left + 2 && wr.Top <= monitor.Top + 2
+            && wr.Right >= monitor.Right - 2 && wr.Bottom >= monitor.Bottom - 2;
+    }
+
+    private static bool ForegroundIsFullscreen()
+    {
+        IntPtr fg = NativeMethods.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+
+        var cls = new StringBuilder(64);
+        string className = NativeMethods.GetClassName(fg, cls, cls.Capacity) > 0 ? cls.ToString() : "";
+
+        if (!NativeMethods.GetWindowRect(fg, out NativeMethods.RECT wr)) return false;
+        IntPtr mon = NativeMethods.MonitorFromWindow(fg, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        if (mon == IntPtr.Zero) return false;
+        var mi = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        if (!NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
+
+        var facts = new FullscreenFacts(className,
+            NativeMethods.IsZoomed(fg),
+            NativeMethods.IsIconic(fg),
+            NativeMethods.GetWindowLong(fg, NativeMethods.GWL_STYLE));
+        return IsTrueFullscreen(facts, wr, mi.rcMonitor);
+    }
+
     private bool OnButton(int vk, bool down, bool injected)
     {
         /* 立即执行发生在鼠标键还按着的时候。那一下抬起不能放给系统，
@@ -322,6 +431,24 @@ public sealed class GestureService : IDisposable
             return true;
 
         if (Suspended) return false;
+
+        /* 按住拖拽的触发键正按着：鼠标该归它。用户用那个键已经声明了"这一下是
+         * 拖窗口 / 改大小"，右键再被当成手势起笔就成了两套功能抢同一颗键 ——
+         * 表现出来就是"按住 Enter 点右键，窗口没改大小，反而画出一道手势"。
+         * 这里完全不接管：不吞、不画、不改系统事件，右键菜单照常。 */
+        if (HoldDragHoldsTrigger())
+        {
+            if (IsTracking) ResetActive();
+            return false;
+        }
+
+        /* 全屏程序里不接管（出厂关）：看视频 / 玩游戏 / 浏览器 F11 时，
+         * 画一笔就把桌面动作甩出来太容易误触。 */
+        if (FullscreenBlocksGestures())
+        {
+            if (IsTracking) ResetActive();
+            return false;
+        }
 
         /* 任务栏/托盘是 Explorer 自己吃右键的地方：我们一旦把 down 吞掉，
          * 再注入一次右键，Explorer 往往不认（尤其是托盘图标的弹出菜单），
@@ -453,8 +580,11 @@ public sealed class GestureService : IDisposable
              *   · 笔画手势任何位置都可能画，保留。
              * 否则一条用不到的单击/角落手势会让每次右键都走"吞掉 → 注入补发"，
              * 在管理员窗口里补发被 UIPI 丢掉，右键菜单就再也弹不出来。 */
+            /* 边缘双击转角落：贴边连点两下也认那条角落手势。
+             * 这时指针在边附近、不一定落在角里，所以先把角落手势放进候选。 */
+            bool edgeDoubleTap = IsEdgeDoubleTap(px, py, opts);
             var candidates = Candidates(settings, vk, app, includeWheel: false)
-                .Where(g => CanStart(g, opts, cornerAt))
+                .Where(g => CanStart(g, opts, cornerAt) || (edgeDoubleTap && g.Kind == "corner"))
                 .ToList();
             if (candidates.Count == 0) return false;
 
@@ -494,7 +624,12 @@ public sealed class GestureService : IDisposable
                 _points.Add(_start);
                 _appPath = app;
                 _targetWindow = targetWindow;
-                _cornerCandidate = CornerCandidate(candidates, px, py, opts.CornerSize);
+                _cornerCandidate = CornerCandidate(candidates, px, py, opts.CornerSize)
+                    ?? (edgeDoubleTap ? CornerCandidateFor(candidates, NearestCorner(px, py)) : null);
+                /* 这一次按下有可能做成多步手势：OnPoll 就会按"停顿"切步骤。 */
+                _stepsDrawn.Clear();
+                _segStart = 0;
+                _multiExpected = candidates.Any(g => g.HasSteps);
                 _tracker = new GesturePattern.Tracker(opts.ActivationDistance, opts.TurnTolerance, opts.MaxTurnDistance);
                 _tracker.Start(px, py);
             }
@@ -503,6 +638,9 @@ public sealed class GestureService : IDisposable
             _linger?.Stop();
             Ui(() =>
             {
+                /* 新手势开始 = 上一笔「匹配后替换」的排期作废：那个动作属于上一笔，
+                 * 现在执行会把这一笔的覆盖层一起收掉。 */
+                CancelMatchReplace();
                 var overlay = EnsureOverlay();
                 overlay.Begin(o, GestureButtons.FromVk(vk));
                 overlay.ShowPassive();
@@ -590,6 +728,7 @@ public sealed class GestureService : IDisposable
             _linger?.Stop();
             Ui(() =>
             {
+                CancelMatchReplace();
                 var overlay = EnsureOverlay();
                 overlay.Begin(opts, GestureButtons.FromVk(vk));
                 overlay.ShowPassive();
@@ -611,6 +750,22 @@ public sealed class GestureService : IDisposable
     {
         if (Suspended) return false;
         if (injected) return false;
+
+        /* 触发键按着的时候滚轮也归按住拖拽（它拿滚轮调透明度之类），
+         * 不在这里起"滚轮手势"。 */
+        if (HoldDragHoldsTrigger())
+        {
+            if (IsTracking) ResetActive();
+            return false;
+        }
+
+        /* 全屏程序里不接管（出厂关）：看视频 / 玩游戏 / 浏览器 F11 时，
+         * 画一笔就把桌面动作甩出来太容易误触。 */
+        if (FullscreenBlocksGestures())
+        {
+            if (IsTracking) ResetActive();
+            return false;
+        }
 
         var settings = _host.Settings;
         if (settings.GestureOptions is not { Enabled: true })
@@ -640,6 +795,18 @@ public sealed class GestureService : IDisposable
 
         if (active)
         {
+            /* 多步手势里的「滚一下」：记一步就够，这一下滚轮不当作动作执行。 */
+            if (_multiExpected)
+            {
+                lock (_gate)
+                {
+                    if (_stepsDrawn.Count < GestureStep.MaxSteps)
+                        _stepsDrawn.Add(new GestureStep { Kind = "scroll", Wheel = wheel });
+                    _segStart = _points.Count;
+                }
+                return true;
+            }
+
             var hit = settings.Gestures.FirstOrDefault(g =>
                 g.Enabled && g.Kind == "wheel" && g.Wheel == wheel &&
                 GestureButtons.ToVk(g.Button) == vk && AppMatches(g, activeApp, settings.GestureOptions));
@@ -758,6 +925,10 @@ public sealed class GestureService : IDisposable
             if (_hotkeySource == null) return;
 
             UnregisterHotKey(_hotkeySource.Handle, ToggleHotkeyId);
+
+            /* 全局暂停时不占热键；恢复到 Enabled 时 ApplyHotkey 会再注册回来。 */
+            if (_suspended) return;
+
             string combo = Settings().GestureOptions.ToggleHotkey ?? "";
             var parsed = ParseHotkey(combo);
             if (parsed == null) return;
@@ -914,6 +1085,10 @@ public sealed class GestureService : IDisposable
             _cornerCandidate = null;
             _previewTitle = "";
             _previewCount = 0;
+            _stepsDrawn.Clear();
+            _keysDown.Clear();
+            _segStart = 0;
+            _multiExpected = false;
             _points.Clear();
             _chordSwallow = 0;
             _targetWindow = IntPtr.Zero;
@@ -972,6 +1147,12 @@ public sealed class GestureService : IDisposable
                 _lastMoveAt = now;
             }
             if (add) _ = _tracker?.Move(px, py);
+
+            /* 多步手势：停 300ms 就算"这一步做完了"，把这一小段切出来存成一步。
+             * 单笔手势不进来 —— 它的整条轨迹还要原样比形状。 */
+            if (_multiExpected && !add && now - _lastMoveAt >= StepPauseMs)
+                CloseStepLocked(px, py, minMove);
+
             pattern = _tracker?.Pattern ?? "";
             tooManySegments = pattern.Length >= GestureSegmentLimit;
             startTimedOut = !add
@@ -1119,11 +1300,10 @@ public sealed class GestureService : IDisposable
         }
         _poll?.Stop();
 
-        Execute(hit, px, py);
-        /* 立即执行模式：命令下去了，覆盖层按 WG2 的「执行后淡出」规则收
+        /* 立即执行模式：屏幕上先换上美化模板（不等过渡，0ms 当场换），
+         * 再让命令下去，覆盖层按 WG2 的「执行后淡出」规则收
          * （见 SettleOverlay / GestureOptions.FadeOutExecuted）。 */
-        SettleOverlay(hit, px, py);
-        CoreLog.Info($"手势立即执行：{hit.Title(ActionCatalogTitle(hit))}（偏差 {score:0.000}）");
+        ImmediateHit(hit, px, py, score);
         return true;
     }
 
@@ -1162,6 +1342,12 @@ public sealed class GestureService : IDisposable
         double extent = GestureMath.Extent(points);
         var (px, py) = CursorPos();
 
+        /* 笔画平滑（可在「鼠标手势 → 手势设置」关掉）：只改这一笔的「样子」，
+         * 也就是接下来比对形状、存进手势、回放和缩略图用的那份点。
+         * 放在 extent 之后是故意的 —— 最小识别距离、起始超时在记点时已经判过，
+         * 平滑不能反过来影响「这算不算画了一笔」。关掉时这里整段跳过，逐点不变。 */
+        if (opts.SmoothStrokes) points = StrokeSmoother.Smooth(points, opts);
+
         /* 不是录制、也不是松手结算：这是滚轮在跟踪中途按到了动作，
          * 只停止这一笔并保留一下名称。以前这里会误走录制分支。 */
         if (!execute && !recording)
@@ -1173,18 +1359,35 @@ public sealed class GestureService : IDisposable
             return;
         }
 
+        /* 多步手势：把最后一段也收进来，再跟 Steps 逐项比。 */
+        var steps = new List<GestureStep>();
+        if (_multiExpected)
+        {
+            lock (_gate)
+            {
+                CloseStepLocked(px, py, opts.MinMove);
+                steps.AddRange(_stepsDrawn);
+                _stepsDrawn.Clear();
+                _multiExpected = false;
+            }
+        }
+
         MouseGesture? hit = null;
         double score = 1;
         if (execute)
         {
-            if (extent >= opts.MinMove)
-            {
+            if (steps.Count >= 2)
+                (hit, score) = PickSteps(Settings(), vk, app, steps, opts);
+
+            if (hit == null && extent >= opts.MinMove)
                 (hit, score) = PickStroke(Settings(), vk, app, points, opts);
-            }
-            else if (corner != null)
-            {
+
+            /* 沿边移动：整条都贴着同一条边 → 那是「贴边手势」。 */
+            if (hit == null && extent >= opts.MinMove)
+                (hit, score) = PickEdge(Settings(), vk, app, points, opts);
+
+            if (hit == null && extent < opts.MinMove && corner != null)
                 hit = corner;
-            }
 
             if (hit == null && extent < opts.MinMove)
             {
@@ -1193,7 +1396,13 @@ public sealed class GestureService : IDisposable
                 /* 补发不能在钩子回调里做：SendInput 会同步把事件送回同一个
                  * 钩子线程，回调里再发就自锁，要等系统超时（实测 1 秒）才返回，
                  * 表现就是"按一下鼠标，整台电脑卡一下"。丢到线程池发。 */
-                lock (_gate) { _replayUntil[vk] = Environment.TickCount64 + 300; }
+                lock (_gate)
+                {
+                    _replayUntil[vk] = Environment.TickCount64 + 300;
+                    /* 记下这次"其实只是点了一下"：贴边连点两下要能认出角落手势。 */
+                    _lastTapAt = Environment.TickCount64;
+                    _lastTapPt = new GestureMath.Pt(px, py);
+                }
                 System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                 {
                     try { InputSender.Tap(vk); }
@@ -1211,15 +1420,25 @@ public sealed class GestureService : IDisposable
                 _recordDone = null;
                 IsRecording = false;
             }
+            /* 落库前过一遍轨迹校正：存下来的就是"校正后的那一笔"，以后回放、缩略图、
+             * 以及这条手势自己的模板都统一用它 —— 用户看到的就是校正后的样子。
+             * 判定那一侧不在这里校正：GestureEngine.StrokeOf 里模板和手绘已经统一过了一次，
+             * 两个入口都做就成了双重校正。 */
+            var canonical = StrokeCanonicalizer.Canonicalize(points);
             var recorded = new MouseGesture
             {
                 Id = MouseGesture.NewId(),
                 Button = GestureButtons.FromVk(vk),
                 Kind = "stroke",
-                Path = GestureMath.ToFlat(GestureMath.Normalize(points)),
+                Path = GestureMath.ToFlat(GestureMath.Normalize(canonical)),
                 Pattern = GesturePattern.FromPoints(
-                    points, opts.ActivationDistance, opts.TurnTolerance, opts.MaxTurnDistance)
+                    canonical, opts.ActivationDistance, opts.TurnTolerance, opts.MaxTurnDistance)
             };
+            /* 创建阶段美化（任务四）：Path 仍是识别器的规范化轨迹（老版本/无模板时
+             * 的回退口径），美化后的标准图形单独存进 Beauty；识别、缩略图、预览都优先
+             * 用 Beauty，原始像素轨迹留在 RawPath 供「恢复原始轨迹」和重新美化。
+             * 语义校验（美化前后必须是同一手势）在 StrokeBeautifier 里做，不通过就保留原样。 */
+            GestureBeauty.Apply(recorded, points, opts, "录制");
             HideOverlay(0);
             try { done?.Invoke(recorded); }
             catch (Exception ex) { CoreLog.Swallow(ex, "手势录制回调"); }
@@ -1228,12 +1447,10 @@ public sealed class GestureService : IDisposable
 
         if (hit != null)
         {
-            Execute(hit, px, py);
-            string title = hit.Title(ActionCatalogTitle(hit));
             /* 松手结算模式：画的过程中方框一直在（预览），用户松手 →
-             * 结算并执行 → 名称换成「已执行」配色再淡出。 */
-            SettleOverlay(hit, px, py);
-            CoreLog.Info($"手势命中：{title}（偏差 {score:0.000}）");
+             * 先「匹配后替换」成美化模板，再执行 → 名称换成「已执行」配色再淡出。
+             * 顺序见 FinishHit：动作要等替换走完，否则动作打开的窗口会先把覆盖层压掉。 */
+            FinishHit(hit, px, py, score);
         }
         else
         {
@@ -1243,6 +1460,132 @@ public sealed class GestureService : IDisposable
             if (extent >= opts.MinMove) CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
             HideOverlay(0);
         }
+    }
+
+    // ─────────────────── 匹配后替换（任务四） ───────────────────
+
+    /// <summary>停掉「匹配后替换」的排期（新手势开始、关闭服务时用）。线程无关。</summary>
+    private void CancelMatchReplace()
+    {
+        var timer = _matchReplace;
+        _matchReplace = null;
+        if (timer == null) return;
+        /* 非 UI 线程调 Stop 会抛，但字段已经清了 —— 到点的回调看到
+         * !ReferenceEquals(_matchReplace, timer) 会自己放弃。 */
+        try { timer.Stop(); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "取消手势替换排期"); }
+    }
+
+    /// <summary>
+    /// 存量手势的模板回填：老数据没有 <see cref="MouseGesture.Beauty"/>，
+    /// 第一次被命中时就地补一份并存盘（下次启动直接有模板）。
+    /// 计算放在调用线程（钩子线程）上做，别塞进 UI 线程 —— 美化是几十毫秒级的活。
+    /// </summary>
+    private void EnsureBeauty(MouseGesture g, GestureOptions opts, string origin)
+    {
+        try
+        {
+            if (!GestureBeauty.Ensure(g, opts, origin)) return;
+            Ui(() =>
+            {
+                try { _host.SaveSettings(); }
+                catch (Exception ex) { CoreLog.Swallow(ex, "保存手势模板"); }
+            });
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "手势模板回填"); }
+    }
+
+    /// <summary>
+    /// 松手命中：先「匹配后替换」，替换（或直接切换）完成后才执行动作。
+    /// 未开启替换、或这条手势没有模板时，退回原来的执行顺序，一点不差。
+    /// </summary>
+    private void FinishHit(MouseGesture hit, double px, double py, double score)
+    {
+        string title = hit.Title(ActionCatalogTitle(hit));
+        var opts = Settings().GestureOptions;
+        EnsureBeauty(hit, opts, "首次使用回填");
+
+        if (!opts.BeautifyOnMatch || !hit.HasBeauty)
+        {
+            Execute(hit, px, py);
+            SettleOverlay(hit, px, py);
+            CoreLog.Info($"手势命中：{title}（偏差 {score:0.000}）");
+            return;
+        }
+
+        int ms = Math.Clamp(opts.BeautifyTransitionMs, 0, 600);
+        var template = hit.BeautyPoints();
+        Ui(() =>
+        {
+            void Run()
+            {
+                Execute(hit, px, py);
+                /* 替换后轨迹已经是模板本身，名称换「已执行」配色再淡出时保留它。 */
+                SettleOverlay(hit, px, py);
+                CoreLog.Info($"手势命中：{title}（偏差 {score:0.000}）");
+            }
+
+            CancelMatchReplace();
+            int played = 0;
+            try
+            {
+                var overlay = EnsureOverlay();
+                overlay.ShowPassive();
+                overlay.MarkRecognized();
+                played = overlay.ReplaceTrailWithTemplate(template, ms);
+            }
+            catch (Exception ex)
+            {
+                /* 画不出模板不影响功能：直接执行。 */
+                CoreLog.Swallow(ex, "手势匹配后替换");
+                Run();
+                return;
+            }
+
+            if (played <= 0) { Run(); return; }
+
+            var timer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(played)
+            };
+            timer.Tick += (_, _) =>
+            {
+                if (!ReferenceEquals(_matchReplace, timer)) return;
+                _matchReplace = null;
+                timer.Stop();
+                Run();
+            };
+            _matchReplace = timer;
+            timer.Start();
+        });
+    }
+
+    /// <summary>
+    /// 立即执行（画到一半就命中）：不能等过渡动画，当场把轨迹换成模板再执行。
+    /// 视觉上"啪"一下变成标准图形，紧接着动作就发生了，与之前的手感一致。
+    /// 调用点在 UI 线程（轮询回调），这里直接碰覆盖层。
+    /// </summary>
+    private void ImmediateHit(MouseGesture hit, double px, double py, double score)
+    {
+        string title = hit.Title(ActionCatalogTitle(hit));
+        var opts = Settings().GestureOptions;
+        EnsureBeauty(hit, opts, "首次使用回填");
+
+        if (opts.BeautifyOnMatch && hit.HasBeauty)
+        {
+            try
+            {
+                var overlay = EnsureOverlay();
+                overlay.ShowPassive();
+                overlay.MarkRecognized();
+                overlay.ReplaceTrailWithTemplate(hit.BeautyPoints(), 0);
+            }
+            catch (Exception ex) { CoreLog.Swallow(ex, "手势立即执行替换"); }
+        }
+
+        Execute(hit, px, py);
+        SettleOverlay(hit, px, py);
+        CoreLog.Info($"手势立即执行：{title}（偏差 {score:0.000}）");
     }
 
     private void Execute(MouseGesture g, double px, double py)
@@ -1267,8 +1610,14 @@ public sealed class GestureService : IDisposable
         {
             void Run()
             {
-                try { _host.InvokeAction(action, arg); }
-                catch (Exception ex) { CoreLog.Swallow(ex, "执行手势动作"); }
+                /* 手势名字松手时就浮在屏幕上了（「关闭」），动作再补一条
+                 * 「已发送 Ctrl+W（未绑定应用，发给当前窗口）」等于同一件事说第二遍。
+                 * 这一段里只放失败提示过去，成功的全部省掉。 */
+                using (_host.QuietSuccess())
+                {
+                    try { _host.InvokeAction(action, arg); }
+                    catch (Exception ex) { CoreLog.Swallow(ex, "执行手势动作"); }
+                }
             }
 
             /* 先切窗口再发键：快捷键型动作（Ctrl+W / Ctrl+C …）落在焦点窗口上，
@@ -1462,7 +1811,7 @@ public sealed class GestureService : IDisposable
          * 只有方向串的先合成折线再比形状）。分数刻度 1.0 = 刚好卡在阈上。 */
         foreach (var bucket in new[] { scoped, global })
         {
-            var (hit, score) = GestureEngine.MatchRelease(bucket, points, opts);
+            var (hit, score) = MatchWithScope(bucket, points, opts);
             if (hit != null) return (hit, score);
         }
 
@@ -1478,6 +1827,303 @@ public sealed class GestureService : IDisposable
 
         return (null, 1);
     }
+
+
+    // ───────────────────────── 多步 / 贴边 / 双击角落（v1.5.0） ─────────────────────────
+
+    /* 多步手势里的「按一组键」：钩子把每个按键旁观着报过来，这里攒成一步。
+     * 只记修饰键之外的键 —— 单按 ctrl 不算一步。 */
+    private readonly List<int> _keysDown = new();
+
+    private static bool IsModifierVk(int vk) => vk is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C
+        or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5;
+
+    /// <summary>把按住的键拼成 ctrl+shift+k 这种写法（认不出的键返回空串）。</summary>
+    private static string ComboText(IEnumerable<int> down)
+    {
+        bool ctrl = false, shift = false, alt = false, win = false;
+        int main = 0;
+
+        foreach (int vk in down)
+        {
+            switch (vk)
+            {
+                case 0x11: case 0xA2: case 0xA3: ctrl = true; break;
+                case 0x10: case 0xA0: case 0xA1: shift = true; break;
+                case 0x12: case 0xA4: case 0xA5: alt = true; break;
+                case 0x5B: case 0x5C: win = true; break;
+                default: main = vk; break;
+            }
+        }
+
+        if (main == 0) return "";
+        string name = KeyName.NameOf(main) ?? "";
+        if (name.Length == 0) return "";
+
+        var parts = new List<string>(5);
+        if (ctrl) parts.Add("ctrl");
+        if (shift) parts.Add("shift");
+        if (alt) parts.Add("alt");
+        if (win) parts.Add("win");
+        parts.Add(name);
+
+        CustomKeyRunner.TryNormalize(string.Join("+", parts), out string canonical, out _);
+        return canonical.Length > 0 ? canonical : string.Join("+", parts);
+    }
+
+    /// <summary>
+    /// 按键旁观：多步手势正在等「按一组键」时，把松手的那一组记成一步。
+    ///
+    /// 不吞键 —— 多步手势是"看着你操作"，不是"接管你的键盘"：
+    /// 被按的那组键该发到哪里还是发到哪里（WG2 的多步手势也是这个行为）。
+    /// </summary>
+    private void OnKeySeen(int vk, bool down, bool injected)
+    {
+        if (injected) return;
+
+        lock (_gate)
+        {
+            if (down)
+            {
+                if (!_keysDown.Contains(vk)) _keysDown.Add(vk);
+                return;
+            }
+
+            bool was = _keysDown.Remove(vk);
+            if (!_active || !_multiExpected) return;
+            if (!was || IsModifierVk(vk)) return;
+
+            /* 松手才算"按完了这一组"：先按住 ctrl 再按 a，松 a 时才成步。 */
+            string combo = ComboText(_keysDown.Concat(new[] { vk }));
+            if (combo.Length == 0) return;
+
+            if (_stepsDrawn.Count < GestureStep.MaxSteps)
+                _stepsDrawn.Add(new GestureStep { Kind = "key", Key = combo });
+            _segStart = _points.Count;
+        }
+    }
+
+    /// <summary>把当前待识别的一小段切成一步（锁内调用，只碰字段不算界面）。</summary>
+    private void CloseStepLocked(double px, double py, int minMove)
+    {
+        if (_points.Count - _segStart < 2) return;
+
+        var seg = new List<GestureMath.Pt>(_points.Count - _segStart);
+        for (int i = _segStart; i < _points.Count; i++) seg.Add(_points[i]);
+        _segStart = _points.Count;
+
+        double extent = GestureMath.Extent(seg);
+        if (extent < 1) return;
+
+        var opts = Settings().GestureOptions;
+        int corner = CornerAt(px, py, opts.CornerSize);
+        int edge = EdgeAt(px, py, opts.EdgeSize);
+
+        GestureStep step;
+        if (extent < minMove && corner != 0)
+        {
+            step = new GestureStep { Kind = "corner", Corner = corner };
+        }
+        else if (extent >= minMove && edge != 0 && HugsEdge(seg, edge, opts.EdgeSize))
+        {
+            step = new GestureStep { Kind = "edge", Edge = edge };
+        }
+        else if (extent >= minMove)
+        {
+            step = new GestureStep
+            {
+                Kind = "stroke",
+                /* 多步手势的每一小段也存校正后的形状（同一条入口规则）。 */
+                Path = GestureMath.ToFlat(GestureMath.Normalize(StrokeCanonicalizer.Canonicalize(seg)))
+            };
+        }
+        else
+        {
+            return;   // 太短、也不在角上：当手抖丢掉
+        }
+
+        if (_stepsDrawn.Count < GestureStep.MaxSteps) _stepsDrawn.Add(step);
+        /* 这一步已经切走了：覆盖层上的轨迹从这儿重新画，免得看着像一笔。 */
+        Ui(() => _overlay?.ClearTrail());
+    }
+
+    /// <summary>作用域层级：具体程序 2、分组 1、全局 0（WG2 目标树的三层）。</summary>
+    internal static int ScopeRank(MouseGesture g)
+    {
+        if (string.IsNullOrWhiteSpace(g.AppPath)) return 0;
+        return g.AppPath.StartsWith("group:", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+    }
+
+    /// <summary>
+    /// 同形手势按目标层级择优（对照 WG2 的 A/m.cs:478）：两条手势画得一样像时，
+    /// 作用域更具体的那个赢 —— 具体程序 &gt; 分组 &gt; 全局。
+    /// 分桶顺序（应用专属先于全局）不变，这里只处理"同一个桶里也有层级"的情况。
+    /// </summary>
+    internal static (MouseGesture? Hit, double Score) MatchWithScope(
+        List<MouseGesture> bucket, IReadOnlyList<GestureMath.Pt> points, GestureOptions opts)
+    {
+        var (hit, score) = GestureEngine.MatchRelease(bucket, points, opts);
+        if (hit == null) return (null, score);
+
+        double threshold = Math.Max(GestureEngine.ThresholdOf(opts, false), 1e-6);
+        MouseGesture best = hit;
+        double bestDistance = GestureEngine.Distance(hit, points);
+
+        foreach (var g in bucket)
+        {
+            if (ReferenceEquals(g, hit) || g.IsWildcard) continue;
+            if (ScopeRank(g) <= ScopeRank(best)) continue;
+            if (!GestureEngine.CanMatch(g)) continue;
+
+            double d = GestureEngine.Distance(g, points);
+            if (d <= threshold && d <= bestDistance + 0.02)
+            {
+                best = g;
+                bestDistance = d;
+            }
+        }
+
+        return (best, bestDistance / threshold);
+    }
+
+    /// <summary>
+    /// 一步与模板一步的距离：类型必须一样；笔画比形状（同一套 WG 引擎、同一个阈值），
+    /// 按键比组合，滚轮比方向，角落/边比编号。任何一项对不上就是无穷远。
+    /// </summary>
+    internal static double StepDistance(MouseGesture g, IReadOnlyList<GestureStep> drawn, GestureOptions opts)
+    {
+        if (g?.Steps == null || drawn == null || g.Steps.Count != drawn.Count) return double.MaxValue;
+
+        double threshold = Math.Max(GestureEngine.ThresholdOf(opts, false), 1e-6);
+        double worst = 0;
+
+        for (int i = 0; i < drawn.Count; i++)
+        {
+            var t = g.Steps[i];
+            var d = drawn[i];
+            string tk = (t.Kind ?? "").Trim().ToLowerInvariant();
+            string dk = (d.Kind ?? "").Trim().ToLowerInvariant();
+            if (tk != dk) return double.MaxValue;
+
+            switch (tk)
+            {
+                case "stroke":
+                {
+                    if (!t.HasPath || !d.HasPath) return double.MaxValue;
+                    var tpl = new MouseGesture { Kind = "stroke", Path = new List<int>(t.Path) };
+                    if (!GestureEngine.CanMatch(tpl)) return double.MaxValue;
+                    double dist = GestureEngine.Distance(tpl, d.Points());
+                    if (double.IsNaN(dist) || dist > threshold) return double.MaxValue;
+                    worst = Math.Max(worst, dist / threshold);
+                    break;
+                }
+                case "corner":
+                    if (t.Corner != 0 && d.Corner != 0 && t.Corner != d.Corner) return double.MaxValue;
+                    break;
+                case "edge":
+                    if (t.Edge != 0 && d.Edge != 0 && t.Edge != d.Edge) return double.MaxValue;
+                    break;
+                case "key":
+                    if (!string.Equals(
+                            CustomKeyRunner.Canonical(t.Key),
+                            CustomKeyRunner.Canonical(d.Key),
+                            StringComparison.OrdinalIgnoreCase))
+                        return double.MaxValue;
+                    break;
+                case "scroll":
+                    if (t.Wheel != 0 && d.Wheel != 0 && Math.Sign(t.Wheel) != Math.Sign(d.Wheel))
+                        return double.MaxValue;
+                    break;
+                default:
+                    return double.MaxValue;
+            }
+        }
+
+        return worst;
+    }
+
+    /// <summary>
+    /// 多步手势识别：步数一样、每一步都对得上，取最像的那一条。
+    /// 只比"序列"，不做单笔手势那套闭环变体 —— 多步手势本来就没有闭环容错的余地。
+    /// </summary>
+    internal static (MouseGesture? Hit, double Score) PickSteps(
+        AppSettings settings, int vk, string app, IReadOnlyList<GestureStep> steps, GestureOptions opts)
+    {
+        if (steps == null || steps.Count < 2) return (null, 1);
+
+        MouseGesture? best = null;
+        double bestScore = 1;
+        foreach (var g in Candidates(settings, vk, app, includeWheel: false, includeChords: true))
+        {
+            if (!g.HasSteps || g.Steps.Count != steps.Count) continue;
+            double score = StepDistance(g, steps, opts);
+            if (score >= 1) continue;
+            if (best == null || score < bestScore)
+            {
+                best = g;
+                bestScore = score;
+            }
+        }
+
+        return best == null ? (null, 1) : (best, bestScore);
+    }
+
+    /// <summary>「沿边移动」：整条轨迹都贴着同一条屏幕边，长度也够。</summary>
+    internal static (MouseGesture? Hit, double Score) PickEdge(
+        AppSettings settings, int vk, string app, IReadOnlyList<GestureMath.Pt> points, GestureOptions opts)
+    {
+        if (points == null || points.Count < 2) return (null, 1);
+
+        var last = points[^1];
+        int edge = EdgeAt(last.X, last.Y, opts.EdgeSize);
+        if (edge == 0 || !HugsEdge(points, edge, opts.EdgeSize)) return (null, 1);
+
+        var hit = Candidates(settings, vk, app, includeWheel: false)
+            .FirstOrDefault(g => g.Kind == "edge" && (g.Edge == 0 || g.Edge == edge));
+        return hit == null ? (null, 1) : (hit, 0);
+    }
+
+    /// <summary>整条轨迹是不是都在这条边的带宽里。</summary>
+    internal static bool HugsEdge(IReadOnlyList<GestureMath.Pt> points, int edge, int size)
+    {
+        if (points == null || points.Count == 0 || edge == 0) return false;
+        foreach (var p in points)
+            if (EdgeAt(p.X, p.Y, size) != edge) return false;
+        return true;
+    }
+
+    /// <summary>贴边连点两下：WG2 用它把"点在边附近"当成角落手势（A/K.cs:505）。</summary>
+    private bool IsEdgeDoubleTap(double px, double py, GestureOptions opts)
+    {
+        long last;
+        GestureMath.Pt pt;
+        lock (_gate)
+        {
+            last = _lastTapAt;
+            pt = _lastTapPt;
+        }
+
+        if (last == 0 || Environment.TickCount64 - last > 420) return false;
+        double dx = px - pt.X, dy = py - pt.Y;
+        if (dx * dx + dy * dy > 900) return false;      // 30px 以内算同一下
+        return EdgeAt(px, py, Math.Max(opts.EdgeSize, 24)) != 0;
+    }
+
+    /// <summary>离指针最近的那个角：1 左上、2 右上、3 左下、4 右下。</summary>
+    internal static int NearestCorner(double px, double py)
+    {
+        int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        int bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+        bool leftHalf = px - left <= right - px;
+        bool topHalf = py - top <= bottom - py;
+        return topHalf ? (leftHalf ? 1 : 2) : (leftHalf ? 3 : 4);
+    }
+
+    private static MouseGesture? CornerCandidateFor(List<MouseGesture> candidates, int corner) =>
+        candidates.FirstOrDefault(g => g.Kind == "corner" && (g.Corner == 0 || g.Corner == corner));
 
     /// <summary>
     /// 这条手势在这个程序里算不算数。作用域为空 = 全局，任何程序都算。

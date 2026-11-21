@@ -21,10 +21,11 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _enabledItem;
     private readonly ToolStripMenuItem _capsStateItem;
     private readonly ToolStripMenuItem _gestureItem;
+    private readonly ToolStripMenuItem _scrollItem;
+    private readonly ToolStripMenuItem _holdDragItem;
     private readonly ToolStripMenuItem _openItem;
     private readonly ToolStripMenuItem _qbarItem;
     private readonly ToolStripMenuItem _mathItem;
-    private readonly ToolStripMenuItem _bindingsItem;
     private readonly ToolStripMenuItem _aliasesItem;
     private readonly ToolStripMenuItem _helpItem;
     private readonly ToolStripMenuItem _reloadItem;
@@ -57,6 +58,13 @@ public sealed class TrayIcon : IDisposable
          * 这里给一个点一下就能关/开的入口，勾选状态跟配置实时同步。 */
         _gestureItem = new ToolStripMenuItem("", null, (_, _) => ToggleGestures()) { CheckOnClick = false };
 
+        /* 平滑滚动、按住拖拽也各给一个托盘开关。
+         * 这两个功能出厂都是关的，用户报"怎么没反应"时第一反应同样是来托盘找 ——
+         * 之前这里只有"鼠标手势"一个开关，另外两个得进设置页翻，
+         * 而"按住拖拽"还藏在切页之后。和手势一样，勾选状态实时跟配置同步。 */
+        _scrollItem = new ToolStripMenuItem("", null, (_, _) => ToggleScroll()) { CheckOnClick = false };
+        _holdDragItem = new ToolStripMenuItem("", null, (_, _) => ToggleHoldDrag()) { CheckOnClick = false };
+
         /* 菜单项写着"打开设置…"，就必须真的落到设置页。
          * 之前这里调的是无参 ShowMainWindow()，打开的是上次停留的页面 ——
          * 名字和行为对不上，用户会以为程序记错了位置。
@@ -64,7 +72,6 @@ public sealed class TrayIcon : IDisposable
         _openItem = new ToolStripMenuItem("", null, (_, _) => host.ShowMainWindow(DoubleClickPage));
         _qbarItem = new ToolStripMenuItem("", null, (_, _) => host.ShowQbar());
         _mathItem = new ToolStripMenuItem("", null, (_, _) => host.ShowMathBoard());
-        _bindingsItem = new ToolStripMenuItem("", null, (_, _) => host.ShowMainWindow("keys"));
         _aliasesItem = new ToolStripMenuItem("", null, (_, _) => host.ShowMainWindow("hotstrings"));
         _helpItem = new ToolStripMenuItem("", null, (_, _) => host.ShowMainWindow("help"));
         _reloadItem = new ToolStripMenuItem("", null, (_, _) => host.ReloadAll());
@@ -83,11 +90,12 @@ public sealed class TrayIcon : IDisposable
             _enabledItem,
             _capsStateItem,
             _gestureItem,
+            _scrollItem,
+            _holdDragItem,
             new ToolStripSeparator(),
             _openItem,
             _qbarItem,
             _mathItem,
-            _bindingsItem,
             _aliasesItem,
             _helpItem,
             new ToolStripSeparator(),
@@ -157,7 +165,6 @@ public sealed class TrayIcon : IDisposable
         _openItem.Text = Loc.T("打开设置…");
         _qbarItem.Text = Loc.F("打开 Qbar  (Caps+{0})", qKey);
         _mathItem.Text = Loc.T("计算器  (Caps+F2)");
-        _bindingsItem.Text = Loc.T("窗口绑定（按键映射页）");
         _aliasesItem.Text = Loc.T("别名替换");
         _helpItem.Text = Loc.T("使用帮助");
         _reloadItem.Text = Loc.T("重新加载配置  (Caps+F5)");
@@ -268,6 +275,83 @@ public sealed class TrayIcon : IDisposable
         }
     }
 
+    /// <summary>
+    /// 托盘上直接开关平滑滚动。
+    ///
+    /// <see cref="Core.Scroll.SmoothScrollService"/> 每次滚轮都现读
+    /// <see cref="Core.Settings.ScrollOptions.Enabled"/>，所以改完立刻生效；
+    /// <see cref="AppHost.SettingsChanged"/> 还会让服务把"滚到一半的余量"补完。
+    /// </summary>
+    private void ToggleScroll()
+    {
+        try
+        {
+            var scroll = _host.Settings.Scroll ??= new ScrollOptions();
+            scroll.Enabled = !scroll.Enabled;
+            _host.SaveSettings();
+            UpdateScrollState();
+            _host.Notify(scroll.Enabled ? Loc.T("平滑滚动已开启") : Loc.T("平滑滚动已关闭"));
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("切换平滑滚动失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>把菜单上的平滑滚动开关拨到配置里的真实状态。</summary>
+    private void UpdateScrollState()
+    {
+        try
+        {
+            bool on = _host.Settings.Scroll?.Enabled == true;
+            _scrollItem.Checked = on;
+            _scrollItem.Text = on ? Loc.T("平滑滚动：已开启") : Loc.T("平滑滚动：已关闭");
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("刷新平滑滚动开关状态失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 托盘上直接开关按住拖拽。
+    ///
+    /// 这个开关改的是 <see cref="AppSettings.HoldDragEnabled"/> ——
+    /// 与设置页「按住拖拽」那张卡的开关是同一个值；
+    /// <see cref="AppHost.SettingsChanged"/> 会调到 <see cref="Core.HoldDrag.HoldDragService.ApplySettings"/>
+    /// 装上或卸下引擎，不用重启程序。
+    /// </summary>
+    private void ToggleHoldDrag()
+    {
+        try
+        {
+            bool on = !_host.Settings.HoldDragEnabled;
+            _host.Settings.HoldDragEnabled = on;
+            _host.SaveSettings();
+            UpdateHoldDragState();
+            _host.Notify(on ? Loc.T("按住拖拽已开启") : Loc.T("按住拖拽已关闭"));
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("切换按住拖拽失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>把菜单上的按住拖拽开关拨到配置里的真实状态。</summary>
+    private void UpdateHoldDragState()
+    {
+        try
+        {
+            bool on = _host.Settings.HoldDragEnabled;
+            _holdDragItem.Checked = on;
+            _holdDragItem.Text = on ? Loc.T("按住拖拽：已开启") : Loc.T("按住拖拽：已关闭");
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("刷新按住拖拽开关状态失败：" + ex.Message);
+        }
+    }
+
     private void UpdateCapsState()
     {
         _enabledItem.Text = _host.Engine.Enabled
@@ -275,6 +359,8 @@ public sealed class TrayIcon : IDisposable
             : Loc.F("恢复 {0}", AppInfo.ShortName);
         _capsStateItem.Text = Core.Input.HotkeyEngine.CapsLockOn ? Loc.T("大写锁定：开") : Loc.T("大写锁定：关");
         UpdateGestureState();
+        UpdateScrollState();
+        UpdateHoldDragState();
         _icon.Icon = _customIcon ?? SystemIcons.Application;
     }
 

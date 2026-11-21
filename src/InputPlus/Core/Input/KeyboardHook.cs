@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using InputPlus.Core.Interop;
 using static InputPlus.Core.Interop.NativeMethods;
@@ -94,6 +94,17 @@ public sealed class KeyboardHook : IDisposable
     /// 与 <see cref="WheelEvent"/> 的区别同按键：手势优先，没接手才轮到改键/滚动逻辑。
     /// </summary>
     public Func<int, bool, bool, bool>? GestureWheelEvent;
+
+    /// <summary>
+    /// 旁观用的按键通知：(vk, down, injected)。**没人看返回值**，纯通知 ——
+    /// 不会改变这个键是吞还是放行。
+    ///
+    /// 用途只有一处：多步手势里的「按一组键」那一步要记账（v1.5.0）。
+    /// 为什么不用 <see cref="KeyEvent"/>：那条链路是改键引擎的，返回 true 就会吞键；
+    /// 多步手势只是"看着你按了什么"，不该改变按键本身的行为。
+    /// 自己注入的键也会报进来（injected = true），由调用方忽略。
+    /// </summary>
+    public Action<int, bool, bool>? KeySeen;
 
     /// <summary>
     /// 平滑滚动的前置滚轮回调：(原始 delta, injected, 是否水平) → 是否吞掉。
@@ -275,6 +286,12 @@ public sealed class KeyboardHook : IDisposable
                 }
                 finally { Interlocked.Exchange(ref _callbackStartedTick, 0); }
 
+                if (KeySeen != null)
+                {
+                    try { KeySeen((int)data.vkCode, isDown, injectedByUs); }
+                    catch (Exception ex) { CoreLog.Error("按键旁观回调异常", ex); }
+                }
+
                 // 返回 1（非零）且不调用 CallNextHookEx 即可吞掉该按键
                 if (swallow) return new IntPtr(1);
             }
@@ -379,6 +396,11 @@ public sealed class KeyboardHook : IDisposable
 
     private IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
+        // 探针：确认钩子宿主到底有没有收到这次鼠标事件（排查"按住拖拽收不到鼠标"）。
+        if (wParam.ToInt64() != 512)
+        {
+            Modules.HoldDrag.HookProbe.W("HOST-MS nCode=" + nCode + " msg=" + wParam.ToInt64());
+        }
         if (nCode < 0) return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
         try
         {
@@ -442,7 +464,10 @@ public sealed class KeyboardHook : IDisposable
                  * 这颗键的按下/抬起（识别失败时它会补发一次单击，用户不会
                  * 丢掉"右键菜单"这类基本操作）。 */
                 if (GestureButtonEvent is { } gestureButton && gestureButton(vk, down, injected))
+                {
+                    Modules.HoldDrag.HookProbe.W("HOST-MS 被手势吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
                     return new IntPtr(1);
+                }
 
                 /* Qbar 的"点面板外面就收起"只关心按下，且**只认真人操作** ——
                  * 自己注入的点击不能把面板关掉。 */
@@ -457,7 +482,11 @@ public sealed class KeyboardHook : IDisposable
                  * 观察必须先看到原始事件。 */
                 if (MouseButtonEvent is { } handler)
                 {
-                    if (handler(vk, down, injected)) return new IntPtr(1);
+                    if (handler(vk, down, injected))
+                    {
+                        Modules.HoldDrag.HookProbe.W("HOST-MS 被改键吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
+                        return new IntPtr(1);
+                    }
                 }
             }
         }

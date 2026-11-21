@@ -64,6 +64,18 @@ public sealed class MouseGesture
     /// <summary>屏幕边缘：0 无、1 上、2 右、3 下、4 左（仅 Kind=edgewheel）。</summary>
     public int Edge { get; set; }
 
+    /// <summary>
+    /// 多步手势的步骤序列（v1.5.0，照 WGestures 2 的 Stroke / MoveToEdgeCorner /
+    /// KeyDown / Scroll 四种步）。空 = 普通单笔手势，识别完全走原来的路径。
+    ///
+    /// 有步骤时，<see cref="Path"/> 仍保存第一笔的形状 —— 列表缩略图和导入导出
+    /// 都靠它，识别则逐步比 <see cref="Steps"/>。
+    /// </summary>
+    public List<GestureStep> Steps { get; set; } = new();
+
+    /// <summary>这条手势是不是多步手势。</summary>
+    public bool HasSteps => Steps is { Count: > 0 };
+
     /// <summary>动作 ID（见 ActionCatalog）。</summary>
     public string Action { get; set; } = "";
 
@@ -90,9 +102,49 @@ public sealed class MouseGesture
     /// <summary>导入时无法自动翻译的说明（例如 Lua 脚本），显示在列表里提醒用户。</summary>
     public string Note { get; set; } = "";
 
+    /// <summary>
+    /// 美化后的标准图形（Gesture Template / Prototype）：口径与 <see cref="Path"/> 相同，
+    /// x0,y0,x1,y1… 已归一化到 0~1000。
+    ///
+    /// 空 = 这条手势还没美化过（老数据，或者用户把美化关掉了）。有值时：
+    ///   · 列表缩略图、创建预览、触发后的覆盖层替换都画它；
+    ///   · 识别也用它当模板（<see cref="GestureEngine.ShapeOf"/> 优先取它）——
+    ///     美化经过语义守门，和原轨迹在识别器里是同一个手势。
+    /// 原始轨迹另存 <see cref="RawPath"/>，随时可以重新美化。
+    /// </summary>
+    public List<int> Beauty { get; set; } = new();
+
+    /// <summary>美化前的原始轨迹（Raw Stroke），口径同 <see cref="Path"/>；调试与"重新美化"用。</summary>
+    public List<int> RawPath { get; set; } = new();
+
+    /// <summary>这条模板是用哪一档美化出来的（off / light / medium / strong）；空 = 没美化过。</summary>
+    public string BeautyLevel { get; set; } = "";
+
+    /// <summary>美化算法版本：算法改了口径就 +1，旧模板据此重新生成。</summary>
+    public int BeautyVersion { get; set; }
+
     public int PathPointCount => Path.Count / 2;
 
     public bool HasPath => Path.Count >= 4;
+
+    /// <summary>有没有可用的美化模板。</summary>
+    public bool HasBeauty => Beauty is { Count: >= 4 };
+
+    /// <summary>有没有存下"美化前"的原始轨迹（重新美化 / 恢复原样要用）。</summary>
+    public bool HasRaw => RawPath is { Count: >= 4 };
+
+    /// <summary>美化模板的点列；没有时返回空表（调用方别再自己判空集合）。</summary>
+    public List<GestureMath.Pt> BeautyPoints()
+    {
+        var list = new List<GestureMath.Pt>(Beauty?.Count / 2 ?? 0);
+        if (Beauty == null) return list;
+        for (int i = 0; i + 1 < Beauty.Count; i += 2)
+            list.Add(new GestureMath.Pt(Beauty[i], Beauty[i + 1]));
+        return list;
+    }
+
+    /// <summary>显示 / 识别用的形状：有美化模板就美化模板，否则退回原始轨迹。</summary>
+    public List<GestureMath.Pt> DisplayPoints() => HasBeauty ? BeautyPoints() : Points();
 
     /// <summary>通配手势：任何方向都能触发（FlowMouse 的 <c>*</c>）。</summary>
     public bool IsWildcard => Pattern == GesturePattern.Wildcard;
@@ -153,6 +205,10 @@ public sealed class MouseGesture
         Chord = Chord,
         Kind = Kind,
         Path = new List<int>(Path),
+        Beauty = new List<int>(Beauty),
+        RawPath = new List<int>(RawPath),
+        BeautyLevel = BeautyLevel,
+        BeautyVersion = BeautyVersion,
         Pattern = Pattern,
         Wheel = Wheel,
         Corner = Corner,
@@ -164,7 +220,8 @@ public sealed class MouseGesture
         Immediate = Immediate,
         HideLabel = HideLabel,
         FromWGestures = FromWGestures,
-        Note = Note
+        Note = Note,
+        Steps = Steps?.Select(s => s.Clone()).ToList() ?? new()
     };
 
     /// <summary>把所有字段用 <paramref name="other"/> 覆盖（保持对象引用不变，列表绑定不会跳）。</summary>
@@ -175,6 +232,10 @@ public sealed class MouseGesture
         Chord = other.Chord;
         Kind = other.Kind;
         Path = new List<int>(other.Path);
+        Beauty = new List<int>(other.Beauty);
+        RawPath = new List<int>(other.RawPath);
+        BeautyLevel = other.BeautyLevel;
+        BeautyVersion = other.BeautyVersion;
         Pattern = other.Pattern;
         Wheel = other.Wheel;
         Corner = other.Corner;
@@ -187,6 +248,99 @@ public sealed class MouseGesture
         HideLabel = other.HideLabel;
         FromWGestures = other.FromWGestures;
         Note = other.Note;
+        Steps = other.Steps?.Select(s => s.Clone()).ToList() ?? new();
+    }
+}
+
+/// <summary>
+/// 多步手势的一步。
+///
+/// 对应 WGestures 2 手势里的四种步（A/L.cs）：笔画 <c>stroke</c>、
+/// 甩到边角 <c>corner</c>（它的 MoveToEdgeCorner）、按下某组键 <c>key</c>、
+/// 滚轮 <c>scroll</c>。用户按住起手键不放，依次做完这些步再松手 ——
+/// 中途停一下、慢一点都不影响，比的是"做了哪几步、每步像不像"。
+/// </summary>
+public sealed class GestureStep
+{
+    /// <summary>一步最多这么多：再多用户自己都记不住，识别也容易撞。</summary>
+    public const int MaxSteps = 8;
+
+    /// <summary>步类型：stroke / corner / key / scroll。</summary>
+    public string Kind { get; set; } = "stroke";
+
+    /// <summary>笔画的归一化点阵（0~1000），和 <see cref="MouseGesture.Path"/> 同一套刻度。</summary>
+    public List<int> Path { get; set; } = new();
+
+    /// <summary>按键步的键（<c>ctrl+a</c> 这种写法，见 <see cref="Actions.CustomKeyRunner"/>）。</summary>
+    public string Key { get; set; } = "";
+
+    /// <summary>滚轮步的方向：-1 上、+1 下、-2 左、+2 右。</summary>
+    public int Wheel { get; set; }
+
+    /// <summary>甩角步 / 沿边步的角落：0 任意、1 左上、2 右上、3 左下、4 右下。</summary>
+    public int Corner { get; set; }
+
+    /// <summary>沿边步的边：0 任意、1 上、2 右、3 下、4 左。</summary>
+    public int Edge { get; set; }
+
+    public bool HasPath => Path is { Count: >= 4 };
+
+    public List<GestureMath.Pt> Points()
+    {
+        var list = new List<GestureMath.Pt>(Path.Count / 2);
+        for (int i = 0; i + 1 < Path.Count; i += 2)
+            list.Add(new GestureMath.Pt(Path[i], Path[i + 1]));
+        return list;
+    }
+
+    public GestureStep Clone() => new()
+    {
+        Kind = Kind,
+        Path = new List<int>(Path),
+        Key = Key,
+        Wheel = Wheel,
+        Corner = Corner,
+        Edge = Edge
+    };
+
+    /// <summary>人话标题（列表、提示、自检都用它）。</summary>
+    public string Title()
+    {
+        string kind = (Kind ?? "").Trim().ToLowerInvariant();
+        switch (kind)
+        {
+            case "stroke":
+            {
+                string pattern = HasPath
+                    ? GesturePattern.FromNormalized(Points())
+                    : "";
+                return pattern.Length > 0
+                    ? InputPlus.Core.Localization.Loc.F("画一笔 {0}", pattern)
+                    : InputPlus.Core.Localization.Loc.T("画一笔");
+            }
+            case "key":
+                return InputPlus.Core.Localization.Loc.F("按 {0}", Key);
+            case "scroll":
+                return Wheel switch
+                {
+                    -1 => InputPlus.Core.Localization.Loc.T("滚轮向上"),
+                    1 => InputPlus.Core.Localization.Loc.T("滚轮向下"),
+                    -2 => InputPlus.Core.Localization.Loc.T("滚轮向左"),
+                    2 => InputPlus.Core.Localization.Loc.T("滚轮向右"),
+                    _ => InputPlus.Core.Localization.Loc.T("滚轮")
+                };
+            case "corner":
+                return Corner switch
+                {
+                    1 => InputPlus.Core.Localization.Loc.T("甩到左上角"),
+                    2 => InputPlus.Core.Localization.Loc.T("甩到右上角"),
+                    3 => InputPlus.Core.Localization.Loc.T("甩到左下角"),
+                    4 => InputPlus.Core.Localization.Loc.T("甩到右下角"),
+                    _ => InputPlus.Core.Localization.Loc.T("甩到屏幕角")
+                };
+            default:
+                return InputPlus.Core.Localization.Loc.T("一步");
+        }
     }
 }
 
@@ -222,6 +376,52 @@ public sealed class GestureOptions
     /// 升级后仍然是关的，不必再跑一次迁移。
     /// </summary>
     public bool ShowTrail { get; set; } = true;
+    /// <summary>
+    /// 笔画平滑（v1.6.3）：把手画出来的抖动轨迹修顺。
+    ///
+    /// 人手画线带着一串 1~2 像素的抖，识别器只看方向、抖动不影响它，但回放和
+    /// 缩略图看起来「脏」。打开后记点时顺手做一遍「小步滤波 + 转角保护」：
+    /// 只抹掉相邻点之间的小抖动，真正的拐角（方向变化大）原样保留 ——
+    /// 形状不变，只是线条顺了。出厂开着，可在「鼠标手势 → 手势设置」里关掉。
+    /// </summary>
+    public bool SmoothStrokes { get; set; } = true;
+
+    /* ───────── 手势美化（v1.7.0） ─────────
+     *
+     * 创建手势时把手绘轨迹规整成标准图形（<see cref="MouseGesture.Beauty"/>），
+     * 触发时先原样画、匹配成功后替换成这个图形。
+     *
+     * 默认全开：美化只改"看起来的样子"，不改识别阈值 —— 守门（方向串 + 形状距离）
+     * 不过就退回原始轨迹，所以对存量手势是只赚不赔。
+     */
+
+    /// <summary>创建手势时做轨迹美化（Stroke Beautification）。关掉就保存原始轨迹，和以前一样。</summary>
+    public bool BeautifyOnCreate { get; set; } = true;
+
+    /// <summary>美化强度：off / light / medium / strong（见 <see cref="StrokeBeautyLevels"/>）。</summary>
+    public string BeautifyLevel { get; set; } = StrokeBeautyLevels.IdMedium;
+
+    /// <summary>解析后的美化强度；写了不认识的词按 medium 处理。</summary>
+    public StrokeBeautyLevel BeautyLevel
+    {
+        get => StrokeBeautyLevels.Parse(BeautifyLevel);
+        set => BeautifyLevel = StrokeBeautyLevels.ToId(value);
+    }
+
+    /// <summary>
+    /// 匹配成功后把屏幕上的原始轨迹替换成美化模板（Match-then-Replace）。
+    /// 关掉就是老行为：手画那条线留着，只显示手势名称。
+    /// </summary>
+    public bool BeautifyOnMatch { get; set; } = true;
+
+    /// <summary>替换过渡时长（毫秒）：0 = 直接切换；夹在 0~600。</summary>
+    public int BeautifyTransitionMs { get; set; } = 140;
+
+    /// <summary>
+    /// 旧手势（没有美化模板）在第一次被用到时按当前设置回填一份。
+    /// 关掉则老手势永远保持原样，只能用「重新美化」手动处理。
+    /// </summary>
+    public bool BeautifyBackfill { get; set; } = true;
 
     /// <summary>轨迹颜色（#RRGGBB）。</summary>
     public string TrailColor { get; set; } = "#3B82F6";
@@ -272,6 +472,19 @@ public sealed class GestureOptions
     /// 关闭后所有鼠标手势都不再开始，但快捷键仍然有效，便于再打开。
     /// </summary>
     public string ToggleHotkey { get; set; } = "";
+
+    /// <summary>
+    /// 全屏程序里不接管（WGestures 2 prefs.json 的 DisableInFullscreen）。
+    /// 前台窗口把整块屏幕铺满（视频、游戏、浏览器 F11）时不开新手势 ——
+    /// 在这种界面里画一笔就把桌面动作甩出来，太容易误触。出厂关。
+    /// </summary>
+    public bool DisableInFullscreen { get; set; }
+
+    /// <summary>
+    /// 偏好窗口置顶（WGestures 2 的 PrefWindowTopmost）。
+    /// 打开时手势设置窗口浮在别的窗口上面，调参数时能看到底下的效果。
+    /// </summary>
+    public bool PrefWindowTopmost { get; set; }
 
     /// <summary>起手距离：走出这么多像素才开始记方向（FlowMouse 默认 20）。</summary>
     public int ActivationDistance { get; set; } = 20;
@@ -395,7 +608,12 @@ public sealed class GestureOptions
     /// <summary>执行后淡出标签（WG2 的 FadeOutExecuted）。关掉就按普通淡出慢慢消失。</summary>
     public bool FadeOutExecuted { get; set; } = true;
 
-    /// <summary>标签描边（WG2 的 ShowLabelBorder）。</summary>
+    /* 下面五项（v1.6.3 起）：手势名称的外观搬到了 GestureLabelStyle
+     * （设置 → 鼠标手势 → 手势设置），这里只为读老配置保留一只耳朵 ——
+     * SettingsStore.Normalize 从它们搬一次，之后没人再读。
+     * 界面已经不写这些字段了，别再把它们接回渲染，否则两边会各画一份。 */
+
+    /// <summary>标签描边（WG2 的 ShowLabelBorder）。仅迁移用。</summary>
     public bool ShowLabelBorder { get; set; } = true;
 
     /// <summary>标签描边宽度（WG2 的 LabelBorderWidth，默认 1）。</summary>

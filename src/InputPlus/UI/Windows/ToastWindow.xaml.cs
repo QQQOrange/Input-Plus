@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
@@ -32,6 +33,9 @@ public partial class ToastWindow : Window
 
     /// <summary>待显示消息槽：永远只放最新的一条。</summary>
     private static readonly ToastQueue Slot = new();
+
+    /// <summary>当前这条是不是「动作反馈」（字号小一号、停留更短）。</summary>
+    private bool _isFeedback;
 
     public ToastWindow()
     {
@@ -97,24 +101,71 @@ public partial class ToastWindow : Window
         w.RefreshToast(wasVisible);
     }
 
+    /// <summary>
+    /// 套样式：默认回到 v1.6.0 之前、也是 v1.0~v1.2 用的旧观感
+    /// （主题卡片 + 22px 图标 + 13px 文字）。
+    ///
+    /// 「设置 → 外观 → 提示条」里的可调项仍然生效，但只覆盖用户真调过的部分：
+    ///   · Color 为空 → 不设底色，继续用 XAML 的 Brush.OverlayCardAlt；
+    ///   · ShowBorder 关闭 → 不设边框，继续用主题自带的 1px 发丝边；
+    ///   · ShowBorder 打开 → 才按 BorderWidth × 2 画那圈白边。
+    /// 这样默认值不必在代码里再抄一遍颜色，深浅色主题也能跟着走。
+    /// </summary>
     private static void Apply(ToastWindow w, string message, string kind)
     {
         w.Message.Text = message;
-        if (kind == "feedback")
+        w._isFeedback = kind == "feedback";
+
+        var style = Core.Settings.ToastStyles.Current;
+
+        /* 底色：空串 = 旧观感的「跟随主题」；非空才是用户在设置里挑的 RGBA。
+         * 解析失败也退回当前主题卡色，避免写坏配置后提示条变成一块洋红。 */
+        if (string.IsNullOrWhiteSpace(style.Color))
         {
-            // 反馈样式：更小、更淡、带强调色左边框，不干扰视线。
-            // 颜色全部走 XAML 里的 Brush.Overlay*，浅色主题不会再变成黑板。
-            w.Card.Padding = new Thickness(12, 8, 14, 8);
-            w.IconBox.Visibility = Visibility.Collapsed;
-            w.Message.FontSize = 12.5;
-            w.Message.Opacity = 0.92;
+            w.Card.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty,
+                "Brush.OverlayCardAlt");
         }
         else
         {
+            var fallback = w.TryFindResource("Brush.OverlayCardAlt") is SolidColorBrush theme
+                ? theme.Color
+                : Color.FromArgb(0xF2, 0x16, 0x1A, 0x23);
+            w.Card.Background = new SolidColorBrush(
+                Core.Gestures.Wg2Color.Parse(style.Color, fallback));
+        }
+
+        // 圆角回到主题卡片的 12（Overlay.CardAlt），不再写死 v1.6.3 的 14。
+        w.Card.ClearValue(System.Windows.Controls.Border.CornerRadiusProperty);
+
+        /* 可调白边默认关，关着时把边框交还给样式（主题发丝边）；
+         * 打开后才覆盖。粗细 ×2 的口径与手势名称框一致。 */
+        if (style.ShowBorder)
+        {
+            double border = Math.Max(1.0, style.BorderWidth) * 2;
+            w.Card.BorderThickness = new Thickness(border);
+            w.Card.BorderBrush = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
+        }
+        else
+        {
+            w.Card.ClearValue(System.Windows.Controls.Border.BorderThicknessProperty);
+            w.Card.ClearValue(System.Windows.Controls.Border.BorderBrushProperty);
+        }
+
+        if (w._isFeedback)
+        {
+            // 反馈样式：小一号、更紧凑，并且不占图标的位置 —— 连按音量键时不挡视线
+            w.Card.Padding = new Thickness(12, 8, 14, 8);
+            w.Message.FontSize = 12.5;
+            w.Message.Opacity = 0.92;
+            w.IconBox.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            // 旧观感：22px 图标 + 13px 文字 + 16,11 内边距
             w.Card.Padding = new Thickness(16, 11, 16, 11);
-            w.IconBox.Visibility = Visibility.Visible;
             w.Message.FontSize = 13;
             w.Message.Opacity = 1;
+            w.IconBox.Visibility = Visibility.Visible;
         }
     }
 
@@ -145,8 +196,8 @@ public partial class ToastWindow : Window
 
     private void StartHoldTimer()
     {
-        // 反馈类提示停留短一些，普通提示长一些
-        int holdMs = Card.Padding.Left < 14 ? 900 : 1800;
+        // 反馈类提示停留短一些，普通提示长一些（别再靠内边距猜，见 _isFeedback）
+        int holdMs = _isFeedback ? 900 : 1800;
 
         /* 复用一个计时器。
          *
@@ -187,12 +238,15 @@ public partial class ToastWindow : Window
         // 内容测量完再定位，避免第一次显示时尺寸还是 0
         UpdateLayout();
 
-        /* 跟随前台窗口所在显示器的右下角。
-         * 旧实现用 SystemParameters.WorkArea：只认主屏，且是系统 DPI 的 DIP，
-         * 在副屏/混缩放下会错位到屏幕外。 */
+        /* 旧观感固定贴工作区右下角 10px，落位跟随前台窗口所在显示器
+         * （旧实现用 SystemParameters.WorkArea：只认主屏，且是系统 DPI 的 DIP，
+         * 副屏/混缩放下会错位到屏幕外）。
+         *
+         * XAML 里 Card 的 Margin=14 是卡片自身的透明呼吸空间，也把窗口尺寸撑开；
+         * 它和这里的屏幕边距是两回事，别再拿它当边距用。 */
         var fg = Core.Interop.NativeMethods.GetForegroundWindow();
-        if (Core.Windows.ScreenPlacement.Place(this,
-                Core.Windows.ScreenPlacement.Anchor.BottomRight, 10, 10, fg))
+        if (Core.Windows.ScreenPlacement.Place(this, Core.Windows.ScreenPlacement.Anchor.BottomRight,
+                marginX: 10, marginY: 10, target: fg))
             return;
 
         var wa = SystemParameters.WorkArea;

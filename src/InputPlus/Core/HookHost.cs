@@ -34,7 +34,12 @@ namespace InputPlus.Core;
 /// </summary>
 internal static class HookHost
 {
-    public static int Run(string pipeName, int parentPid = 0)
+    /// <param name="relayOnly">
+    /// 中继模式：不装钩子，只执行主程序发来的 <c>INJECT</c> 命令（见
+    /// <see cref="App.InjectionBridge"/>）。主程序是管理员时用它 —— 钩子留在
+    /// 提升的主进程里（只有它看得见提升窗口的输入），注入交给普通权限的宿主。
+    /// </param>
+    public static int Run(string pipeName, int parentPid = 0, bool relayOnly = false)
     {
         var log = new StringBuilder();
         void Trace(string s) { log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {s}"); }
@@ -192,6 +197,20 @@ internal static class HookHost
                     string? cmdLine;
                     while ((cmdLine = reader2.ReadLine()) != null)
                     {
+                        /* 中继模式只认 INJECT。
+                         *
+                         * 钩子不在这个进程里（它在提升的主进程那边，只有那个钩子
+                         * 看得见提升窗口的输入），这里只负责把主程序算好的按键交给
+                         * SendInput。CAPTURE / ENABLED / SUSPEND 的对象是本地 engine，
+                         * 而 REHOOK 会真的去 SetWindowsHookEx —— 一旦装上，同一个按键
+                         * 就会被两个钩子各处理一次（重复触发、双击）。直接忽略。 */
+                        if (relayOnly
+                            && !cmdLine.StartsWith(App.InjectionBridge.Prefix, StringComparison.Ordinal))
+                        {
+                            Trace("中继模式：忽略控制命令 " + cmdLine);
+                            continue;
+                        }
+
                         if (cmdLine.StartsWith("CAPTURE", StringComparison.Ordinal))
                         {
                             engine!.CaptureMode = cmdLine.EndsWith("1", StringComparison.Ordinal);
@@ -226,6 +245,14 @@ internal static class HookHost
                             engine!.Suspended = on;
                             CoreLog.Info($"钩子宿主：引擎{(on ? "挂起（录制中）" : "恢复")}（SUSPEND {(on ? 1 : 0)}）");
                         }
+                        else if (cmdLine.StartsWith(App.InjectionBridge.Prefix, StringComparison.Ordinal))
+                        {
+                            /* 主程序是管理员：它算出来的按键由我们代发。
+                             * 我们和被测程序同样在 medium IL，UIPI 不会拦。 */
+                            int applied = App.InjectionBridge.ApplyFromWire(cmdLine);
+                            if (applied == 0)
+                                CoreLog.Warn("钩子宿主：INJECT 命令没有可执行的输入（格式无法识别）");
+                        }
                     }
                 }
                 catch { Thread.Sleep(500); }
@@ -251,30 +278,50 @@ internal static class HookHost
         long lastReloadAt = Environment.TickCount64;
         const int ReloadMinIntervalMs = 700;
 
-        engine.Start();
+        Timer? holdTimer = null;
 
-        /* 宿主没有 WPF 消息循环，引擎里的 DispatcherTimer 不会跑 ——
-         * 必须自己驱动长按判定，否则「按住触发键不放」永远进不了层。 */
-        using var holdTimer = new Timer(_ =>
+        if (relayOnly)
         {
-            try { engine.TickHold(); } catch { }
-        }, null, 20, 20);
-
-        /* 只有钩子真的装上才发 READY。早先把 READY 固定发在主程序会据此
-         * 认定宿主已接管，HOOKFAIL 随后到达也来不及回退，热键会整体静默失效。 */
-        if (!engine.IsHookAlive)
-        {
-            SendLine("HOOKFAIL");
-            Trace("钩子未生效，已通知主程序并退出");
-            CoreLog.Warn("钩子宿主：SetWindowsHookEx 失败，主程序将改用自身钩子");
-            engine.Dispose();
-            queue.Dispose();
-            TryWriteReport(log);
-            return 3;
+            /* 中继模式：钩子**不在这里**（它在提升的主进程里，只有那个钩子
+             * 看得见提升窗口的输入），本进程只负责把主程序发来的注入事件
+             * 交给 SendInput —— 我们跑在普通权限，所以这些键对浏览器、
+             * 编辑器之类的普通程序完全合法。
+             *
+             * 握手先说清自己的身份：HELLO <是否提升> <pid>。主程序据此判断
+             * 中继是否真的落在了 medium IL，以及要不要把 Kill 的目标接上。 */
+            SendLine($"HELLO	{(ElevationHelper.IsElevated ? 1 : 0)}	{Environment.ProcessId}");
+            SendLine("READY");
+            Trace("中继模式：不装钩子，等待主程序的 INJECT 命令");
+            CoreLog.Info($"钩子宿主：中继模式已就绪（PID={Environment.ProcessId}，"
+                         + $"{(ElevationHelper.IsElevated ? "提升" : "普通权限")}）");
         }
+        else
+        {
+            engine.Start();
 
-        SendLine("READY");
-        Trace("引擎已启动，钩子正常");
+            /* 宿主没有 WPF 消息循环，引擎里的 DispatcherTimer 不会跑 ——
+             * 必须自己驱动长按判定，否则「按住触发键不放」永远进不了层。 */
+            holdTimer = new Timer(_ =>
+            {
+                try { engine.TickHold(); } catch { }
+            }, null, 20, 20);
+
+            /* 只有钩子真的装上才发 READY。早先把 READY 固定发在主程序会据此
+             * 认定宿主已接管，HOOKFAIL 随后到达也来不及回退，热键会整体静默失效。 */
+            if (!engine.IsHookAlive)
+            {
+                SendLine("HOOKFAIL");
+                Trace("钩子未生效，已通知主程序并退出");
+                CoreLog.Warn("钩子宿主：SetWindowsHookEx 失败，主程序将改用自身钩子");
+                engine.Dispose();
+                queue.Dispose();
+                TryWriteReport(log);
+                return 3;
+            }
+
+            SendLine("READY");
+            Trace("引擎已启动，钩子正常");
+        }
 
         // 2) 主循环：配置文件变了就重读
         while (true)
@@ -282,7 +329,9 @@ internal static class HookHost
             Thread.Sleep(100);
 
             var stamp = SafeStamp();
-            if (stamp != settingsStamp && stamp != default
+            /* 中继模式既不装钩子也不吞键，配置对它没有意义 —— 每 700ms 跑一次
+             * 完整解密+反序列化纯属白烧 IO，直接跳过。 */
+            if (!relayOnly && stamp != settingsStamp && stamp != default
                 && Environment.TickCount64 - lastReloadAt >= ReloadMinIntervalMs)
             {
                 settingsStamp = stamp;
@@ -302,11 +351,16 @@ internal static class HookHost
             }
 
             // 层变化：每秒比对一次，变了就回传（界面靠它显示"当前层"）
-            int layerNow = engine.ActiveLayer;
-            if (layerNow != lastLayer)
+            /* 中继模式必须跳过：它没有钩子，engine.ActiveLayer 恒为 0，
+             * 回传一条 LAYER 0 会被主程序当成"当前层=0"，把用户刚切的层顶掉。 */
+            if (!relayOnly)
             {
-                lastLayer = layerNow;
-                Enqueue($"LAYER\t{layerNow}", droppableWhenFull: true);
+                int layerNow = engine.ActiveLayer;
+                if (layerNow != lastLayer)
+                {
+                    lastLayer = layerNow;
+                    Enqueue($"LAYER\t{layerNow}", droppableWhenFull: true);
+                }
             }
 
             /* 主程序没了就自尽，避免留孤儿进程占着钩子。
@@ -325,6 +379,7 @@ internal static class HookHost
         }
 
         SendLine("BYE");
+        try { holdTimer?.Dispose(); } catch { }
         engine.Dispose();
         queue.Dispose();
         TryWriteReport(log);

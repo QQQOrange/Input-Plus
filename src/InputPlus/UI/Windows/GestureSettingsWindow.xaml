@@ -1,0 +1,44 @@
+<Window x:Class="InputPlus.UI.Windows.GestureSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+        xmlns:views="clr-namespace:InputPlus.UI.Views"
+        Title="{loc:T '手势设置'}"
+        Width="660" Height="780" MinWidth="520" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource Brush.Background}"
+        Foreground="{DynamicResource Brush.TextPrimary}"
+        FontFamily="{StaticResource Font.Ui}">
+
+    <!-- 手势页右上那颗齿轮开的就是这个窗：开关快捷键 + 手势外观 + 手势参数，三张卡。
+          以前这三块摊在页面顶部那张卡里，一展开就把手势列表挤没了；现在页面只留
+          「启用手势」和「录制新手势」，参数想调再进来。
+          没有确定/取消：每个控件改完就落盘，关掉窗口即可（和软件其它页面一致）。
+
+          版式照抄设置页：Brush.Background 底 + 白色 Card（圆角 14、Padding 18）+
+          卡内 Text.H2 标题 + Text.Tertiary 说明 + 行间 Divider。
+          用 DockPanel 而不是 Grid：底栏先占位，剩下的全给滚动区 —— 这样卡片再长，
+          「关闭」也钉在窗户底下，不会被挤出去。 -->
+    <DockPanel Margin="22,18,22,18">
+
+        <Grid x:Name="FooterRow" DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{loc:T '鼠标手势总开关的快捷键留空 = 不占用任何组合键。'}"
+                       Style="{StaticResource Text.Tertiary}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+            <Button Grid.Column="1" Content="{loc:T '关闭'}" Style="{StaticResource Button.Ghost}"
+                    Padding="16,7" IsCancel="True" Click="OnClose" />
+        </Grid>
+
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="{loc:T '手势设置'}" Style="{StaticResource Text.H2}" />
+            <TextBlock Text="{loc:T '画出来的轨迹长什么样、一笔多短才算数、动作发给谁 —— 都在这里。改完立刻生效，不用保存。'}"
+                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+        </StackPanel>
+
+        <views:GestureOptionsView x:Name="Options" Margin="0,14,0,0" />
+    </DockPanel>
+</Window>

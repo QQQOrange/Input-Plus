@@ -161,14 +161,16 @@ public static partial class SelfTest
         Check("默认配置无残留旧槽位绑定", stale.Count == 0,
             string.Join(", ", stale.Take(6)));
 
-        /* 3. 「窗口绑定」分类下是两个动作：
-         *      winBind        —— 切换（参数 = 程序路径）
-         *      bindWindowSlot —— 记住当前窗口到槽位 1~10（参数 = 槽位号）
-         *    顺序写死：界面下拉按注册顺序显示，顺序变了就是"用户看到的东西变了"。 */
+        /* 3. 「窗口绑定」分类下只剩一个动作：
+         *      winBind —— 切换（参数 = 程序路径）
+         *    bindWindowSlot（记住当前窗口到槽位 1~10）连同整套窗口绑定管理
+         *    已在 v1.3.1 删除，这里断言它不再回来。 */
         var inCat = catalog.Items.Where(i => i.Category == "窗口绑定").ToList();
-        CheckEqual("「窗口绑定」分类只有 2 个动作（winBind + bindWindowSlot）", inCat.Count, 2);
-        CheckEqual("「窗口绑定」分类的动作顺序是 winBind,bindWindowSlot",
-            string.Join(",", inCat.Select(i => i.Id)), "winBind,bindWindowSlot");
+        CheckEqual("「窗口绑定」分类只剩 winBind 一个动作", inCat.Count, 1);
+        CheckEqual("「窗口绑定」分类的动作顺序是 winBind",
+            string.Join(",", inCat.Select(i => i.Id)), "winBind");
+        Check("槽位动作 bindWindowSlot 已彻底删除",
+            catalog.Items.All(i => i.Id != "bindWindowSlot"));
 
         /* 4. 真实入口（ActivateExe）的安全边界 */
         var notes = new List<string>();
@@ -717,22 +719,19 @@ public static partial class SelfTest
     /// </summary>
     private static void TestElevation()
     {
-        // 这些参数必须"不弹 UAC"
-        string[] noElevate =
+        /* 诊断开关清单只能有一份：CliFlags.DiagnosticFlags。以前这里抄了一份手写数组，
+         * 新增 --qbar-query 时忘了同步，结果默认管理员模式下跑基准会先弹 UAC —— 正是
+         * 这条用例该拦住的东西。现在直接对着清单逐个验证白名单覆盖。 */
+        IReadOnlyList<string> noElevate = Core.ElevationHelper.NoElevateArgsForTest;
+        foreach (string a in Core.CliFlags.DiagnosticFlagsForTest)
         {
-            "--selftest", "--diag", "--render", "--qbar",
-            "--trace", "--svg2png", "--webdav-test", "--noelevate",
-        };
-        foreach (string a in noElevate)
-        {
-            // 用一个必定不是管理员的场景无法构造，这里只验证"判定逻辑"：
-            // 有这些参数时 TryRelaunchElevated 必须返回 false
-            bool wouldRelaunch = Core.ElevationHelper.IsElevated == false
-                                 && !a.StartsWith("--");
-            // 直接调一次：管理员下本来就 false，普通权限下因为参数在白名单里也是 false
+            Check($"诊断参数 {a} 被识别为诊断模式",
+                Core.CliFlags.IsDiagnostic(new[] { a }), "CliFlags 未把它当诊断开关");
+            Check($"诊断参数 {a} 在显式白名单里或按类别豁免",
+                noElevate.Contains(a, StringComparer.OrdinalIgnoreCase) || Core.CliFlags.IsDiagnostic(new[] { a }),
+                "白名单未覆盖");
             Check($"参数 {a} 不触发提权重启",
-                !Core.ElevationHelper.TryRelaunchElevated(new[] { a }),
-                wouldRelaunch.ToString());
+                !Core.ElevationHelper.TryRelaunchElevated(new[] { a }), "被判定为需要提权");
         }
 
         // PermissionSummary 必须有内容且能区分两种状态
@@ -910,8 +909,8 @@ public static partial class SelfTest
         };
         var cat = Core.Actions.ActionCatalog.Create(ctx);
         var winBindIds = cat.Items.Where(i => i.Category == "窗口绑定").Select(i => i.Id).ToList();
-        CheckEqual("「窗口绑定」分类的 id 串是 winBind,bindWindowSlot",
-            string.Join(",", winBindIds), "winBind,bindWindowSlot");
+        CheckEqual("「窗口绑定」分类的 id 串只剩 winBind",
+            string.Join(",", winBindIds), "winBind");
 
         // 旧槽位分类已彻底移除
         Check("没有「窗口绑定（旧槽位）」分类",

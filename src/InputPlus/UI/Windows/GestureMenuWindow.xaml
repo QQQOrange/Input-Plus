@@ -1,0 +1,99 @@
+<Window x:Class="InputPlus.UI.Windows.GestureMenuWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+        Title="{loc:T '手势菜单'}"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True"
+        SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="Manual" ShowActivated="True"
+        Foreground="{DynamicResource Brush.TextPrimary}"
+        FontFamily="{StaticResource Font.Ui}"
+        SnapsToDevicePixels="True" UseLayoutRounding="True"
+        Loaded="OnLoaded" PreviewKeyDown="OnPreviewKeyDown">
+    <!--
+        手势菜单的弹出菜单（v1.5.0）。
+
+        窗口自己完全透明，圆角和投影都画在里面这层 Border 上 ——
+        AllowsTransparency 的窗口只能靠"透明窗口 + 内部一块自绘卡片"做非矩形外观。
+        Margin="14" 是留给投影的：窗口边界会把圆角外的像素裁掉，投影必须留在窗口里面，
+        不流这圈边距的话阴影四周会被切齐，看着像一块硬边。
+    -->
+    <Window.Resources>
+        <!-- 一行条目：左边图标（没有图标就退回 1..9 的序号）+ 中间标题 + 右边预留位 -->
+        <DataTemplate x:Key="EntryTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Grid Grid.Column="0" Width="24" Margin="2,0,8,0">
+                    <TextBlock x:Name="GlyphText" Text="{Binding Glyph}"
+                               FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{DynamicResource Brush.TextSecondary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                    <TextBlock x:Name="IndexText" Text="{Binding Index}" FontSize="11"
+                               Foreground="{DynamicResource Brush.TextTertiary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+
+                <TextBlock Grid.Column="1" Text="{Binding Title}"
+                           Style="{StaticResource Text.Body}"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+
+                <!-- 第三列留给"右侧说明"：v1.5.0 不显示东西，列留着让标题的可用宽度稳定 -->
+                <TextBlock Grid.Column="2" Visibility="Collapsed" />
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasGlyph}" Value="True">
+                    <Setter TargetName="GlyphText" Property="Visibility" Value="Visible" />
+                    <Setter TargetName="IndexText" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Border Margin="14" MinWidth="200" MaxWidth="360"
+            Padding="6" CornerRadius="14"
+            Background="{DynamicResource Brush.Surface}"
+            BorderBrush="{DynamicResource Brush.Border}"
+            BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="18" ShadowDepth="0" Opacity="0.18" Color="Black" />
+        </Border.Effect>
+
+        <StackPanel>
+            <!-- 标题行：菜单名 + 说明小字（说明可为空） -->
+            <StackPanel Margin="10,5,10,0">
+                <TextBlock x:Name="MenuTitleText" Style="{StaticResource Text.Body}" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="MenuHintText" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0"
+                           TextWrapping="Wrap" Visibility="Collapsed" />
+            </StackPanel>
+
+            <Border Style="{StaticResource Divider}" Margin="10,8,10,4" />
+
+            <!--
+                行容器用 ListBox + 主题里的 RowItem：Padding 10,7 / 圆角 8 /
+                悬停 Brush.Hover / 选中 Brush.Selected 全都在 RowItem 里，
+                方向键上下移动也是它白送的。
+                鼠标"选中即执行"放在 PreviewMouseLeftButtonUp 里做：
+                直接用 SelectionChanged 的话，方向键挪一格就会把菜单关掉。
+            -->
+            <ListBox x:Name="ItemList"
+                     Background="Transparent" BorderThickness="0" Padding="0"
+                     Focusable="True" FocusVisualStyle="{x:Null}"
+                     ItemContainerStyle="{StaticResource RowItem}"
+                     ItemTemplate="{StaticResource EntryTemplate}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     PreviewMouseLeftButtonUp="OnEntryClick" />
+
+            <TextBlock x:Name="EmptyText" Text="{loc:T '这个菜单还没有条目'}"
+                       Style="{StaticResource Text.Tertiary}" Margin="12,6,12,10"
+                       Visibility="Collapsed" />
+        </StackPanel>
+    </Border>
+</Window>

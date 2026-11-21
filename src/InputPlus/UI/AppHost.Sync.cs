@@ -203,6 +203,8 @@ public sealed partial class AppHost
         try
         {
             _hookHostReady = false;
+            _hookHostRelay = false;
+            Core.App.InjectionBridge.Detach();
             Engine.HookDelegatedToHost = false;
             try { _hostPipeCts?.Cancel(); } catch { }
             try { _hookHost?.Kill(); } catch { }

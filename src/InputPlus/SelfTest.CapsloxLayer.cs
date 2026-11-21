@@ -16,7 +16,7 @@ namespace InputPlus;
 /// 两块都是"看得见的行为"，靠肉眼验证不可靠：
 ///   · 动画的跳过条件一旦写反，用户会看到后台窗口莫名其妙抽一下；
 ///   · 默认表的迁移一旦写错，用户自己改过的键会被悄悄吃掉。
-/// 所以这里把能纯函数化的部分（缓动、缩放矩形、槽位换算）全拆出来断言，
+/// 所以这里把能纯函数化的部分（缓动、缩放矩形、默认表升级）全拆出来断言，
 /// 真正碰窗口的部分只用**不该动**的句柄做负例。
 /// </summary>
 public static partial class SelfTest
@@ -35,7 +35,6 @@ public static partial class SelfTest
     {
         TestSummonAnimator();
         TestCapsloxSchemeDefaults();
-        TestWindowSlotBinding();
         TestCapsloxMigration();
         TestSummonSettings();
     }
@@ -135,8 +134,9 @@ public static partial class SelfTest
         CheckEqual("默认表：Caps+Alt+E = 上移 5", Find(s, "caps_lalt_e")?.Arg, "5");
         CheckEqual("默认表：Caps+Alt+D = 下移 5", Find(s, "caps_lalt_d")?.Arg, "5");
         CheckEqual("默认表：Caps+Alt+A = 词左 5", Find(s, "caps_lalt_a")?.Arg, "5");
-        CheckEqual("默认表：Caps+Alt+1 = 记住槽位 1", Find(s, "caps_lalt_1")?.Action, "bindWindowSlot");
-        CheckEqual("默认表：Caps+Alt+0 = 记住槽位 10", Find(s, "caps_lalt_0")?.Arg, "10");
+        // v1.3.1：窗口绑定管理（10 个槽位）整套删除，这两条默认值退回 doNothing
+        CheckEqual("默认表：Caps+Alt+1 = 什么都不做（槽位已删除）", Find(s, "caps_lalt_1")?.Action, "doNothing");
+        CheckEqual("默认表：Caps+Alt+0 = 什么都不做（槽位已删除）", Find(s, "caps_lalt_0")?.Action, "doNothing");
         CheckEqual("默认表：Caps+Shift+V = 纯文本粘贴 1", Find(s, "caps_shift_v")?.Action, "paste1");
         CheckEqual("默认表：Caps+Shift+Alt+V = 纯文本粘贴 2", Find(s, "caps_shift_lalt_v")?.Action, "paste2");
         CheckEqual("默认表：Caps+Shift+, = 打开设置", Find(s, "caps_shift_comma")?.Action, "openSettings");
@@ -152,57 +152,6 @@ public static partial class SelfTest
         CheckEqual("默认表：Caps+B 仍是下移 10", Find(s, "caps_b")?.Arg, "10");
 
         CheckEqual("默认表版本号已是最新", s.CapsloxDefaultsVersion, AppSettings.CapsloxDefaultsVersionCurrent);
-    }
-
-    // ---------------- ③ 槽位：写入、覆盖、非法输入、动作表 ----------------
-
-    private static void TestWindowSlotBinding()
-    {
-        var s = DefaultSettings.Create();
-        const string notepad = @"C:\Windows\notepad.exe";
-
-        Check("槽位：3 号写入成功", WindowSlotBinder.TryBind(s, 3, notepad, "notepad", out string message));
-        Check("槽位：提示里带程序名", message.Contains("notepad"), message);
-        CheckEqual("槽位：caps_3 变成 winBind", Find(s, "caps_3")?.Action, "winBind");
-        CheckEqual("槽位：caps_3 的参数是那个 exe", Find(s, "caps_3")?.Arg, notepad);
-        CheckEqual("槽位：槽位表里记下了 3 号", WindowSlotBinder.Find(s, 3)?.ExePath, notepad);
-
-        WindowSlotBinder.TryBind(s, 3, @"C:\Windows\explorer.exe", "explorer", out _);
-        CheckEqual("槽位：同一个槽位只留一条（覆盖而不是追加）", s.WindowSlots.Count(x => x.Slot == 3), 1);
-        CheckEqual("槽位：覆盖后 caps_3 指向新程序", Find(s, "caps_3")?.Arg, @"C:\Windows\explorer.exe");
-
-        Check("槽位：0 号非法（返回 false 而不是抛异常）", !WindowSlotBinder.TryBind(s, 0, notepad, "n", out _));
-        Check("槽位：11 号非法", !WindowSlotBinder.TryBind(s, 11, notepad, "n", out _));
-        Check("槽位：空路径非法", !WindowSlotBinder.TryBind(s, 2, "", "n", out _));
-        Check("槽位：null 路径非法", !WindowSlotBinder.TryBind(s, 2, null, "n", out _));
-
-        CheckEqual("槽位：参数解析 \"99\" 非法", WindowSlotBinder.ParseSlot("99"), 0);
-        CheckEqual("槽位：参数解析 \"10\" 合法", WindowSlotBinder.ParseSlot("10"), 10);
-        CheckEqual("槽位：参数解析空串非法", WindowSlotBinder.ParseSlot(""), 0);
-        CheckEqual("槽位：10 号对应 caps_0", WindowSlotBinder.ComboFor(10), "caps_0");
-        CheckEqual("槽位：1 号对应 caps_1", WindowSlotBinder.ComboFor(1), "caps_1");
-
-        // 动作表：只多一个带参数的槽位动作，不是 20 条固定槽位
-        var settings = DefaultSettings.Create();
-        var ctx = new ActionContext
-        {
-            Settings = () => settings,
-            Clipboard = new ClipboardService(),
-            Windows = new WindowActions(),
-            WindowBindings = new WindowBindingService(),
-            Mouse = new MouseService(),
-            Notify = _ => { },
-        };
-        var cat = ActionCatalog.Create(ctx);
-
-        Check("动作表：bindWindowSlot 已注册", cat.Items.Any(i => i.Id == "bindWindowSlot"));
-        CheckEqual("动作表：「窗口绑定」分类只有 2 个动作",
-            cat.Items.Count(i => i.Category == "窗口绑定"), 2);
-        Check("动作表：没有重新引入 winbind* 槽位动作",
-            !cat.Items.Any(i => !string.Equals(i.Id, "winBind", StringComparison.Ordinal)
-                                && i.Id.StartsWith("winBind", StringComparison.OrdinalIgnoreCase)));
-        Check("动作表：非法槽位号 Invoke 返回 false",
-            !cat.Invoke("bindWindowSlot", "0") && !cat.Invoke("bindWindowSlot", "abc"));
     }
 
     // ---------------- ④ 迁移：只改老默认值、幂等、不动经典方案 ----------------
@@ -226,7 +175,8 @@ public static partial class SelfTest
         CheckEqual("迁移：Caps+Enter 升级成行尾回车",
             InputPlus.Core.Actions.CustomKeySpec.FromArg(Find(s, "caps_enter")?.Arg).Key, "end enter");
         CheckEqual("迁移：Caps+N 升级成选整行", Find(s, "caps_n")?.Action, "selectCurrentLine");
-        CheckEqual("迁移：Caps+Alt+1 升级成槽位捕获", Find(s, "caps_lalt_1")?.Action, "bindWindowSlot");
+        // v1.3.1：槽位捕获（bindWindowSlot）已删除，升级不再往这里写动作
+        CheckEqual("迁移：Caps+Alt+1 不再被升级成槽位捕获", Find(s, "caps_lalt_1")?.Action, "doNothing");
         CheckEqual("迁移：版本号升到最新", s.CapsloxDefaultsVersion, AppSettings.CapsloxDefaultsVersionCurrent);
 
         string once = Snapshot(s);

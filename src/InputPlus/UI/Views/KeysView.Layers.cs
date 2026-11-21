@@ -587,7 +587,8 @@ public partial class KeysView : UserControl
         var mode = actionId switch
         {
             "winBind" => EditorMode.WinBind,
-            "webPage" or "openFolder" or "openFile" => EditorMode.WebPage,   // 直达链接的三种类型
+            // 直达链接：网址 / 文件。openFolder 是老 id，仍按同一面板显示，等迁移改写
+            "webPage" or "openFolder" or "openFile" => EditorMode.WebPage,
             "typeText" => EditorMode.TypeText,
             "customKey" => EditorMode.CustomKey,
             _ => EditorMode.Normal,

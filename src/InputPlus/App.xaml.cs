@@ -161,13 +161,15 @@ public partial class App : Application
                             .Skip(1).ToArray();
             var pipeArg = rest.Length > 0 ? rest[0] : "";
             int parentPid = rest.Length > 1 && int.TryParse(rest[1], out int pid) ? pid : 0;
+            /* --relay：主程序是管理员，钩子留在主进程，这里只当注入的执行端。 */
+            bool relayOnly = rest.Skip(2).Any(a => a.Equals("--relay", StringComparison.OrdinalIgnoreCase));
             if (string.IsNullOrWhiteSpace(pipeArg))
             {
                 CoreLog.Error("--hookhost 缺少管道名参数");
                 Environment.Exit(2);
                 return;
             }
-            try { Environment.Exit(Core.HookHost.Run(pipeArg, parentPid)); }
+            try { Environment.Exit(Core.HookHost.Run(pipeArg, parentPid, relayOnly)); }
             catch (Exception ex) { CoreLog.Error("钩子宿主异常退出", ex); Environment.Exit(3); }
             return;
         }
@@ -215,7 +217,54 @@ public partial class App : Application
             return;
         }
 
+        /* `--search`：命令行跑一次 Qbar 的本地文件搜索（走内置索引，不依赖任何外部软件）。 */
+        if (Core.CliFlags.Has(e.Args, "--search"))
+        {
+            Environment.Exit(Core.NativeSearchCli.Run(e.Args));
+            return;
+        }
+
         /* `--dump-macros`：只读打印宏步骤，排查"宏播放没效果"。 */
+        /* --everything-status：只看 Everything SDK 的可用性并实测一次查询，不建自建索引。 */
+        if (Core.CliFlags.Has(e.Args, "--everything-status"))
+        {
+            Environment.Exit(Core.QbarSearchCli.RunEverythingStatus(e.Args));
+            return;
+        }
+
+        /* --settings-dump：只读打印"程序实际读到了什么设置"（过滤器/命令/规则/加密状态）。 */
+        if (Core.CliFlags.Has(e.Args, "--settings-dump"))
+        {
+            Environment.Exit(Core.QbarSettingsDump.Run(e.Args));
+            return;
+        }
+
+        /* --qbar-command：只解析命令（不执行），排「敲了关键字没反应」。 */
+        if (Core.CliFlags.Has(e.Args, "--qbar-command"))
+        {
+            Environment.Exit(Core.QbarSearchCli.RunCommand(e.Args));
+            return;
+        }
+
+        /* --qbar-query / --qbar-bench：语义层的查询调试与基准（翻译各层 + 耗时 + 旧入口比对）。 */
+        if (Core.CliFlags.Has(e.Args, "--qbar-query"))
+        {
+            Environment.Exit(Core.QbarSearchCli.RunQuery(e.Args));
+            return;
+        }
+        if (Core.CliFlags.Has(e.Args, "--qbar-bench"))
+        {
+            Environment.Exit(Core.QbarSearchCli.RunBench(e.Args));
+            return;
+        }
+
+        /* --dict 词：只跑查词链路（词典接口 + 解析），不开 Qbar，便于排查"查不到词"。 */
+        if (Core.CliFlags.Has(e.Args, "--dict"))
+        {
+            Environment.Exit(Core.QbarSearchCli.RunDictionary(e.Args));
+            return;
+        }
+
         if (Core.CliFlags.Has(e.Args, "--dump-macros"))
         {
             Environment.Exit(Core.MacroDump.Run(e.Args));
@@ -270,6 +319,57 @@ public partial class App : Application
         if (Core.CliFlags.Has(e.Args, "--export-log"))
         {
             Environment.Exit(Core.LogExport.Run(e.Args));
+            return;
+        }
+
+        /* `--drag-e2e`：端到端验证「按住拖拽」—— 真装钩子、真发左右键、量窗口位移。
+         *
+         * 为什么要它：「按住 Enter 拖不动」这类问题读代码读不出来，钩子到底有没有
+         * 收到按键、按下之后有没有起手，只有真跑一遍才知道。默认只读配置副本，
+         * 带 --live 才用用户当前的设置（触发键、长按阈值、设备范围都照真实来）。 */
+        /* `--drag-target <句柄文件>`：给 --drag-e2e 当靶子的窗口进程。
+         *
+         * 见 Core/DragTarget.cs 里的说明：现成的候选程序（提权的 regedit、商店版记事本、
+         * 跑在 Windows Terminal 里的 cmd）在这台机器上都不适合当靶子，自己开一个最干净的窗口。 */
+        if (Core.CliFlags.Has(e.Args, "--drag-target"))
+        {
+            string? targetFile = null;
+            foreach (string arg in e.Args)
+            {
+                if (!arg.StartsWith("-", StringComparison.Ordinal))
+                {
+                    targetFile = arg;
+                }
+            }
+            Environment.Exit(Core.DragTarget.Run(targetFile));
+            return;
+        }
+
+        /* --holddrag-config：打印「按住拖拽」的运行期真实配置，并演算九宫格选边。
+         * 选边只看 CenterFraction / ResizeCenter 两个值，而它们在设置界面里没有暴露 ——
+         * 「右键缩放只能单轴」这类问题必须先把用户手上那组值打出来才谈得上修。 */
+        if (Core.CliFlags.Has(e.Args, "--holddrag-config"))
+        {
+            Environment.Exit(Core.HoldDrag.HoldDragConfigCli.Run(e.Args));
+            return;
+        }
+
+        if (Core.CliFlags.Has(e.Args, "--drag-e2e"))
+        {
+            string? dragOut = null;
+            bool dragLive = false;
+            foreach (string arg in e.Args)
+            {
+                if (arg.Equals("--live", StringComparison.OrdinalIgnoreCase))
+                {
+                    dragLive = true;
+                }
+                else if (!arg.StartsWith("-", StringComparison.Ordinal))
+                {
+                    dragOut = arg;
+                }
+            }
+            Environment.Exit(Core.DragE2E.Run(dragOut, dragLive));
             return;
         }
 
@@ -690,6 +790,12 @@ public partial class App : Application
         Host = new AppHost(settings, Dispatcher);
         Host.Start();
 
+        /* 文件搜索的索引在这里就叫起来：Start 幂等，真正的扫盘跑在 BelowNormal
+         * 后台线程上，不挡启动那几百毫秒。Qbar 第一次搜文件时也会调一次。
+         * 失败（数据目录不可写之类）只记一条警告 —— 文件搜索缺席，别的功能照常。 */
+        try { Core.Qbar.NativeSearchIndex.Start(); }
+        catch (Exception ex) { CoreLog.Warn("文件索引启动失败：" + ex.Message); }
+
         // 离屏渲染（文档 / 回归用），渲染完直接退出
 #if NO_DIAGNOSTICS
         int renderIndex = -1;
@@ -906,6 +1012,10 @@ public partial class App : Application
         /* 退出前补发所有抬起：绝不给系统留下"按着的键/鼠标键"。
          * 放在 Dispose 之前 —— Dispose 会把钩子和引擎一起拆掉。 */
         try { InputPlus.Core.Input.InputSafety.ReleaseAll(); } catch { }
+
+        /* 索引线程是后台线程，让它自己收尾更干净：把已经扫到的部分落盘，
+         * 下次启动就不用从头来。给不了时间也无所谓 —— 下次自己重建。 */
+        try { Core.Qbar.NativeSearchIndex.Stop(); } catch { }
 
         try { Host?.Dispose(); } catch { }   /* 预期内：清理动作，失败无副作用 */
 

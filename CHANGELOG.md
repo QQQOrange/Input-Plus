@@ -1,3 +1,339 @@
+## v1.3 — 版本号重新归一到 1.3；Qbar 文件搜索整体升级（语义层 + Everything 内核）
+
+> 版本号从 1.7.x 统一改成 **1.3**（重新起号，1.7.7 之后不再续号）。功能上是 1.7.7 的延续，没有删任何能力。
+
+- **文件搜索内核换成 Everything**：客户端与 SDK 都打进本程序、按便携模式释放到数据目录，不写注册表、不碰用户自己装的那份；索引和检索全交给它，本地索引快照只留作自检与基准对照。
+- **Listary 式语法**：`doc:` `pic:` `video:` `audio:` `file:` `folder:` 过滤器关键字（chip 显示、Esc 清除）、`ext:pdf;docx`、`date:week`、`size:10mb..1gb`、`"带 空格"`、`-ext:tmp` 否定、`wfn:` `regex:` 透传；输入里的 `(` `|` 等特殊字符不再把查询搞崩。
+- **过滤器改名不再破坏旧写法**：六个内置过滤器保留出厂关键字作别名（真实配置里被改成 wd/tp/sp/yp/wj/wjj 也照样认 `doc:`），停用开关真的会停用。
+- **优先级与本地重排**：目录/文件名正则规则给出 High/Normal/Low/Ignored/DoNotIndex，剔除有原因提示；2000 条候选窗口上本地打分重排。
+- **命令系统**：`keyword 参数` 拉起外部程序（占位符、提权、静默、工作目录），内置 cmd / powershell / 新建 / 复制路径 / 查词（ol，装了欧路直连、没装开网页词典）。
+- **分面、空查询默认列表、历史**：类型/时间桶计数（标注本页统计）、最近/收藏/常用命令、按月 JSONL 历史。
+- **拼音与子序列**：轻量 CJK 名字索引（全拼 + 首字母），窗口内模糊兜底；构建进度可见、可取消。
+- **查询调试面板**：Ctrl+D 看「用户输入 → Everything 查询串 → flags/sort/max → 命中数 → 各阶段耗时」。
+- **两个现场诊断开关**：`--settings-dump`、`--qbar-command "ol hello"`。
+- **自检 6465 项，0 失败**；`--qbar-bench` 20 条端到端 p95 26–33ms、翻译 15–20µs/次。
+
+## v1.7.7 — 改了过滤器关键字，doc: 也照样能用；停用开关真的会停用
+
+- **改名不再破坏旧关键字**：以前把「文档」的关键字从 doc 改成 wd，`doc:` 就永久查不到东西（真实配置里正是这么用的：wd / tp / sp / yp / wj / wjj，于是 `doc:` `file:` `folder:` 全都降级成搜字面量、命中 0）。现在六个内置过滤器各自保留出厂关键字作为别名，`doc:` 与 `wd:` 指向同一条，chip 上仍显示用户改过的名字。别名只挂在内置项上、不写进设置，所以设置文件不会多出「看不见的过滤器」。
+- **停用开关现在真的生效**：以前合并内置项时把 `Enabled` 写死成 true，点一下开关刷新又弹回来，内置项还会继续参与查询。现在停用项留在列表里、`Enabled` 听用户的；停用后 `doc:` 整条忽略（既不展开扩展名，也不降级成去搜 `doc:` 这个字面量）。
+- **两个现场诊断开关**：`--settings-dump` 打印程序**实际读到**的设置（加密/解锁状态、用户层过滤器、合并后的过滤器、命令、优先级规则、选项）；`--qbar-command "ol hello"` 只解析命令不执行（命中哪条、模板原文、占位符展开结果、程序是否存在、裸程序名能否被 shell 按 PATH 解析）。排「设置页看着配好了、搜索却不认」不用再猜。
+- **自检 6465 项，0 失败**（本轮新增/改写 5 条过滤器断言：旧关键字别名仍指向同一条、改名后 `doc:` 仍展开 49 个扩展名、停用后仍列出且 Enabled=false、停用后整条忽略且不降级）。
+
+## v1.7.6 — 欧路查词能绑键了、选词取词只有一条路
+
+- **查词进了两个动作分类**：「直接搜索」多出 `词：欧路词典`（取当前选中的词，直接送词典：装了欧路就 `eudic.exe -w 词`，没装就在浏览器打开网页词典并明确说一句）；「Qbar 搜索」多出 `Qbar：欧路词典`（取词后打开 Qbar 面板并挂好「查词 ×」chip，接着打别的词、换过滤器都行）。两条都不用先记住 `ol`。
+- **查词只剩一个出口**：以前「内置找欧路」「用户指定程序」「开网页」散在三处，行为各不相同（参数模板被绕过、提示文案各写一份）。现在统一到 `DictionaryLauncher`：用户在命令卡里改的程序 / 参数 / 工作目录优先，参数留空才补出厂 `-w "{query}"`，定位不到程序才回落网页词典。自定义成别的词典（比如 `Path=D:\dict\user.exe`、`Parameter=--word {query}`）也照走。
+- **取词逻辑统一**：搜文件与查词共用同一段取词（三层失败提示按权限分级、超长按代理对安全截断、取不到就说「先选中它再按这个键」），不再各写一套。
+- **自检 6449 项，0 失败**：新增 13 条（两个动作存在且分类正确、词被 trim 后交给面板、没装欧路走网页且地址编码中文、装了欧路走命令且参数补出厂模板、用户指定程序优先、空词不启动进程）。
+
+## v1.7.5 — 右键缩放能同时变宽变高、文件搜索过滤器可以直接绑键
+
+- **修「右键缩放有时候只能上下、有时候只能左右」**：根因不是选边算错，而是九宫格里「边带」各占 38%、中间带只剩 24% —— 抓点落进「一条边 + 一轴中间带」的十字区（约占可抓面积 42%）时，那一轴本来就被锁死。边带是看不见的，用户没法主动避开，于是体感是「有时候」。现在按手势纠正：只对「一轴在中间带」发力，位移超过阈值（默认 60 物理像素）就把那一轴收养成对应方向，此后两轴一起跟手。可在 ini 里用 `resizeBothAxes=false` 退回纯九宫格行为。
+- **新增诊断命令 `--holddrag-config`**：打印现场的按住拖拽配置（触发键、长按阈值、设备限定、左右中键动作、CenterFraction / ResizeCenter…），并对九宫格 9 个抓点逐个演算「两轴同变 / 单轴 / 换成移动」，排障不用再靠猜。
+- **文件搜索过滤器可以绑键了**：「Qbar 搜索」分类多出 `qfilter:<过滤器>`（按一下就打开面板并挂好「文档 ×」chip，等于打 `wd` 再按空格）；「直接搜索」分类多出 `fsearch:<过滤器>`（取当前选中的文字，按这个类型打开面板去搜）。只注册开着的过滤器；过滤器被删/改名后会明确说「找不到这个过滤器」，不会静默无反应。
+- **自检 6435 项，0 失败**：新增 24 条（按住拖拽 6 条几何 + 1 个 E2E 场景；过滤器动作 6 组断言）。
+
+## v1.7.4 — 文件搜索窗口有圆角并跟随系统深浅色、分面栏铺满、过滤器改名不再「多出一条」、Qbar 不再记忆上次的过滤器
+
+- **文件搜索窗口有圆角了**：以前 WindowChrome 的圆角写死 0，窗口是直角，跟系统里其它窗口对不上。现在交给 DWM 画（DWMWCP_ROUND），并保留承载圆角的那圈 1px 边框；验证靠屏幕拷贝，因为圆角属于合成器那一层。
+- **跟随系统白夜**：窗口接上 ThemeManager，切深浅色时标题栏、边框、正文一起变；深色下不再顶着一根白条。
+- **筛选 / 最近修改铺满高度**：两栏都改成均分（UniformGrid），小窗 860×520 也能看全 7 个类型桶 + 6 个时间桶，大窗也不会在底部留一大片空白。
+- **修「把文档关键字改成 WD，列表里还是 doc、还多出一条」**：过滤器合并改成先认 Id 再认关键字。改名后仍是一条、旧关键字失效、`WD + 空格` 也能变成 chip 并把 WD 从输入框切掉（以前 WD 会留在框里）。关键字撞车在设置页直接拒绝保存。
+- **Qbar 不再记忆上一次的过滤器**：关掉面板再打开一定回到空查询（以前会带着上次的「文档搜索」）。
+- **内置命令（含 ol）的程序/参数/工作目录全部可编辑**：ol 点开就能看到 `-w "{query}"`；用户自建的 ol 参数为空也会补上默认模板。
+- **索引卡按钮随状态变化**：Everything 已经运行时显示禁用的「Everything 已启动」，不再让你点「启动 Everything」。
+- **自检 6401 项，0 失败**：新增 4 条断言（改名后仍 6 条、旧关键字失效、`WD` 触发同一条过滤器、用户自建 ol 补默认参数）。
+
+## v1.7.3 — 查词命令带上 -w 参数（以前参数是空的，欧路只会被打开不会查词）
+
+- **ol 的出厂参数补成 `-w "{query}"`**：欧路词典不带 `-w` 只把自己打开、不查词，而以前内置 ol 的参数框是空的、`-w` 写死在代码里 —— 设置里看着像没配，用户也没法改成别的写法。现在参数就在命令卡里，可见可改。
+- **旧的空参数会自动补回来**：1.7.2 及更早保存的配置里 ol 的参数是空字符串，加载时补成默认模板，升级上来点回车照样带词查。
+- **两条路走同一套执行**：以前「内置找欧路」绕开参数模板直接拼命令行，「用户指定程序」走模板，行为不一致。现在都走 `QbarCommandStore.Execute`，参数模板、工作目录、提权、静默的效果一致；参数留空才兜底默认值。
+- **自检 6397 项，0 失败**：新增 3 条断言（出厂参数等于 `-w "{query}"`、模板展开成 `-w "hello"`、老配置空参数被补成默认）。
+
+## v1.7.2 — 过滤器打个空格就生效（不再记冒号）、文件搜索窗口两栏各占一半、列头跟全局 UI 统一
+
+- **过滤器改成「关键字 + 空格」**：以前必须写 `doc:`，现在打个 `doc` 按空格就立刻变成输入框左侧的「文档 ×」chip，后面接着打的词就是"在这类文件里搜"。老写法 `doc:` 照样认，两条路解析到同一个过滤器；顺序上引擎关键字（cmd / psh / ol…）仍然先赢，同名时行为与以前一致。
+- **文件搜索窗口左栏两半等高**：「筛选」与「最近修改」各占一半，1180×600 的小窗里 7 个类型桶 + 6 个时间桶全部可见，不再出现"上面一大片空白、时间桶贴底"。
+- **列头跟全局 UI 统一**：系统灰渐变表头换成透明底 + 一条下边框 + 11.5px 三级色 + 左对齐，数字列（大小）右对齐；拖动列宽的小把手平时透明、指上去才显一条淡线。列宽重新分配（名称 280 / 路径 480 / 修改日期 118 / 大小 84），长路径只省略路径本身，不会把滚动条挤掉。
+- **内置 Everything SDK/客户端复核**：`--everything-status` 显示「DLL 来源: 内置」，DLL 与客户端都在数据目录 `everything` 下释放，换一个数据目录也会先释放再加载 —— 用户机器不需要另装 Everything。
+- **自检 6394 项，0 失败**：新增 6 条过滤器触发断言（doc / doc: / DOC 命中，带词与普通词不抢空格）。
+
+## v1.7.1 — 展开窗口用资源管理器真图标、分面栏压到小窗也全见、欧路查词真的能用（定位改走开始菜单/注册表）、内置命令全字段可编辑
+
+- **展开窗口的图标换成资源管理器的真图标**：以前名称列只画一个字形，docx / pdf / exe 长一个样。现在 18×18 图标位绑定 ShellIcons 解析结果，Segoe 字形留作兜底；只为滚动到可见的行取图（缓存命中同步设，否则后台解析后回调），2000 行不会卡。
+- **分面栏压行高，小窗也能看全**：新增紧凑行样式（分面行 46→30px、结果行 42→30px），同时去掉「类型/时间」两块的高度上限。1180×600 的小窗里 7 个类型桶 + 6 个时间桶全部可见，「最近 30 天 / 365 天 / 更早」不再被裁掉。
+- **欧路查词真的能用**：根因是**找不到程序**——欧路装在 D:\software\eudic 这类非默认目录时，旧实现只扫 PATH 与 Program Files，直接回落到网页词典，看起来像"没实现"。现在依次查 PATH → App Paths 注册表（HKLM/HKCU × 32/64 位视图）→ 开始菜单快捷方式（自己解析 .lnk 目标）→ 常见目录；命令编辑器会直接写"已检测到欧路词典：<路径>"。`eudic.exe -w hello` 实测拉起欧路并显示 hello。
+- **ol hello 不打空格也能查**：以前必须先打空格把 ol 变成标签。现在输入框里直接写 `ol 词` 也会走查词（按命令关键字前缀匹配，要求关键字后面是空白或到头，避免 old / olive 误判）。
+- **删掉外部 Everything 客户端**：内置 Everything 已接管检索，之前为了验证在 D:\tmp 起的便携副本连同目录一起删除，索引库（约 64 MB）迁到数据目录下由内置客户端使用；`--everything-status` 显示 1.4.1 / 索引已加载 / 管理员 / ext:exe 5 条（总 11222）。
+- **内置命令全字段可编辑**：程序、参数、工作目录、选择程序一律可填可改（以前内部动作被整片禁用）。内部动作留空走软件自己的实现，填了程序就改成启动它（参数、工作目录、提权、静默照常生效）。命令卡补了「工作目录」的说明：程序启动时所在的文件夹，写 {current_folder} 就是当前选中的文件夹，留空用系统默认。
+- **排障入口**：`--dict 词` 现在先打印欧路词典的四层定位表（PATH / 注册表 / 开始菜单 / 常见目录）再打释义，"查词跑到网页"这类问题一眼能定位。
+- **自检 6388 项，0 失败**：新增 4 条词典定位断言（快捷方式与文件名识别、非 exe 不算、命中路径必须存在、解析不存在的 .lnk 返回 null 而不抛）。
+
+## v1.7.0 — 搜索窗口分两趟取（先按文件名出结果、几乎没结果时再补扫路径）、命中高亮直接用 Everything 的标记、wfn:/regex:/content: 各有明确去向
+
+- **快了，但快在「绝大多数查询」上**：Everything 的 MatchPath（词也能命中路径）开着会为每个候选多扫一遍路径 —— 本机 115 万条索引实测端到端 p95 从 34.7ms 涨到 56–63ms，超了 50ms 预算。现在分两趟：先只按文件名取窗口（6–21ms），候选少于 8 条时才补一趟路径匹配并按路径去重合并（多花约 25–30ms，只发生在「几乎没搜到」的时候，那正是用户想按文件夹名找一个具体文件的时候）。调试面板的后端一行会注明「（含路径补扫）」。
+- **命中高亮改用 Everything 自己的标记**：请求 Everything_GetResultHighlightedFileNameW，解析 U+0001/U+0002 包住的区间，界面按区间加粗下划线。这样高亮的字符与 Everything 的匹配规则永远一致（自己算子串会出现「有结果但没高亮」）。本地索引兜底时才用自带的子串匹配。
+- **wfn:*.pdf 现在真的有结果**：此前为了「glob 语义不完全等价」没把它下发给 Everything，结果是查询里只剩 wfn: 时 Everything 收到空查询、窗口 0 条候选，本地复核再严也筛不出来。现在下发，并在复核阶段用同一套 glob 再校验一次。
+- **正则查询按两种情形分流**：整条查询就是一条正则时，原样下发给 Everything 并只对这一条开全局正则开关（regex:^rep.*\.docx$ 实测命中 report-2026.docx）；正则混着普通词或 ext: 时改由本地快照执行 —— 全局正则开关会把普通词也当正则解释，混着算结果必错，界面会如实写「本地索引」并说明原因。
+- **content: 不再假装搜了内容**：两条后端都没有内容索引，原来这个词被接受但什么都不筛（用户看到全盘结果）。现在降级成普通文件名检索，调试面板标黄写「content: 无内容索引，已按文件名检索」。
+- **自检 6382 项，0 失败**：新增 wfn 下发、纯正则原样下发无引号、混合条件返回 false 且给原因、content 降级、高亮解析 4 条、优先级作用域 5 条、标题切段 5 条（含负数起点/重叠区间的边界）。
+## v1.6.1 — 展开窗口能按列排序、表头靠左；查词结果的徽标不再写成「计算」；修 Everything 关掉时仍列出本地命中
+
+- **展开窗口可按列排序（新）**：点「名称 / 路径 / 修改日期 / 大小」任一表头排序，再点切正序/降序，第三次回到相关度序。日期和大小按原始值排（不是按显示文本 —— 否则 "2026-1-9" 会排在 "2026-07-08" 后面、10 MB 会排在 9 KB 前面），同值时保持原来的相关度顺序，不会每次筛选都跳一遍。
+- **展开窗口表头左对齐**：表头原来居中、内容左对齐，扫读一整列时眼睛要来回找；统一靠左并把光标改成手型，让人看得出来能点。
+- **查词结果的行徽标**：之前借用了「算式」的归类，于是每行释义右边都写着「计算」；新增词典归类，徽标显示「复制」，回车复制词条/释义，提示语改成「Enter 复制结果」。
+- **修：Everything 没运行时仍列出本地索引的命中**：后端判定为不可用时，增强路径（拼音/子序列）还在读本地快照，界面一边说"不可用"一边给出 24 条结果，且这些条目没有大小/日期（分面全落到「更早」）。现在后端不可用就不跑增强，列表只显示一条「Everything 没在运行，文件搜索暂时用不了」，点它直接拉起 Everything。
+- **自检 6365 项，0 失败**：新增排序 6 条（大小/日期按值、同值稳定、rank 不改动、目录 -1 排在文件之后）。
+
+## v1.6.0 — 「文件搜索」变成能用的管理面板（过滤器/优先级表格 + 逐条开关）、Qbar 结果可展开成 Listary 那张表、内置 `ol` 查词开箱可用
+
+- **「文件搜索」标签重排**：卡片顺序改成 索引与后端 / 过滤器 / 优先级 / 命令 / 语法与调试；切过去时面板跨两列铺满、右栏折叠，不再和 360px 的编辑栏抢地方。
+- **过滤器改成表格**：一行是一个过滤器 —— 名称+图标 / 关键字 chip / 扩展名 / 搜索范围 / 开关。内置 6 类（doc 49 项、pic、video、audio、file、folder）分在「文件类型」组，不可删但可覆盖；自定义在下面一组，可增删。`file:` 没配扩展名时显示「所有文件」或「目录」，不再是一个看着像配错的「（未设置）」。
+- **优先级改成四组表格**：高优先 / 正常 / 低优先 / 从搜索结果中排除。内置 16 条照 Listary 默认表逐条列出（3 条正常、8 条系统目录降权、5 条文件名正则），每条一个开关，关掉即从规则集移除；「低优先」组首行是「默认不展示系统及隐藏文件的搜索结果」（默认关，保持与旧版一致）。高优先为空时给提示行而不是一片空白。
+- **命令管理卡**：内置命令与自定义命令分两组，行内显示关键字 + 标题 + 程序/参数，下面直接编辑关键字、程序、参数模板、工作目录、管理员、静默。
+- **内置 `ol` 查词**：Qbar 输入 `ol 词` 直接查。装了欧路词典就 `eudic.exe -w "词"`（先扫 PATH，再看 Program Files / LocalAppData 四个默认位置），没装就打开 `dict.eudic.net` 对应词条并提示一句。以前这条命令要靠用户自己配 Path，配不到就"找不到程序"。
+- **Qbar 结果可展开**（右上角按钮）：1120×720 的窗口，左栏是类型 7 桶 + 时间 6 桶的分面计数，右栏是 名称 / 路径 / 修改日期 / 大小 四列表格，虚拟化滚动，双击或 Enter 打开、Esc 清筛选。
+- **修复：展开窗口整列显示类型名**：行模型是 private 嵌套类且用字段，WPF 绑定静默失败退回 `ToString()`。改成 public 类 + 自动属性。
+- **修复：展开窗口有表头没有列**：ListBox 的 `RowItem` 模板只有裸 `ContentPresenter`，套到 ListView 上会绕过 GridView。新增 `RowItem.Grid`（`GridViewRowPresenter` + hover/选中底色）。
+- **修复：大小列空、时间分面全落「更早」**：普通关键词走的那条扫描路径自己拼了 `FileSearchHit`，把大小/日期丢成默认值。改走 `EmitFileHit`，与过滤器路径取同一份快照元数据。
+- **自检 6334 项，0 失败**；渲染回归新增命令卡与展开窗口两张图（以前这两块没有任何图）。
+
+## v1.5.0 — Qbar 命令能当标签用（ol + 空格 直接查词）、自定义命令进「直接搜索」可绑键、设置新增「文件搜」标签集中管理过滤器与优先级、按住拖拽可吞触发键、四角缩放恢复两轴同时调整
+
+- **命令标签（新）**：Qbar 里输入自定义命令的关键字再按空格，关键字变成「欧路词典查词」这样的标签，后面打的字全部当 `{query}`；回车执行走 `QbarCommandStore`，`Parameter` 模板、`RunAsAdmin`、`Silent`、工作目录都照旧生效。标签解析顺序是 网址 → 程序 → 搜索 → 命令，`bd`/`gh` 这些老关键字不受影响。
+- **「直接搜索」里能用自定义命令（新）**：每条配了程序的 Qbar 命令都会在「直接搜索」分类里生成一项，绑一个键就能"选中文字 → 按键 → 交给这条命令"。取词沿用三级兜底（UIA → 选区监听器 → 请按 Ctrl+C），超长选区按 2000 字符截断，命令被删掉时提示「找不到这条命令」而不是静默失败；`newFile` 这类没有程序的内部动作不会出现在下拉里。
+- **设置新增「文件搜」标签**：「搜索指令 / 文件搜 / 启动程序 / 常用网址 / 固定项」五栏，索引与后端、过滤器（内置 5 类不可删可覆盖 + 自定义增删）、优先级（目录 + 文件名正则 + 档位）、语法与调试集中在这一页；切过去时跨两列铺满，不再挤在 360px 右栏里。优先级列表空的时候有说明文案，不再是一片空白。
+- **按住拖拽：吞掉触发键（新开关，默认关）**：把 Enter 这类键设成触发键后，原来按下会同时送一份给前台窗口；打开「吞掉触发键」后这一下被软件吃掉，只有"按下没拖动"的轻点才会补发。设置 → 按住拖拽可开关。
+- **按住拖拽：四角缩放恢复两轴同时调整（修 bug）**：九宫格选边原来切两刀，第二刀把两个轴都归中，再按对角线只挑一个轴，于是右键拖四角永远只能改宽或只能改高。改成只切一刀：两轴都落在边带＝四角，宽高同时变；落在一条边＝单向；落在中心带才交给「缩放中心」的扩展策略。
+- **自检 6327 项，0 失败**：新增命令标签 6 条、直接搜索命令 9 条、四角选边 5 条；「直接搜索动作数 = 全部引擎数」改成只数 `search:` 前缀，自定义命令不再把它顶红。
+- **本地化**：en-US 补 99 条（文件搜标签 + 命令相关文案），并把两条英文示例里的中文路径/词例换成英文，英文包不再残留汉字。
+
+## v1.4.0 — Qbar 文件搜索升级为「语义层 + Everything 后端」：过滤器语法、优先级规则、命令系统、分面/历史、拼音与模糊、默认管理员启动
+
+- **查询语义层（新）**：`doc:` `pic:` `video:` `audio:` `file:` `folder:` 六个内置过滤器（可自定义），`ext:pdf;docx` / `size:>1gb` / `size:10mb..1gb` / `date:week` / `date:2026-07` / `"带空格 短语"` / `-ext:tmp` 全部翻译成 Everything 语法；输入里的 `(` `|` `"` 等特殊字符当普通词时自动转义加引号，不再"输入一个括号就查不到东西"。
+- **Everything 后端（新，可选）**：动态加载 `Everything64.dll`（不捆绑、没装就安静降级），取候选窗口 2000 条后逐条复核 + 本地打分重排；设置 → 搜索语义层可关掉「优先用 Everything 取候选」回落到本地索引快照。断网/未装/索引未加载都有明确文案，不弹错误风暴。
+- **优先级规则（新）**：`High / Normal / Low / Ignored / DoNotIndex`，规则 = 目录子树 + 文件名正则；内置默认包把 `%SystemRoot%`、`AppData`、`Windows.old`、`~$` 等降权；Ignored/DoNotIndex 不进结果但底部明确提示「有 N 条被规则隐藏，查看原因」，规则改动即时生效（不重建索引）。
+- **命令系统（新）**：`keyword 参数` 拉起外部程序，支持 `{query}` `{current_folder}` `{action_path}` `{action_path:parent}`；`runas` / `silent` / 工作目录都可用；内置打开 cmd、管理员 powershell、新建文件/文件夹、复制路径、上一级、刷新索引状态。命令行与普通搜索结果并列显示，互不吃掉。
+- **查询调试面板（新）**：Ctrl+D 打开，逐层显示「用户输入 → 归一化 → token → 最终 Everything 查询串 → flags/sort/max → 命中数 → 翻译/检索/重排耗时」，排障不用再靠猜。
+- **分面 / 空面板 / 历史（新）**：类型与时间桶计数（明确标注"本页统计"）；空查询列最近打开 + 常用命令，不再列出全盘文件；选择行为写 JSONL（按月），供建议排序使用，不参与文件结果重排。
+- **拼音与模糊（新）**：轻量 CJK 名字索引（自带 TinyPinyin，不联网），`yh` → 银行、`yinhang` → 银行；`rprt` 这类缩写走窗口内子序列；索引后台构建、可取消，实测 10480 条 / 61 ms / 2.89 MB。
+- **默认以管理员模式启动**：键盘钩子要收提权窗口的按键就必须同完整性级别；设置里可关，`--noelevate` 与 `CLP_SKIP_ELEVATE=1` 可临时逃逸，所有诊断命令一律不触发提权。
+- **新增诊断命令**：`--everything-status`（DLL/版本/索引/管理员/试查耗时）、`--qbar-query <文本>`、`--qbar-bench`（翻译开销、20 条端到端 p95、2000 候选重排、CJK 索引构建、与旧入口的命中数比对）。
+- **实测**：翻译 3.0 us/次；端到端 p95 54.5 ms（Everything 后端，115 万条索引）/ 39.2 ms（本地后端）；2000 候选重排中位 4.23 ms；自检 6286 项 / 0 失败。详见 `docs/qbar/TESTING.md`。
+## v1.3.1 — 按住拖拽在 kelivo 这类"慢窗口"上不再卡成幻灯（写窗口搬出钩子回调）、手势轨迹自动掰直并整理成标准图形、认出后先换图再执行、Qbar 空面板先给最近打开、窗口绑定管理整套删除
+
+- **按住拖拽：慢窗口把低级钩子堵死，光标一卡一卡、窗口闪、只有 Esc 能停（真根因）**：几何计算和 `MoveWindow` 以前全在低级鼠标钩子回调里同步跑。`MoveWindow` 对目标进程是**同步 SendMessage**（`WM_WINDOWPOSCHANGING` / `WM_SIZE`），kelivo 这类 Flutter/Electron 自绘窗口一次 `WM_SIZE` 要一百多毫秒 —— 钩子被堵在那儿，系统就把鼠标事件一格一格地放，用户看到的是"鼠标以很慢的速度移 + 窗口一直在闪"；堵到低级钩子超时（默认 300ms）系统直接把钩子摘掉，松开事件再也收不到，`_action` 一直非 None，于是"只有按 Esc 才停"。修法：新增专用写入线程（`WriteLoop`/`TickOnce`，`WriteIntervalMs=16`、`WriteIntervalMaxMs=200`），钩子回调只记 `_pendingPoint` + `RequestFrame()` 立刻返回；写窗口改 `SetWindowPos(..., SWP_NOZORDER|SWP_NOACTIVATE|SWP_ASYNCWINDOWPOS)`（失败才退回 `MoveWindow`），并对目标做背压（上一帧还没吃下就不叠请求）；`WM_EXITSIZEMOVE` 由 `PostExitSizeMove` 丢线程池（以前松手那一下同步等它，实测被堵 215ms）；松手时补最后一帧，窗口不会停在半路。
+- **同一个根因的实测对照（150ms `WM_SIZE` 的窗口，25 次注入移动）**：旧 1.3.0 —— 每次移动平均 **38.5ms**、最差 **157.6ms**，右键松手那一下 **215ms**；新版 —— 平均 **1.3ms**、最差 **4.5ms**、松手 **1ms**，窗口尺寸照样跟到底（`deltaX=150`）。kelivo 真窗口实测：右键拖 120px，窗口正好长 120px（`deltaX=120`），位移与松手都干净。
+- **顺手补的一处回归**：写入线程取代原来的 100ms 补帧定时器之后，"只挪光标、不发事件"的拖动（脚本 `SetCursorPos`、远程桌面一类）就完全不动了 —— 低级钩子只看得到真实鼠标事件。现在写入线程按 `IdlePollMs=50` 空闲轮询光标（等价 AltDrag `hooks.c:1999-2008` 的 `MOVE_TIMER`），并按 `_writeIntervalMs` 抽帧；`--drag-e2e` 的位移从 (0,0) 恢复到与 1.3.0 一致的 (65,48)。
+- **手势画出来的形状自动掰直（竖线拉直、横线拉平、C/Z/L 更像字母）**：新增 `Core/Gestures/StrokeCanonicalizer.cs` —— 按转角切段 → 合并共线段 → 主方向吸附（轴 ±22°、对角 ±12°）→ 相邻段正交化 → 按弧长 4px 重采样 → 从同一起点重建折点。为了"掰直之后还得认得出用户手划的那一笔"，加了双守门：方向串（`GesturePattern.FromPoints`）必须完全相等，双向偏差不得超过 `Clamp(长边*0.15, 3, 160)`，任一不过就整条退回原始轨迹。模板侧与手绘侧在 `GestureEngine.StrokeOf` 唯一汇合点校正一次，详情页缩略图/回放也显示校正后的形状。自检 34 条（8°/10°/12° 歪线吸附、45° 斜线不被掰成水平、30° 斜线保持原样、Z 形每段严格正交、128° 那种会被读成 `↓` 的段必须原样返回）。
+- **Qbar 空面板先列最近打开的项目**：新增 `Core/Qbar/RecentTargets.cs`（文件/文件夹/网址/程序四类，落 `recent-targets.json`，上限 40 条、大小写不敏感去重前移、300ms 防抖写盘、损坏当空列表）；打开网址/文件夹/文件/程序成功后各记一笔，Qbar 空面板按「设置 → Qbar → 外观 → 空面板先显示最近打开的项目」（默认 **5**，0~20，0 = 不显示）插在最前面，带「最近」徽标；**只在直接唤出 Qbar 时出现**，带搜索引擎或带关键字唤出时不显示。
+- **窗口绑定管理整套删掉**：Qbar 的 `/bindings` 入口与 `openBindings` 分支、托盘那条「窗口绑定（按键映射页）」、`AppSettings.WindowSlots`、`WindowSlot.cs`/`WindowSlotBinder.cs`、动作 `bindWindowSlot`、`Caps+Alt+1…0` 十条默认绑定、语言条目与 README 章节一起删；老配置里的 `bindWindowSlot` 读配置时洗成「什么都不做」。切换窗口（`winBind`）保留 —— 它是按键映射里的普通动作。
+- **Qbar 文件右键「属性」打不开**：原来走 `Process.Start(Verb="properties")`，Shell 直接拒。现在单独起一条 STA 线程调 `ShellExecuteExW` + `SEE_MASK_INVOKEIDLIST`（属性表是模态的，堵在界面线程会冻住 Qbar），失败才提示"打开属性失败"。
+- **手势详情里的录制按钮只留「重新录制」四个字**：去掉"按住鼠标键画一笔（重新录制）"那串括号，帮助文案同步。
+- **设置窗标题栏和正文同色**：`WindowChrome.Apply/AttachTo` 多一个 `captionBrushKey` 参数，正文从头铺到底的窗口（手势设置、手势菜单、Lua 脚本）传 `Brush.Background`，顶上不再贴一条比正文亮/暗一档的横杠。
+- **手势画完自动整理成标准图形（创建时美化）**：新增 `Core/Gestures/StrokeBeautifier.cs` —— 去抖平滑 → 等距重采样 → 转角切段 → 共线合并 → 主方向吸附（45° 倍数）→ 近似对称/闭合规整 → 圆角 → 等比归一化，输出 64 点模板；轻/中/强三档只改"整理力度"，命中阈值（0.05）一点没动。模板要过三道守门才落库：方向串（`GesturePattern`）与手势存档一致、识别器形状距离 ≤ 档位上限（0.040/0.055/0.075）、双向 Hausdorff ≤ 长边×（0.16/0.22/0.28）；不过就自动降一档，全不过保留原始轨迹并记日志。原始像素轨迹另存 `RawPath`，随时能一键恢复。美化只在创建/回填时算一次，触发路径零额外开销。
+- **手势认出来之后先换成标准图形、再执行动作**：`GestureOverlayWindow` 新增三层模板笔（`TemplatePath`/`TemplateBorderPath`/`TemplateShadowPath`，笔刷、粗细、描边随轨迹一起走），`ReplaceTrailWithTemplate()` 把模板按包围盒等比映射到当前笔迹位置，做 140ms（0–600 可调）交叉淡入淡出；`GestureService.FinishHit` 等过渡播完才 `Execute` —— 否则动作打开的窗口会先把覆盖层压掉。关掉开关就保持手绘轨迹直接执行；「立即执行」手势走 `ImmediateHit`（ms=0 当场换图）。未匹配时仍按原逻辑淡出，不替换。
+- **手势设置新增「手势美化」卡 + 详情页状态与两颗按钮**：设置里可调「创建时美化 / 美化强度 / 认出后替换 / 替换过渡时长 / 旧手势自动补算」，改完即时落盘；「重新美化」按当前强度重算一遍存量手绘手势，并统计"已规整 / 按低一档整理 / 保留原样"。手势详情里显示"模板：已美化（中）"或"原始轨迹"，旁边是「重新美化」「恢复原始轨迹」；`StrokeBeautifier.TemplateVersion` 一加，旧模板自动判过期、下次使用时重建。
+- **自检 6139 项，0 失败**：新增手势美化 35 条（抖动 L/竖线/圆圈/涂鸦、重抖动回退与方向基准、落库与开关、回填/克隆、引擎取形、覆盖层替换）、轨迹校正 34 条、Qbar 最近项 19 条、写入线程"事件一返回窗口还没动、1.5 秒内追上、松手后不再动"等。
+
+## v1.3.0 — 手势列表真的能按住拖了（丢捕获被冒泡误杀）、按住拖拽用过一次后手势不再全哑、右键缩放不再自己抖、主窗口圆角与标题栏统一、Qbar 文件右键列表原地变菜单
+
+- **手势列表按住拖拽「完全没反应」（真根因）**：`LostMouseCapture` 是**冒泡**事件 —— `StartDrag` 里 `GestureList.CaptureMouse()` 把捕获从行按钮转给列表的那一瞬间，按钮"丢捕获"的那一下会冒到 `ItemsControl` 的 `LostMouseCapture="OnDragLostCapture"`，那里 `if (_dragItem != null) FinishDrag(null);` 立刻把刚立起来的拖动收掉，只剩列表顶上那根插入线。v1.6.3 起每一版都是这个毛病，所以"按住半天毫无反应"。现在 `OnDragLostCapture` 先判 `ReferenceEquals(e.OriginalSource, GestureList)` 与 `GestureList.IsMouseCaptured`，只对"列表自己丢了捕获"收尾；起拖延时已经是 400ms + 8px 位移门槛。真机实测：`StartDrag from=0 count=56` → `DragMove` → `FinishDrag from=48 insertBefore=0 dropAt=True`，第二行往上拖后首行变成「打开思源笔记」。
+- **按住拖拽用过一次之后，鼠标手势全都画不出来**：`AltDragSink._triggerHeld` 是"按下置 1、抬起清 0"的跨线程旗子，可抬起那一下未必送得到（钩子被系统摘掉重装 / 安全软件拦 / 前台在拖动中被抢走），旗子留在 1 上，`GestureService` 里 `HoldDragHoldsTrigger()` 就一直让路 —— 只有重启能好。现在 `TriggerHeld` 没在拖的时候用钩子自己记的 `_triggerDown` / `_triggerEventTick` 复核一次（`TriggerStillHeld` 带 60 秒空闲兜底），确认早松了就自己把旗子放下并写一行探针。自检新增 `FakeTriggerForTest(latch, stillDown)` 钉住两种状态（真按着 → true；抬起丢了 → 自己松开且锁存位被清）。
+- **在 kelivo 里右键缩放窗口，手松开后窗口还在自己抖**：`WriteWindow → MoveWindow` 会把光标"挤走"（目标窗口持有捕获、边框从游标身上挪过去），100ms 后的补帧定时器拿 `GetCursorPos` 跟 `_prevPoint` 一比就以为"用户动了"，于是再写一帧、再挤一次 —— 自激环正好 10Hz，事故日志里 19.7 秒把窗口从 2562 宽推到 4662（比屏幕 3866 还宽）；而那次 `up` 事件丢了，`_action` 一直非 None，只有 Esc 能停。现在：①`WriteWindow` 写完复查光标，被挤走了就把锚点 `_prevPoint` 跟着挪过去（`WriteWindow 写窗口把光标挤到了 …，锚点跟着走`）；②补帧定时器兼作"up 丢了没有"的体检 —— `ButtonStillDown` 连续两帧读到已松开就 `AbortLostMouseUp()` 自己收尾（只在真的按过物理键时武装，注入的拖动不受影响）；③新增「触发键已松开」「Esc 取消这次拖动」两行日志。真机验证：光标不动 → 整段零 WriteWindow；拖 60px 后冻结 2.5 秒 → 只写 2 帧、之后彻底安静（旧版同场景 10Hz 抖）。`--selftest` 里新增两条回归（锚点跟随、被挤出来的位移不再变成新的拖动）。
+- **主窗口没有圆角、标题栏和侧栏两张皮、左栏与内容直来直去**：没有圆角的确定性原因是 `WindowChrome.Apply` 默认 `zeroFrame: true` 把 `DWMWA_VISIBLE_FRAME_BORDER_THICKNESS` 压成 0，而 Win11 的圆角正画在那圈边框上（源码注释里本来就写着）。现在新增 `WindowChrome.ApplyShell(window, dark)`（`zeroFrame: false`，边框色仍是 `ColorNone` 不会补出白线），`AttachBorderless` 与 `MainWindow.OnLoaded` 都改走它；主窗口根改成 `Brush.Sidebar` 打底、侧栏去掉那条 1px 竖线，右边（标题栏 + PageHost）包进 `ContentCard`：`Margin=8 / CornerRadius=16 / BorderThickness=1 / Background=Brush.WindowGradient` —— 标题栏本来就是 `Background="Transparent"`，于是和页面同处一张渐变卡片，割裂自动消失；最大化时 `UpdateContentCard()` 把边距与圆角收掉（`Margin=0 / CornerRadius=0 / BorderThickness=0`）。真机 DWM 实测 `frame=2 corner=2 border=0`，外角像素已是桌面色。
+- **Qbar 文件结果右键：点下去列表原地变成那个文件的操作菜单**：不再弹原生 `ContextMenu`。「打开 / 以管理员身份运行（仅 .exe/.bat/.cmd/.lnk/.msi）/ 打开所在文件夹 / 复制 / 剪切 / 复制路径 / 属性 / 返回搜索结果」整批做成 `QbarKind.Command` 行原地替换结果列表，顶部出现完整路径抬头、输入框左侧图标变 ⋮、底部提示改成「↑↓ 选择    Enter 执行    Esc 或右键返回搜索结果」；`QbarResult` 新增 `Glyph` 让每一行自带图标，空的 `Badge` 现在整块收起（以前菜单行右边会剩一个空心胶囊）。Esc 的优先级也理顺了：菜单开着时窗口级 `OnWindowKeyDown` 先 `CloseFileMenu()`，再按一次才关面板。
+- **右下角提示条回到 v1.2.12 那份观感**：主题卡片 + 22px 图标 + 13px 文字 + 圆角 12、无阴影、右下角留 10px，普通提示 1800ms、反馈类 900ms；`ToastStyle` 默认改成 `ShowBorder=false` / `BorderWidth=0.5` / `Color=""` 并带自己的 `MigrateVersion`，旧配置迁过来时把描边关掉。
+- **「以管理员身份运行」时部分功能失效**：管理员进程注入普通进程的输入会被 UIPI 拦掉（`SendInput` 静默失败），而钩子这条路又因为两套进程权限不同时不时丢事件。新增 `Core/App/ElevationState.cs`（判定当前走哪条注入路径）、`InjectionBridge.cs`（管理员侧替用户按键）、`HookHostLauncher.cs`（宿主启动方式诊断）、`ElevationNotice.cs`（一次性说明）：`AppHost.Actions.ReportInjectBarrier()` 把 UIPI 拦截 20 秒节流后弹成提示条（不再"点了没反应"），`AppHost.HookHost.CheckHookTraffic()` 连续漏物理键且重装两次无效时走 `RestartSelfForHookRecovery`，`RestartUnelevated` 也能正常降回普通权限。
+- **按住拖拽「只认这几台键盘」的三态**：光靠"空列表 = 全选"表达不了"一台都不认"，于是取消「所有键盘」后每台还亮着、逐台取消到最后一台又全打回来。现在配置里用哨兵 `none`（`AppConfig.NoDevice`，空串仍是"所有键盘"，老配置照读）：勾「所有键盘」→ 下面每一台都跟着打勾，取消它 → 下面全空、按钮显示「未勾选任何键盘」、提示写清"触发键按了也不会动窗口"；`ApplyDeviceToggle` 是纯函数（勾单台时若当前是全选就只留这一台；取消单台时若是全选就取"全部减去这一台"），`DeviceAllowed("none", …)` 直接 false，自检把每条分支都钉住。顺带修掉"none 被当成一台设备列出来显示『这次没接上』"。
+- **自检 6015 → 6040 项，0 失败**：新增僵尸锁存两种状态、写窗口挤走光标的锚点跟随与补帧不自激、设备三态全分支、Qbar 菜单徽标收起等。
+- 版本号 1.6.4 → **1.3.0**（按用户要求）。
+
+## v1.6.4 — Qbar 文件搜索改成 Input Plus 自己的索引（不再需要 Everything）、引擎标签叉掉后不再只剩网页搜索、笔画平滑真的看得见、手势列表 400ms 起拖
+
+- **Qbar 的文件搜索不再依赖任何外部软件**：原来那套是「随程序带一份 Everything 内核，第一次真搜时把它拉起来」—— 用户看到的不是「Input Plus 会搜文件」，而是「Input Plus 唤起了 Everything」。现在换成完全自研的 `Core/Qbar/NativeSearchIndex.cs`：后台线程扫一遍常用根目录（用户目录 + 重定向到别处的桌面/文档/下载/图片/视频 + `PUBLIC` + `Program Files`(`(x86)`) + `ProgramData`；**以管理员身份运行时自动加所有固定盘根目录**），目录用 `string[]`、文件名用一整块 UTF-8 `byte[]` + `int[]` 起止表 + `int[]` 所属目录，快照一次性替换、搜索只读不加锁。索引落在 `<数据目录>\file-index\`（`meta.txt` + `dirs.bin` + `names.bin` + `nameStart.bin` + `nameDir.bin`，每份先写 `.tmp` 再 `File.Move(overwrite:true)`，meta 最后落），12 小时后过期 —— 过期时**先载入旧索引让搜索可用**，再在后台重建，不会出现「重建期间搜不到东西」。真实规模实测（37.7 万文件 / 7 万目录）：首次建索引 27.2 秒、冷启动载入 44-59 ms、常规查询 12-24 ms、中文 32-56 ms、重建期间查询 254 次全部有结果平均 21.6 ms、索引占 25.9 MB、工作集 132 MB。跳过 `$Recycle.Bin` / `System Volume Information` / `WinSxS` / `servicing` / `node_modules` / `.git` / `.vs` / `obj` / `bin`（按整段名字比较，所以 `Robin` 这种正常文件夹不受连坐）与所有重解析点。上限 80 万文件 / 20 万目录 / 240 秒 —— 到了就停，宁可少覆盖也不把机器拖住。
+- **Everything 从仓库和机器上一起退出**：`EverythingRuntime.cs`、`EverythingSdk.cs`、`ThirdParty\Everything\`（客户端 + 两个 DLL + 许可 + 源码说明）、`tools/fetch-everything.ps1` 全部删除，csproj 里那条 `Link="Everything\%(RecursiveDir)%(Filename)%(Extension)"` 也拆了；`QbarOptions.UseEverything` 与内置程序表里那条 `everything → Everything.exe` 一起删掉；搜索条目与设置页文案里的「Everything」改成「内置索引」。设置页的「文件搜索」卡只读显示状态（`IndexDot` / `IndexState` / `IndexInfo` / `IndexDetail`）＋「刷新状态」「重建索引」，建索引期间 900 ms 追一次进度；普通权限下详情里会补一句「普通权限只索引用户目录和常用程序目录；要全盘就右键『以管理员身份运行』一次」。**注意**：原来那条「系统里已经有 Everything 就直接用」的捷径（`EnsureStarted` 里 `if (IsRunning()) return true`）是「唤起了 Everything」的直接原因，现在整条路径不存在了 —— 程序不再启动、不再查找、也不再读写任何 Everything 的文件。
+- **Qbar：把引擎标签叉掉之后，不管输入什么都只剩网页搜索**：两个毛病叠在一起。①`QbarWindow.RemoveChip` 叉标签时把引擎关键字写回输入框、而且**不重搜**，用户接着打空格就成了 `bd `，再打字就是 `bd chrome`；②`QbarService` 里「第一段是引擎关键字」那条分支只要找到空格就 `return results.Take(limit)` —— 一条 `Score=-100` 的「在 X 中搜索…」把文件、动作、剪贴板、窗口全吃掉。现在分支加上 `tail.Length > 0`（空关键词不短路，正好让「在 X 中搜索…」这一条自己单独出现），`RemoveChip` 改成清空输入 → 重跑查询 → 光标归位，不再还回关键字；`Input.IsReadOnly` 也跟着 `ClearChip` 复位。自检用 `qbar.Query("bd ", 12)`（必须多于 1 条）与 `qbar.Query("bd chrome", 12)`（必须正好 1 条且 Badge 是 `bd`）把两种状态都钉住。
+- **笔画平滑「开关打开了却看不出变化」**：开关只接在**识别**那条路上（`GestureService.cs:1327`），用户眼睛盯着的是 `GestureTrail` 画的轨迹 —— 那份只有 1 轮 Chaikin、而且根本不看开关，加上采样要挪够 20px 才收一个点，线头永远卡在最后一个采样点上，看着一格一格跳。现在 `GestureTrail` 多存一个「笔尖」`_tail`（每次 `AddPoint` 都更新，不进采样表、不影响识别），`Build(smooth)` 先把笔尖接到末尾再按开关决定：开 → `Chaikin(points, 2)`（`t = 0.05 + SmoothT*0.4`），关 → 原样画；超过 128 点不平滑（长笔画的绘制开销比手感更值钱）。识别用的 `Points`（原始 20px 采样）一点没动，所以「看着更顺」和「认得更准」是两件分开的事。
+- **手势列表：按住 2 秒太久，而且只有「自定义」档才拖得动**：起拖延时 2000 ms → **400 ms**（比双击的 500 ms 短一点，接近长按直觉），并新增 8px 位移门槛 —— 到点时手指已经挪开 8px 就直接进拖动态，不必等满延时；`OnRowPressMove` 里左键一松就取消，不会在别的窗口拖出个幽灵行。排序档位不再是门槛：任意档都能拖，起拖瞬间自动切到「自定义」并持久化（`SwitchToCustomForDrag`），切完按 gesture id 重新定位容器再接管；`Draggable` 只由「搜索框有字 / 少于两条」决定。拖完松手那一下会把 `ButtonBase` 的 Click 吞掉（`_suppressClick`），否则右侧编辑器被切走、没保存的手势改动当场丢。
+- **托盘补两个开关**：「平滑滚动」和「按住拖拽」原来只能进主窗口里面关。现在托盘菜单在「鼠标手势」下面并排两条可勾选项，勾选状态实时跟随（`UpdateScrollState` / `UpdateHoldDragState` 挂在 `UpdateCapsState` 后面，菜单每次打开都刷新）。改的是 `Settings.Scroll.Enabled` / `Settings.HoldDragEnabled` 再 `SaveSettings()` —— `AppHost` 的 `SettingsChanged` 里已经挂了 `Scroll.ApplySettings()` / `HoldDrag.ApplySettings()`，所以改完立刻生效，不用重启，也不会和主窗口里的开关打架。
+- **按住拖拽的设备勾选还是拧**：上一版把「所有键盘」当成「把下面的全勾上」，结果取消「所有键盘」后每一台还亮着；再一台台取消到最后，名单变空 —— 而空名单的语义又是「全选」，方框自己弹回去。现在`FillDeviceScope` 里 `all = keys.Length == 0 && !_deviceAllUnchecked`，设备行 `on = !all && keys.Any(...)`，不再铺满；`_deviceAllUnchecked` 只在本次弹层有效（重开弹层落回配置语义），取消「所有键盘」就真的全空，逐台取消到最后一台也只是「第一行亮、下面全空」。顺带设备行前面加了类型图标（键盘 `E765` / 鼠标 `E962`）和序号，一眼能数清接了几台。
+- **按住拖拽：先改大小、再移动、再改大小，竖直方向就拖不动高度了**：这不是状态残留 —— `BeginDrag` 每次都 `new AltState()`、`Rebase` 也会重算九宫格。真因是 AltDrag 自己的九宫格语义：抓在右边框中段（纵向落在 38%~62% 的中间带）时 `EdgeY == Center`，`ResizeGeometry` 走 `posy = wnd.Top; wndheight = wnd.Height;` —— 高度**按设计**锁死（原版 `hooks.c:1700-1746` 一模一样）。但用户移动过窗口之后再抓中段，本意往往是「这下我想改高度」。新增**延迟轴向收养** `AltDragCore.AdoptAxis`（`AltDrag.cs`，`AdoptDeadZone = 4` 物理像素）：一条轴在中间带、另一条在边上，且用户在该轴上的位移超过 4px 并超过另一轴，就把中间带那条轴一次性收养成「按下点所靠近的那条边」，并按当前矩形重算偏移量（`Bottom → OffsetY = wnd.Bottom - pt.Y`、`Top → OffsetY = pt.Y - wnd.Top` 且同步 `OriginBottom`，X 轴对称），所以收养那一帧窗口不跳。双 Center（四向扩张）不动，一次拖动只收养一次，收养后立刻换光标形状。
+- **`--search` 命令行开关**：`InputPlus.exe --search 关键词` 会把索引建完再搜一次，把状态、规模、建立时间、根目录与命中列表写进 `%TEMP%\clp-search.txt`（多词按「都要包含」）。搜索出问题时不用再猜是「索引没建好」还是「根目录没覆盖到」。
+- **自检 6003 → 6015 项，0 失败**：新增原生索引的建/存/读/查（精确名、前缀、子串、多词 AND、中文、大小写、空结果、limit、timeout、持久化一致、路径真实存在）、Qbar 引擎标签两种输入形态、笔画平滑的笔尖与点数、手势拖动切档、轴向收养（抓右边框中段往下拖，高度必须涨）、以及设备勾选联动。真窗口那几段（最大化 / 假全屏）加了抓点归属检查 —— 右下角被别的窗口（比如全屏播放器）压着时明确跳过并写进日志，不再把环境噪音记成回归。
+- 版本号 1.6.3 → **1.6.4**。
+
+## v1.6.3 — 提示条与手势名称分家、手势列表能按住拖动排序、运行命令真的能跑命令、Qbar 文件搜索换成 Everything 内核
+
+- **提示条和手势名称分成两套外观**：v1.6.0 把两者收进了一个 `NotificationStyle`，结果「想让右下角提示条换个底色」必须去改手势名称的配色 —— 而这两件事的用法根本不同（名称框贴在光标附近一闪而过，提示条固定右下角停几秒）。现在拆成 `Core/Settings/NotificationStyle.cs` 里的两个类型：`GestureLabelStyle`（显隐描边 / 粗细 / 平时色 / 执行后色 / 贴屏幕高度，MigrateVersion 独立）与 `ToastStyle`（描边 / 粗细 / 底色，无「位置」—— 提示条固定 `Anchor.BottomRight`，Margin 14）。名字的外观**搬回「鼠标手势 → 手势设置」的「手势外观」卡**（改的时候正对着预览看），提示条留在「设置 → 外观 → 提示条」，只有四行：描边开关 / 描边粗细 / 底色 / 弹一条预览。`SettingsStore` 的迁移（`SettingsStore.cs:1262-1323`）按 MigrateVersion 分两档：v1.6.0 的用户把五项直接搬给 `GestureLabel` 并把描边三件套复制给 `Toasts`；更早的用户从 `GestureOptions.ShowLabelBorder` / `LabelBorderWidth` / `LabelColorNormal` / `LabelColorExecuted` / `GestureNamePos` 搬，MigrateVersion → 2。旧 `NotificationStyle` 降级成只读兼容，迁移完置 null。`ToastWindow` 与 `GestureOverlayWindow` 共用新增的 `internal static void ApplyLabelLook(Border box, GestureLabelStyle style, bool executed)`，设置页的预览调的是同一个函数 —— 预览和真弹出来的那一颗不会再走样。
+- **手势列表的应用行收进 ⋮ 菜单**：原来每行右边并排两颗文字按钮（「禁用 / 启用」「删除」），列表一窄就把「应用名 + 手势名」挤成省略号。现在改成一颗 `&#xE712;`（⋮）+ 内联 `ContextMenu`：禁用/启用（E733 / E71A）、编辑、删除，`OnTargetMenuClick` 先把 `menu.DataContext` 设成按钮的 DataContext 再开，菜单里绑定不用再往上找父级。只有「可禁用」「是分组」「可删除」三种情况之一才显示 ⋮（`TargetRow.MenuVisibility`）。
+- **列表排序改成按住 2 秒直接拖**：删掉每行左边那根 14px 的拖动柄 —— 它白占一列宽度，而且只能从那一小条抓。现在整行都能抓：`PreviewMouseLeftButtonDown` 起一个 2000ms 的 `DispatcherTimer`，到点先判 `Mouse.LeftButton == Pressed`（松手了就不进拖动态），然后 `StartDrag`；拖动时行跟着光标走（`_dragShift.Y = (p.Y - _dragStart.Y) + (ListScroll.VerticalOffset - _dragScrollStart)`，滚动时也不飘），插入线标出落点，松手走原来的 `GestureListOrder.MoveWithin`。`GestureRow.GripVisibility` 改名 `Draggable`。
+- **筛选框按最宽的那一项自适应**：「应用」筛选原来是写死 96px，稍长的应用名就被截。现在 `FitFilterBoxWidth()` 用 `FormattedText` 量出最宽项，`MinWidth = Math.Max(96, ceil(widest) + 46 + 6)`（46 = 右侧箭头与内边距），搜索浮层宽度跟着 = 下拉宽 + 6 + 32，两者永远对齐。
+- **回放改成真时间轴**：原来按「点数 × 固定间隔」一次性铺完，长笔画看着像卡住。现在 `Stopwatch` + 16ms `DispatcherTimer` 驱动，`_replayTotalMs = Clamp(Round(perPoint * pts.Count * 1.8), 900, 3200)`，三次 easeInOut 让起笔收笔都变缓，结束后 260ms 淡出再复位。
+- **「运行命令」以前其实开不了程序**：`ActionContext.Open.cs` 的 `runCommand` 把整串丢给 `Process.Start` 的 shell 解析，`"C:\Program Files\...\app.exe" -x` 这种带空格和参数的必挂，输入一个文件夹又静默什么都不发生。现在新增 `internal enum CommandKind { Empty, Folder, File, Program, Command }` 与 `internal static CommandPlan PlanCommand(string command)`（`ActionContext.Open.cs:229-249`，配套 `SplitCommand` `:259-284`）：认得出是**文件夹 / 文件**就明确告诉你「这不是命令；要打开它请用『直达文件』」而不是假装跑过了；**程序**走 `ProcessStartInfo(UseShellExecute=false)` 直接起（参数按引号切好）；其余才交给 `cmd.exe /s /c "..."`。自检通过 `public static Action<string,string,bool>? RunCommandInterceptForTest`（`:198`）拦下真实启动。
+- **「直达链接」收成一条**：「直达文件夹」原来和「直达文件」是两条动作，用户按名字分不清该用哪个 —— 能开文件的那条本来就能开文件夹。现在 `openFolder` 在动作目录里 `hidden: true`（handler 与老 id 都留着，老配置照跑），可见的只剩「直达文件」；`LegacyActionMigration` 把 `["openFolder"] = "openFile"` 迁过去，手势默认值里 `LooksLikeExePath` 换成 `LooksLikeDocumentPath`（裸 exe 仍留在「运行程序」）。
+- **笔画平滑（默认关，自己开）**：新增 `Core/Gestures/StrokeSmoother.cs`，流水线是 去抖 → 拐角保留 → Chaikin ×2 → `GestureEngine.Simplify(curved, 2.0)` → **双守门**（方向串 `GesturePattern.FromPoints` 必须与原轨迹相同；双向 Hausdorff 偏差不得超过 `Clamp(Extent*0.10, 2.0, 12.0)`，超了整条退回原轨迹）。守门是为了「平滑不能把 ↘ 抹成 →」——宁可不动，也不能换形状。接线在 `UI/GestureService.cs:1323-1327`，开关是手势设置里的「笔画平滑」。
+- **文字按钮全面换图标**：标题栏（搜索 E721 / 暂停 E769-E768 / 最大化 E922-E923）、按住拖拽页的触发键重置 E7A7 与设备弹层刷新 E72C、剪贴板页的复制 E8C8 / 清空 E74D、平滑滚动页的例外删除、宏页的 ＋ / 🗑 / ▷ / ■、手势菜单编辑窗的 添加 / 删除 / 上移 / 下移、「按键映射」页首的「恢复本页默认设置」→ E7A7、「触发键与层」页的 ＋ 与 🗑（双击动作那一列的「应用 / 清除」→ ✔ E73E / ✕ E894）、「别名替换」页的分组条（重命名 E8AC / 删除 E74D / 导出 E896）与列表工具条（＋ / 🗑 / 移到分组 E8DE / 导入 E898 / 导出 E896）。统一用 `Button.Icon`（`Theme/Controls.xaml:231-240`，32×32 透明底 + Segoe Fluent Icons），每颗都补 `AutomationProperties.Name` 与 `ToolTip` —— 读屏和鼠标悬停都还知道它是什么。字段级的小按钮（「浏览…」「取消 / 确定」这类对话框按钮）保持文字，图标反而更难认。
+- **按住拖拽的设备勾选会互相联动**：勾「所有键盘」而配置里是空列表时，下面每一台原来不显示勾 —— 看着像「只勾了第一行」。现在 `FillDeviceScope` 里 `all = keys.Length == 0`，每台 `on = all || keys.Any(...)`；取消单台时若当前是「所有」状态，`keys = 全部键盘减去该台`（不能留空 —— 空列表的语义是「全选」，方框会被打回去）。设备按钮改成开合（已开时再点就关）。
+- **Qbar：夜间模式下那排页签是黑底黑字**：`QbarSettingsView.xaml` 的 `TabItem` 模板只在 `IsSelected` 里设了前景色，未选中态继承 WPF 默认黑字，压在 Dark 的 `Brush.Surface #1A1E27` 上对比度只有 **1.26:1** —— 「搜索指令 / 启动程序 / 常用网址 / 固定项」四个页签在夜间基本看不见。现在样式级给 `TextElement.Foreground = Brush.TextSecondary` 打底，hover 换 `Brush.Hover` + `TextPrimary`，选中换 `AccentSoft` 底 + `Accent` 下划线 2px + `TextPrimary`；边框改成常驻 `0,0,0,2`（选中只换色，不跳高度）。实测对比度：Light 未选中 5.93 / hover 15.66 / 选中 15.20，Dark 7.64 / 12.86 / 12.83 —— 都过 4.5。顺手排掉一个坑：浅色下「Accent 蓝字压 AccentSoft 底」只有 **4.01:1**，所以选中态用 `TextPrimary` 而不是品牌色。
+- **Qbar 文件搜索换成 Everything 内核（随程序自带）**：原来那套自研索引（`FileItem` / `_files` / `BuildFileIndex` 全目录枚举）删干净，`MatchFiles` 只走 `EverythingSdk`（`Everything64.dll` → `es.exe` 兜底，两者同一内核）。官方 1.4.1.1028 客户端与 SDK 落在 `src/InputPlus/ThirdParty/Everything/`（含 LICENSE 与 SOURCE.txt），csproj 用 `Link="Everything\%(RecursiveDir)%(Filename)%(Extension)"` 摆到输出目录的 `Everything\` 子目录，与 `EverythingRuntime.BundledDir` 对齐 —— 用户不用另外装。`Core/Qbar/EverythingRuntime.cs` 负责懒启动（第一次真搜文件才起，启动路径零开销）、`-db`/`-config` 指到数据目录（不碰用户自己那份索引）、挂 `KILL_ON_JOB_CLOSE` 作业对象 + `ProcessExit → Stop()`（主程序崩溃也带走），`Stop()` 先 `Everything_Exit()` 让它落盘再兜底 Kill（硬杀会丢 33MB 的 db）。**没做独立实例名**：1.4 的 SDK 没有 `Everything_SetInstance*` 导出，它靠固定窗口类找客户端，改名反而找不到 —— 隔离改用 `-db`/`-config`，效果等价，类注释里写清了这个取舍。
+- **普通权限下 Everything 只索引用户目录（已知限制）**：读 NTFS 的 USN 日志要管理员，非管理员起的内置实例 60 秒后 `TotalItems` 仍是 0、查 system32 零结果。但**文件夹索引不需要管理员** —— `SeedConfigIfMissing()` 首次启动写一份 `[Everything] folders=<用户目录;重定向的桌面;重定向的文档>`，实测能搜回文件，Everything 随后把 ini 重写成标准格式。设置页因此在 `TotalItems == 0` 时补一句「普通权限只索引用户目录；要全盘就右键『以管理员身份运行』一次」。文件搜索卡也改成只读状态（运行中 / 索引中… / 不可用、已索引 N 条、内核来源与 DLL 路径），按钮只剩「重新检测」「重启内核」——「用 Everything 搜索」开关与「下载 Everything」都删了（配置字段留着兼容旧 settings.json）。
+- **自检 5922 → 6003 项，0 失败**：新增提示条 / 手势名称两套样式的迁移与越界收敛、手势列表拖动排序、筛选宽度测量、回放时间轴、`PlanCommand` 的五种分流与「文件夹不当命令跑」、笔画平滑的四道守门（形状不换、偏差超限退回）、Qbar 页签三态对比度、Everything 内置 DLL 优先与内核联通性（设 `INPUTPLUS_TEST_EVERYTHING=1` 才真拉内核）。
+- 版本号 1.6.2 → **1.6.3**。
+
+## v1.6.2 — 「按住拖拽」按了没反应：长按转正永远失败（GetAsyncKeyState 跨线程）、修饰键左右码、设备解析阻塞 928ms、线上没有日志
+
+- **背景**：用户报「按住拖拽功能没生效」。`--drag-e2e` 一跑就复现：`步骤：触发键按住的判定 = False（期望 True）`、位移 (0,0)。探针把失败点钉死在一行上 —— `长按计时到点，但触发键物理上已经不在了 —— 取消。key=K:0x0D vk=13 raw=0x0`，而**同一毫秒**里 UI 线程采样出来的 240ms 序列是 `111111111111`。同一个进程、同一个键、不同线程，`GetAsyncKeyState` 给出的答案相反。
+- **根因 1（核心）**：长按 200ms 到点那一下是在 `System.Threading.Timer` 的线程池线程上复查触发键，`KeysUtil.IsPhysicallyDown` 走 `GetAsyncKeyState`，在那条线程上恒读 0 —— 于是「转正」这一步**从来没有执行过**。表现就是：按住 Enter 再点左键，只有 `BeginDrag` 里那条兜底（在鼠标钩子线程上复查）偶尔能救回来；救不回来就彻底没反应。修法是**不再跨线程问系统**：`AltDragSink` 用键盘钩子自己记账（`_triggerDown` / `_triggerDownSeen` / `_triggerEventTick`，`HandleKey` 的触发键分支写、`TriggerStillHeld` 读），只有钩子压根没见过这个键时才退回 `GetAsyncKeyState`；另外加了 60 秒无事件判「已经松手」的兜底（钩子丢事件时不至于永远卡在按住状态）。`OnTriggerHoldTick` 同时改成 `Monitor.TryEnter(_gate, 50)`，拿不到锁就 20ms 后重试（最多 40 次）—— 原来它在不持锁的情况下写 `_alt`，和钩子线程的 `HandleKey` 是竞态。同类隐患一并清掉：`MoveMouse` 的 Ctrl 夹屏和 `IsShiftDown` 原来也调 `GetAsyncKeyState`，而 `MoveMouse` 会被 100ms 的 `MoveTimer` 从线程池调用。
+- **根因 2**：低级键盘钩子送来的是 `VK_LSHIFT(160)` / `VK_RSHIFT(161)` / `VK_LCONTROL(162)` / `VK_RCONTROL(163)`，而移植代码认的是 `VK_SHIFT(16)` / `VK_CONTROL(17)`（`hooks.c:589/951/958/984/1053/1088` 认的正是左右分开的四个码）。于是「拖的时候按 Shift 把吸附拉到最高档」「按住 Ctrl 拖过界不自动最大化/夹在屏幕内」这两条**从来没有生效过**。现在 `Native` 补齐四个常量，`HandleKey` 里按左右码判断，并改成用钩子维护的 `_ctrlPhys` / `_shiftPhys`。
+- **根因 3**：`DeviceResolver`（`AppHost` 挂的 `_deviceTracker.ResolveDevice(vk, true, 60)`）原来在键盘钩子回调里**同步**等 Raw Input，实测一次 `KB-in` 到下次探针之间卡了 **928ms** —— 低级钩子回调里的等待等于全系统键盘停摆。现在按下那一刻只把活丢给线程池（`KickDeviceResolve`，带 generation 号防止旧结论盖新按压），回调立刻返回；长按定时器到点再核对结论，没解析完就按「放行」处理（fail open，宁可不拦不把人挡在门外）。阈值 0（按下即生效）的人，转正由解析回来的那一下补上。`KeyboardDeviceTracker.ResolveDevice` 的等待也从「60 次 `Sleep(1)`」改成按 `TickCount64` 算真实时间。
+- **根因 4**：`Modules.HoldDrag.Log` 只在 `--drag-e2e` 里 `Init`，正常运行路径从不初始化 —— `Log.Write` 因 `_path` 为空直接 return，**线上 `holddrag.log` 永远是空的**。现在 `HoldDragService.Start()` 先 `Log.Init(AppPaths.DataDir)`，并把状态迁移写成可读的中文记录：启动（触发键/长按/设备/三个键的动作）、「触发键已按住，鼠标交给按住拖拽」、「接管 hwnd=0x…（进程名）action=… rect=…」、「拖动结束」、钩子安装失败（带 Win32 错误码）、以及最容易被误判成「软件坏了」的那条 ——「这次触发键不是配置里勾选的键盘发出的（只认：…），本次忽略」。
+- **对齐 altdrag 的按需鼠标钩子**（`hooks.c:956` `HookMouse()`、`:1078/:1084` `UnhookMouse()`、`:1914` `HookMouse`、`:1935` `UnhookMouse`）：移植版原来是键盘、鼠标两个低级钩子常驻。现在 `HookEngine.SetMouseHookWanted(bool)` + `WM_MOUSE_WANT(32777)`：`BeginPendingTrigger` / `ArmTrigger` 请求装上（兜底路径要靠这一下点击），`CancelPendingTrigger` / 触发键抬起 / 拖完 / `CancelDrag` 请求卸掉。装钩子不在 `WH_KEYBOARD_LL` 回调里做（实测那样拿到非零句柄却一个事件都收不到），一律 `PostThreadMessage` 回钩子线程的消息循环里装。`HookWatchdog` 在鼠标钩子没装时不把「光标动了但 SeenCount 没变」当成掉钩子。
+- **不拖自己家的窗口**：实测把 Input Plus 主窗口拖到 (-426,0) 之后界面全乱。这是有意偏离 `hooks.c:1520-1545`（原版靠用户把 exe 填进黑名单）：`BeginDrag` 里 `GetWindowThreadProcessId` 命中本进程就放行，自检用 `AltDragSink.DragOwnWindowForTest` 打开旧行为。
+- **新的诊断开关 `--drag-target <句柄文件>`**：`--drag-e2e` 原来拿 regedit / 记事本 / cmd 当靶子，实测都不可用 —— regedit 带 `autoElevate` 被 UIPI 挡、Win11 记事本是商店应用拿不到主窗口句柄、cmd 跑在 Windows Terminal 里窗口属于别的进程。现在 e2e 用 `InputPlus.exe --drag-target` 起一个自家 `WS_OVERLAPPEDWINDOW` 靶子（置顶、写句柄到文件），点击点先校验「`WindowFromPoint` 的顶层窗口 == 靶子」，不等就换点，8 次都失败就报「跳过（退出码 3）」而不是假失败。
+- **探针（`HOLDRAG_PROBE=1`）**：新增 `Modules/HoldDrag/Platform/HookProbe.cs`，同步落盘 `%TEMP%\holddrag-probe-<pid>.log`（`Log` 是异步队列，`Environment.Exit` 会丢尾巴）。键盘/鼠标钩子回调、`HandleKey` 的每个分支、长按计时、设备解析、`BeginDrag` 的每一条静默 `return`、`WriteWindow` 的坐标都记一行。写失败不再「一次就永久静音」，改成重建 writer 重试（实测文件被外部占用一次就整轮盲测）。
+- **自检 5922 项，0 失败**：`TestTriggerHold` 的设备段补了「先松开再按」和 `WaitHeldForTest` / `WaitDeviceResolvedForTest`（设备解析走线程池，断言不能假设它已经回来）；`--drag-e2e` 实测 `位移=(80,48)`、真实设置档同样通过；发布版（单文件 exe）用 `--drag-target` 靶子 + `mouse_event` 注入实测 `delta=(80,48)`。
+- 版本号 1.6.1 → **1.6.2**。
+## v1.6.1 — 回车不再慢半拍（触发键永远即时透传）、手势「关闭」不再变「休眠」、设备可以勾多台
+
+- **触发键（默认 Enter）改成永远即时透传**（按住拖拽）：v1.6.0 的写法是「按下先吞住 200 毫秒 → 到点接管 / 没到点松手就 `SendInput` 补发一次」，实际用起来有两个毛病 —— ①每次回车都要等阈值或松手才送到前台，**慢半拍**；②补发是注入事件，被 UIPI 或安全软件挡掉时**回车直接丢**，表现就是「Enter 本身的功能失效」。现在 `AltDragSink.HandleKey` 的触发键分支一律 `return false`：**不吞、不补发**，按下去当场就到前台；拖不拖只看 `KeysUtil.IsPhysicallyDown`（全系统物理键状态，吞不吞都有答案）。`BeginDrag` 原来只信 200 毫秒定时器回调的结果，现在**物理上还按着就当场转正**（`ArmTrigger`），定时器晚到或丢了也不会让整次按住白按。
+- **顺手修掉自动重复的老 bug**：按住不放时系统的自动重复会一遍遍进按下分支，v1.6.0 每次都重新 `BeginPendingTrigger`（把 200 毫秒计时器重置），松手时又走一遍「补发回车」并把 `_alt` / `_triggerHeld` 永远留在 true —— 于是按住时间再长也转不正、后续跟手势的让路状态也卡死。现在只有 `!_triggerPending` 才起计时，抬起的收尾照旧归零。
+- **删掉「吞掉触发键」开关**：`AppConfig.Normalize` 把 `SwallowTrigger` 一律收敛成 `false`（字段留着只为兼容旧 `settings.json` 的读入，属性本身不能删，自检和序列化都还在用它），`HoldDragView` 里那一行连同后面的分隔线一并拿掉 —— 留着开关会让人以为「吞掉」还能加速，其实它只会让回车重新变慢。
+- **「只认这台键盘」改成勾选多台**（`AppConfig.Device` 从单值变成 `;` 分隔的列表）：新增 `SplitDevices` / `JoinDevices` / `DeviceAllowed`，`AltDragSink` 用 `DeviceAllowed` 判（空列表＝所有键盘，actual 取不到也放行）；界面照「按键映射」页的胶囊 + 弹层：左边一个 `DeviceButton`，点开逐台列方框，勾多台就是多台，第一行「所有键盘」＝清空，同名设备用 `VID:PID` 区分，勾过但这会儿没接上的补一行「这次没接上」，弹层底部有「刷新」。
+- **「窗口例外」搬进右栏「当前状态」**：原来在左栏最底下，跟程序例外离得很远；现在两种例外排在一起（程序例外 → 窗口例外 → 怎么用 → 恢复默认），版式统一成「说明 + 多行框」。**同时删掉「跟 AltDrag 的关系」整段** —— 那些话本节上面几段已经讲清楚了，卡片里再抄一遍 hooks.c 的来历只会把右栏撑长。
+- **画「关闭」不会再被判成「休眠」**：`gesture-import.txt` 里 关闭 / 休眠 两条的触发方式完全一样（右键 ↓→），只是 Path 形状差 0.0071；`GestureIdentity.SameShape` 原来的门槛是 0.002，两条都留着，识别时按最小距离挑，手一抖就挑到「休眠」。门槛改成 **0.02**（2% 以内算手画不出来的差别），`RemoveDuplicates` 删条时**保留列表里靠前的那条**并写一行日志（`[手势] 「休眠」和「关闭」画法一样…只保留排在前面的「关闭」`）；用户库里「关闭」在前，所以留下的是它。
+- **手势执行完不再补一条提示**：`AppHost` 新增 `QuietSuccess()`（`IDisposable` 作用域 + 计数）与 `ShouldSuppressToast(quietDepth, message)`，`Notify` / `NotifyTranslated` 在静默期只放行以「✗ 」开头的失败文案；`GestureService.Execute` 用 `using (_host.QuietSuccess())` 包住 `InvokeAction`。于是「已发送 Ctrl+W（未绑定应用，发给当前窗口）」这类成功回执被省掉 —— 松手时手势名字已经浮在屏幕上了，再弹一条是重复。动作失败（找不到应用、脚本报错）照旧提示。
+- **「手势设置」窗口：点回主界面自动关、圆角跟系统一致**：`GesturesView` 从 `ShowDialog` 改成 `Show`（同一时间只留一个，重复点齿轮是 `Activate`），否则模态时点主窗只会「叮」一声、关不掉；窗口自己在 `Deactivated` 里判断「前台句柄是不是 owner 主窗」，是就 `Close()` —— 点到它自己弹出的选动作 / 取色对话框、或者别的程序都不关（开着「置顶」正是为了边看边调）。圆角的根因在 `WindowChrome.Apply`：它给所有窗口把 `DWMWA_VISIBLE_FRAME_BORDER_THICKNESS` 压成 0，而 Win11 的圆角就画在那圈可见边框上，于是对话框全是直角。现在 `Apply` 加 `zeroFrame` 参数，只有主窗口（外壳全自绘）传 true，`AttachTo` 的对话框传 false。
+- **新的诊断开关 `--drag-e2e`**：真装钩子、真发 `SendInput`（Enter 按住 → 左键拖窗口 → 抬起），报告写文件（含配置行、靶子、步骤、位移比对、`holddrag.log` 尾巴），`--live` 时读真实设置。低级钩子回调是发给装钩子线程的，所以等待全部走 `DispatcherFrame` 的 `Pump()`、不用 `Thread.Sleep`（睡着的线程收不到回调，测出来全是假阴性）。
+- **Lua 模板去掉 49 条与原生动作重复的**：按功能逐条过了一遍 118 条内置模板，其中 **49 条「不写脚本、用软件自己的动作就能做到同一件事」** —— 14 条跟专用动作 1:1 等价（`topmost` ↔ `winPin`、`win-close` ↔ `winClose`、`text-paste` ↔ `pasteSystem`、`mouse-wheel` ↔ `wheelDown`…），35 条是「原生动作 + 一个固定参数」的启动器预设（`open-calc` = `runProgram` + `calc.exe`、`dir-*` = `openFolder` + 那个路径、`key-copy` = `customKey` + Ctrl+C…）。处理方式是 **从菜单与动作目录里收起来，代码一行没删**：`LuaTemplates.Hidden` 列着这 49 个 id，`Visible` 给菜单与目录用，`Find(id)` 照样找得到 —— id 是稳定契约，删掉会让老配置里的 `luaTpl:<id>` 直接失效。动作下拉里于是不再出现「置顶」和「脚本：窗口置顶（Lua）」这种两条一样的条目。
+- **自检 6076 → 5922 项，0 失败**：新增「短按 / 长按都不吞也不补发」「自动重复不重置阈值」「关闭 / 休眠 只留一条」「形状差得远的两条都留着」「静默期拦成功提示、放行 ✗ 开头」「设备多选往返与 DeviceAllowed 边界」「藏起来的模板仍能按 id 找到」等断言；条数比 v1.6.0 少是因为动作目录里少了 49 条重复模板（每条模板本来有 3 项目录断言）。
+- 版本号 1.6.0 → **1.6.1**。
+
+## v1.6.0 — 通知样式收归一处、暂停真的全停、搜索搜遍全软件、Lua 模板 118 条、Enter 改成「按住才算数」
+
+- **「通知样式」：所有提示共用一个外观**（设置 → 外观 → 通知样式）。以前是两套浮层 —— 鼠标手势的名称框（WGestures 2 的 `GestureLabelView`：圆角色块 + 白字 + 一圈白边）和右下角那套普通提示卡片，同一次操作能先后看到两种样子。现在新建 `src/InputPlus/Core/Settings/NotificationStyle.cs`（`ShowBorder` / `BorderWidth` / `ColorNormal` / `ColorExecuted` / `Position` / `MigrateVersion`）作为唯一来源，`NotificationStyles.Current` 每次都问当前设置（托盘「重新加载配置」换掉整份 `AppSettings` 也不会读到旧对象，自检里没宿主则回落到出厂值）。
+- **提示条跟着手势名称一起变**：`ToastWindow` 去掉图标、底色取「平时」/「执行后」两档（反馈类用执行后那档）、描边沿用名称框的 ×2 算式（字号不同、看起来是同一圈白边）、位置改用 `ScreenPlacement.PlaceByFraction` 按「跟手势名称同一个算式」落位 —— 于是提示条和手势名称永远在同一条水平线上，不再固定钉在右下角。手势名称那边 `GestureOverlayWindow` 的三处（颜色 / 描边 / 位置）改读 `NotificationStyles.Current`。
+- **手势设置里那三行搬走**：`GestureOptions` 的 `ShowLabelBorder` / `LabelBorderWidth` / `LabelColorNormal` / `LabelColorExecuted` / `GestureNamePos` 在 `SettingsStore.Normalize` 里一次性迁进 `Notifications`（`MigrateVersion` 迁移一次就置 1，之后全局设置里的值不会再被老字段压回去），手势外观卡原位留一句「名称描边、名称颜色、名称位置已经搬到「设置 → 外观 → 通知样式」」。设置页新增「通知样式」卡：描边开关 / 描边粗细（0.5~3.0）/ 平时与执行后两种底色 / 出现的高度 / 「弹一条」预览，改动立刻生效。
+- **「暂停」是真的全停**：以前只停主引擎，手势、平滑滚动、按住拖拽各自的钩子照旧装着 —— 点了暂停照样能画手势、滚轮照样缓动、按住 Enter 照样拖窗口。现在 `SetEnabled` 同时把 `GestureService.Suspended` / `SmoothScrollService.Suspended` / `HoldDragService.Suspended` 三面旗子置上（**不改用户设置**，恢复时原样装回来），并按一次 `InputSafety.ReleaseAll()` 把可能「按着没抬」的键补抬起、`MacroPlayer.Cancel()` 停掉正在播放的宏与回放。自检里按住拖拽那面旗子能让真的钩子装上又卸下（`Installed` 由 true 变 false、设置值一动不动）。
+- **「搜索」（Ctrl+K）搜遍全软件**：`Core/Search/GlobalSearch.cs` 全量重写 —— 15 个页面 + **42 条功能说明**（设置项、开关、按钮各自能被搜到）+ 动作目录 + 鼠标手势 + 宏 + Lua 脚本 + 手势菜单 + Qbar 指令与网址 + 别名 + 触发键 + 各层绑定，共 10 类来源；多词按「且」匹配，每条带英文名与同义词（「dark」「夜间」都能找到主题，「everything」能找到 Qbar 的文件搜索）。结果**只导航不执行** —— 搜索框里误按回车不该把「打开程序」跑起来。面板里 `↑↓` 选、回车跳页、`Esc` 关，底部写命中的条数。
+- **手势页「回放」挪到「画一笔」旁边**：以前要滚到详情卡里找；现在两颗按钮并排（`WrapPanel` 包住「按住鼠标键画一笔（重新录制）」+「回放」），回放行为不变（仍在笔画框里重画那一笔）。
+- **Enter 改成「按住才算数」**（按住拖拽）：新增 `AppConfig.TriggerHoldMs`（默认 **200 毫秒**，0 = 按下即接管，上限 5000）。按下触发键先吞住、起一个计时器：到点才开始接管鼠标；**没到点就松开，则用 `SendInput` 把这一下原样补发**（`dwExtraInfo` 带上 `HookEngine.MagicExtraInfo`，跟钩子自己发出的事件同一个标记，别的钩子不会把它当外来键），触发键是 Enter 就还是回车。这样出厂就能直接开「按住拖拽」，点一下回车不会变成拖窗口。触发键若在按下期间被别的路径激活（例如手势触发了按住拖拽），`BeginDrag` 会把待定的那一下转成真的接管。
+- **「只认这台键盘」**：新增 `AppConfig.Device`（空 = 所有键盘）。界面是左栏一行下拉（「所有键盘」+ 系统里带键盘的设备）；`AltDragSink.DeviceResolver` 由 `AppHost` 挂上 `_deviceTracker.ResolveDevice(vk, true, 60)`，按虚拟键反查是哪只键盘发的。取不到设备、resolver 没挂、抛异常都**放行**（fail open），不会因为枚举失败把功能锁死；比较用 `OrdinalIgnoreCase`。
+- **Lua 模板 8 → 118 条、按 10 类分组**：`Core/Scripting/LuaTemplates.cs` 重写（`LuaTemplate` 加 `Category` / `NeedsArg` / `ArgHint`），分类是窗口 / 文本 / 打开 / 文件夹 / 搜索 / 时间 / 键鼠 / 网络 / 开发者 / 示例；管理窗「从模板新建」按分类出子菜单，动作目录里照旧是 `luaTpl:<id>`。自检逐条 `LoadString` 编译 + 断言条数 ≥100、分类 ≥8、分类名在分类表里、要参数的给了参数提示。
+- **自检 4702 → 6076 项，0 失败**：新增 `TestTriggerHold`（短按补发、长按 320ms 才接管、阈值 0 立即生效、别的键盘不接管、键名大小写不敏感、resolver 返回 null 放行、`Device` 留空全放行）、`TestHoldDragPause`（暂停真卸钩子、设置不变、恢复再装回）、`TestNotificationStyle`（默认值 / 老字段迁移 / 只迁一次 / 越界收敛 / `Current` 永不为 null）、平滑滚动暂停段、Lua 模板段。
+- **文档**：README 第十一节新增「通知样式（v1.6.0）」整段（含三态表 + 迁移说明 + `settings-notifications.png`），十五节界面表三行补 v1.6.0 并在表后写清「搜索」「暂停」的语义，十四节参数表加「长按多久才算数」「只认这台键盘」，Lua 段与手势回放 bullet 同步；新增两张渲染图 `docs/screenshots/settings-notifications.png`、`docs/screenshots/search-palette.png`。
+- 版本号 1.5.4 → **1.6.0**。
+
+## v1.5.4 — 按住拖拽逐条对照 hooks.c 补齐：黑名单按标题、Snaplist、按着触发键时该吞的键都吞、按下前复查触发键
+
+- **背景**：m02961 要求「以 AltDrag 源码为准，不要自己重写」。这一版把 `hooks.c` 从头到尾对着 `Modules/HoldDrag` 逐条核了一遍（17 处可疑点），把属于「原版有、我们没有」的全部补上，属于「我们自己加的性能设计」的保留并在下面列清楚。
+- **窗口例外左边改成按窗口标题比**（`AppRules.TitleOf` + `MatchesWindows` 四参重载）：原版 `hooks.c:203-221` 是 `GetWindowText` + `GetClassName` 逐条比较，我们之前只比进程映像名，于是默认那条 `Volume Control|Windows.UI.Core.CoreWindow` 永远不可能命中，用户按原版格式填的「标题|类名」也全部失效。现在进程名、去掉 `.exe` 的进程名、窗口标题三者任一命中即可（是原版的超集）；界面文案同步改成「进程名或窗口标题|窗口类名」。
+- **补上 `[Blacklist] Snaplist`**（`AppConfig.SnapList` + `SnapEngine.SnapList`，默认值照抄 ini 五条）：`hooks.c:251` 的判据是「有 `WS_CAPTION` **或** 列在 Snaplist 里」，我们之前只有前半句，所以 Spotify / QQ 这类自绘窗口永远吸不上去。
+- **删掉「排除本进程窗口」**（`SnapEngine` 的 `OwnPid` 与那段 `GetWindowThreadProcessId` 判断）：`hooks.c` 里没有这条，属于自造。
+- **按着触发键时该吞的键都吞**：触发键已经按着（或正在拖）再按一次触发键（`hooks.c:937-942`）、拖动中按下 Shift（`hooks.c:958-968`，同时无条件把吸附档位拉到最高）、拖动中按下空格（`hooks.c:970-975`，顺手关掉本次吸附）、拖着的时候再按别的鼠标键（`hooks.c:1487-1489`）—— 这四种现在一律 `return true`，目标程序收不到。之前只吞触发键本身，于是 Shift 会被窗口当成改输入法、空格会在看图软件里翻页、多按一个鼠标键会把正在拖的窗口丢下。
+- **按下鼠标前复查触发键还按着没有**（`KeysUtil.IsPhysicallyDown` + `AltDragSink.TriggerStillHeld`，对应 `hooks.c:1491-1508`）：钩子漏掉抬起事件时（键被别的程序截走、切了前台），以前会「手早松了还在拖」，现在查出来已经不在就清状态、放行这一下点击。自检用 `AltDragSink.TriggerProbeForTest` 冒充按键状态。
+- **按住 Ctrl 拖过界不再自动最大化**（`HandleCtrl` 同时清 `OriginMaximized` 与 `OriginMaximizedAtStart`）：原版 `hooks.c:988` 只写了一个 `origin.maximized=0`，可我们的自动最大化读的是「起手时那一份」，两个都得清才等价。
+- **最大化窗口双击不再早退**（`AltDrag.DoubleClickMaximize`）：删掉 `if (Native.IsZoomed(hwnd)) return;`。`hooks.c:1628-1648` 没有这一说 —— 窗口在另一块屏上时，原版照样把还原矩形搬到光标那块屏中央再 `SW_MAXIMIZE`，删掉之后双击还原才会落在当前这块屏。
+- **自检 4691 → 4702 项，0 失败**：新增 11 条 —— 触发键物理上已松就不接管、复查不过 `TriggerHeld` 归零、复查修好后能正常起拖、拖着时按中键被吞、拖动中按 Shift 被吞、拖动中按空格被吞、Snaplist 默认值与 ini 一致、黑名单按标题命中且不再误伤别的标题。
+- **有意保留的差异（都不是「漏了」）**：触发键出厂是回车（用户明确要求，原版是 Alt）、吸附档位出厂第四档（原版 ini 是 0，我们这是界面上的一档）、吸附目标枚举缓存 120 毫秒（`hooks.c:389` 是每帧 `Enum()`，同步枚举会在缩放大窗口时把钩子堵住十几毫秒，这是 v1.5.1 修掉的老毛病）、鼠标钩子常驻（原版只在按住热键时才 `HookMouse`，改动面太大、收益只有一点空闲开销）、没有自绘的 `cursorwnd` 手形光标（`Performance.Cursor=1`，纯观感，暂不跟进）。
+- 版本号 1.5.3 → **1.5.4**。
+## v1.5.3 — 按住拖拽退回 AltDrag 原版写法：每帧同步 MoveWindow、抽帧出厂 2 / 5；从最大化或铺满屏幕开始改大小先还原成窗口
+
+- **写窗口回到 hooks.c:927 那一句**：每帧算完几何就当场 `MoveWindow(hwnd, x, y, w, h, TRUE)`，不比较几何、不在别的线程补写。v1.5.1 为了「右键不发黏」加的「`SetWindowPos(…, SWP_NOZORDER | SWP_NOACTIVATE)` + 4 毫秒阈值 + 8 毫秒定时补帧」全部删掉 —— 补帧跑在定时器线程上，和钩子线程的新帧没有先后顺序，旧坐标可能最后落地，窗口先跳到新位置再弹回旧位置，按住触发键改大小时就是用户说的「又开始变飘」。合帧带来的那点收益，抵不上把顺序搞乱。
+- **只有「原本最大化」的移动分支补首帧**（hooks.c:1661-1672）：缩放分支不起手补帧，跟原版一致。
+- **抽帧的出厂值改成 AltDrag.ini 的 2 / 5**（`AppConfig.DefaultMoveRate` / `DefaultResizeRate`，原来是我们自己定的 1 / 1）：每 2 个鼠标事件写一次窗口、缩放每 5 个写一次，缩放大窗口时钩子轻松很多。老配置走一次性迁移（`RateDefaultsVersion < 2` 且值还停在旧默认 1 的才改），用户手调过的别的值一律不动。
+- **中间带的处理回滚成原版**：v1.5.2 之前 Rebase 里有一处自造逻辑 —— 某条轴落在九宫格中间带时，改成「离得近的那条边」，AltDrag 原版是**那一轴锁死**（`posy`/`posx` 保持 `wnd.top`/`wnd.left`、宽高不变）。按「争议以 AltDrag 源码为准」的要求删掉那 33 行，回到 hooks.c:875-924。
+- **从铺满屏幕的窗口开始改大小，先变回普通窗口**（`AltDrag.SetupResize` 新增 `CoversMonitor` / `RestoreFullMonitorWindow`）：窗口没最大化、但四边盖满 `rcMonitor`（浏览器 F11、游戏的「无边框全屏」—— 这类还留着 `WS_CAPTION`，起手判定不会像真全屏那样跳过），右键一按下就先还原成工作区 68% 居中的普通窗口，再按九宫格跟手。原本最大化的那条仍是 AltDrag 的算法（`rcNormalPosition = rcMonitor` → `wnd = rcWork` → `SW_RESTORE` → `MoveWindow`），松手前窗口就已经铺满工作区。
+- **自检 4685 → 4691 项，0 失败**：新增 6 条（最大化窗口能开始改大小、一开始就退出最大化、退出后铺满工作区、拖回来确实变小、铺满屏幕的窗口一开始改大小就变回普通窗口、之后继续跟手），两条老的「光标没动就不再写窗口」改成「照 AltDrag 每帧一写」，抽帧断言改成跟 `AltDrag.ini` 的 2 / 5 对齐。
+- **--render 重出 holddrag.png / holddrag-lists.png**：左栏「移动抽帧 2 / 缩放抽帧 5」就是新出厂值；README 参数表、「跟手程度」段与图注同步。
+- 版本号 1.5.2 → **1.5.3**。
+
+## v1.5.2 — 回放回到笔画框里；撤掉手势级 .ipg 与「显示托盘图标」；Lua 脚本带 8 条开箱即用的模板；全屏只认真全屏
+
+- **演示回放就在笔画框里放**：以前点「回放」，形状会跑到光标旁边那个 220 像素的小舞台上演一遍，人还得把视线挪开去找。现在直接在详情卡的笔画框里重画 —— 笔画本身淡成 0.22 的底色，`ReplayLine` 从第一个点开始按 12 毫秒一个点往前走，末端 `ReplayHead` 是个跟着走的小圆点，画完停 0.7 秒自己收掉（`_replaySession` 计数认领，连点几次也只留最后一次）。同一个 `BuildPreviewPoints()` 既喂静态预览也喂动画，两条路径不会画得不一样。没有笔画的条目只报一句「这条手势还没有笔画可以回放」，不再假装有一条线。
+- **撤掉手势级的 .ipg 导入导出**：页面右上那两颗按钮、`Core/Gestures/GestureExport.cs`、动作表里的相关说明与自检里的 `TestGestureExportRoundTrip` 全部删掉。理由很直接 —— 手势本来就在「同步与备份」里整份走，「导出配置」勾上「鼠标手势」也能带走，再留一套单表导入导出只是多一条会走岔的路（还容易和整份恢复打架）。
+- **新建手势时笔画框里那句「还没有笔画：点「录制」画一笔，或者从别的软件导入一条。」删掉**：空框就应该是空的，下面是「按住鼠标键画一笔（重新录制）」按钮，用不着再解释一遍；`DrawPreview` 的空分支现在只清 `PatternBadge`，不写字。
+- **Lua 脚本不再只有「打开脚本管理」**：动作目录的「Lua 脚本」分类里现在**出厂自带 8 条内置模板**，装好就能直接选来绑按键 / 绑手势 / 塞手势菜单 —— 打开参数里的路径或网址（要填参数，`ip.arg` 当目标）、复制当前窗口标题、当前窗口置顶开 / 关、剪贴板转大写、剪贴板去掉多余空白、搜一搜剪贴板里的文字、记事本 + 粘贴剪贴板、新建记事本写下当前时间。模板活在 `Core/Scripting/LuaTemplates.cs` 里（`luaTpl:<id>`），不进用户设置、删不掉；管理窗多一颗「从模板新建」，复制出来的是用户自己的副本，改名字改代码都行，模板那份永远保持出厂。沙盒没变：只用 `ip.*`，碰不到 io / os。
+- **删掉「显示托盘图标」这一行**：这个选项没有意义 —— 托盘图标本来就一直在，右键它里面就有「鼠标手势：已开启 / 关闭」，同一个开关在设置里再放一份只是让用户多一个能把自己搞糊涂的地方。`GestureOptions.ShowStatusIcon`、`TrayIcon.ApplyVisibility`、手势参数卡那一行 UI、局部化键与自检断言**一并清掉，没有残留**（grep 全仓 0 命中）。
+- **「全屏程序里不接管」只认真全屏**：以前只看「前台窗口的矩形盖住整块屏幕」，于是最大化的窗口也算全屏，开着这一条就没法对最大化窗口画手势。现在 `GestureService.IsTrueFullscreen` 四条一起判：不是 `Progman` / `WorkerW` / `Shell_TrayWnd` / `SHELLDLL_DefView` 这些壳窗口、没有最小化、**不是最大化**（`IsZoomed`）、**样式里既没有 `WS_CAPTION` 也没有 `WS_THICKFRAME`**（无边框窗口 —— 游戏的「无边框全屏」正是这种），最后才是矩形盖满 `rcMonitor`（±2 像素）。结果是：真全屏和游戏的无边框全屏仍然不接手势，最大化窗口照常能用。判定抽成 `IsTrueFullscreen(FullscreenFacts, RECT, RECT)` 纯函数，自检直接喂数据，不用真开全屏程序。
+- **自检里的临时文件名改成唯一**：`SelfTest.Gestures.cs` 导 WGestures 的样例原来固定写 `%TEMP%\clp-gestures-selftest.json`，部署脚本起的一次性自检和另一轮自检撞上时会被独占，抛 `UnauthorizedAccessException` 把整轮自检中断在第 24 项（部署因此回滚过一次）。现在名字带进程号与 GUID，跑完自己删。
+- **自检 4606 → 4685 项，0 失败**（剪贴板被别的程序占着时，两条图片验证会写成「环境限制，跳过」，那一轮计 4684 项）：新增全屏判定 7 条（无边框盖满 / 少 2 像素 / 最大化 / 带边框拉满 / 只铺满工作区 / 桌面壳窗口 / 最小化）与内置模板 60 余条（模板数、id 唯一、名字说明代码非空、不碰 os / io、要参数就有参数提示、`Find` 命中与未命中、动作表里 `luaTpl:<id>` 全部在「Lua 脚本」分类且排在「打开脚本管理」前面、用户脚本全删后模板仍在）。
+- 版本号 1.5.1 → **1.5.2**。
+
+## v1.5.1 — 按住触发键缩放窗口不再发黏：写窗口不进钩子等重绘，吸附目标改后台枚举
+
+- **修手感：按住触发键用右键改窗口大小时，鼠标像被限制了速度**。根因在每帧写窗口那一步 —— 以前照 hooks.c 用 `MoveWindow(…, bRepaint: TRUE)`，它内部会 `UpdateWindow`，等于**在低级鼠标钩子的回调里同步等目标程序把这一帧重排重画完**。缩放时窗口每帧都要重排，这一等就是十几毫秒，钩子被堵住，后面的事件只能排队，表现出来就是"右键变慢、发飘"。
+- **改成 `SetWindowPos(…, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER)`**：几何照样当场生效（`MoveWindow` 内部本来就是 `SetWindowPos + 重绘`），但不再逼着目标程序立刻画完 —— 标脏交给它自己的消息循环。松手前如果还有没写出去的帧，会补一帧，窗口不会停在差几像素的地方。
+- **算出来和现在一模一样就不写**：拖右边缘时上下挪一下、或者手抖 1 像素，几何根本没变，再写一次只是让目标程序白重排一遍。
+- **写窗口太慢就自动合帧**：每帧量一次写窗口的耗时，超过 4 毫秒就跳过下一帧、8 毫秒后用**最新坐标**补一帧（被合掉的中间帧不留误差）。程序不慢的时候完全走同步写，一帧都不少；程序一直慢的时候事件全部走"合帧 + 定时补帧"，钩子线程一帧都不阻塞 —— 自己调，不用你选。
+- **吸附目标的枚举搬出钩子线程**：`SnapEngine` 以前每 50 毫秒就在钩子里同步跑一次 `EnumWindows` + 每窗 `GetWindowRect`（代码注释自己写着那次要 20~40 毫秒），缩放时每 50 毫秒就顿一下。现在改成"不可变快照 + 后台线程刷新 + 缓存 120 毫秒"：钩子线程永远读上一份，换窗口 / 换档位时也不再同步全量枚举。快照整份替换、绝不就地改，读的一侧完全免锁。
+- **自检加两条断言**：光标没动的重复事件不再写窗口（`FramesWritten` 不增），缩放时同一位置重复事件同理。4604 → **4606 项，0 失败**。原来那几条"鼠标事件一返回窗口就在新位置""手停下来窗口也停下来"照样过 —— 快的那条路还是同步写。
+- 版本号 1.5.0 → **1.5.1**。
+
+## v1.5.0 — 把 WGestures 2 剩下的八项全补齐：多步手势、Lua 脚本、手势菜单、沿边、回放、导入导出
+
+- **多步手势（最多 8 步）**：触发方式多了「多步手势」，一条手势由步骤序列组成 —— 画一笔 / 按一组键 / 滚轮四向 / 甩到某个角 / 贴着某条边。识别时先按停顿（300ms）把轨迹切段，再对步骤数、类型、方向逐项比对（笔画步仍走 WG 引擎的弧长距离），命中要求每一步都在容差内。详情卡新增步骤清单：加一步（画一笔 / 按一组键 / 滚轮 / 角落 / 贴边）、删一步、清空，行上写「画一笔 ↑」「滚轮向上」。MouseGesture.Steps 与 GestureStep 一起进设置、克隆、导入导出。
+- **沿边移动 + 边缘双击转角落**：触发方式多一项「沿边移动」（贴住某条边滑一段，感应区随「起手距离」），引擎按末点贴边 + 轨迹贴着同一条边判定；四角手势支持 420 毫秒内双击同一个角触发（IsEdgeDoubleTap）。
+- **同形手势按目标层级择优**：同一个形状同时存在于全局与某个程序时，程序专属那条胜出 —— 判据是「都在容差内，且程序专属不比全局差 0.02 以上」（MatchWithScope / ScopeRank），不再看谁先命中。
+- **手势演示回放**：详情卡「录制」旁边多了「回放」，把形状在光标旁 220 像素见方的小舞台里画一遍（12ms 一个点，末端标「已识别」），用来确认自己录的是什么形状。
+- **手势级导入导出（.ipg）**：页面右上角两颗按钮，导出当前档位的手势表（JSON，带 Steps 与作用域），导入按「签名 + 形状」去重并报「导入 N 条，跳过 M 条重复」；坏文件有明确提示，最多一次 500 条。
+- **手势菜单**：新动作分类「手势菜单」，每个菜单一条「弹出菜单」动作（外加「打开菜单管理」）。弹层是独立置顶窗口（不抢焦点、点别处就收），支持 1..9 快选、方向键换选中、回车执行、Esc 收起；条目是「动作 ID + 参数」，所以菜单里能放任意动作。管理窗三栏（菜单 / 条目 / 条目详情），支持新建、复制、删除、上下移；Settings.GestureMenus 落盘。
+- **Lua 脚本动作（MoonSharp 2.0.0）**：动作分类「Lua 脚本」，每个脚本一条动作。编辑器左列表 / 右代码 + 结果，右侧一行中文速查表；ip.* 覆盖发键、点鼠标、跑动作目录动作、开程序 / 网址 / 文件夹、读写剪贴板、窗口控制、计时与参数。沙盒是 Preset_HardSandbox | ErrorHandling（没有 io / os / require / loadfile），独立线程跑、5 秒超时、异常一律转成结果文字不外抛，输出上限 8000 字符。
+- **托盘图标开关 + 设置窗口置顶**：手势参数卡最后两行 —— 「显示托盘图标」（ShowStatusIcon，默认开，TrayIcon.ApplyVisibility 立即生效，不销毁对象）与「设置窗口置顶」（PrefWindowTopmost，默认关）。
+- **自检 4512 → 4604 项，0 失败**：多步手势模型（步上限、深拷贝、四种标题）、步骤距离（同形 / 类型 / 滚轮方向 / 按键规范化）、PickSteps、ScopeRank 与 MatchWithScope、EdgeAt / HugsEdge / CornerAt / NearestCorner（用 GetSystemMetrics 取虚拟屏边界，不写死分辨率）、.ipg 往返与去重、动作目录里 lua: / menu: 的注册与删除、两个新偏好默认值，以及 Lua 脚本（输出回传、ip.arg、ip.action 回调、沙盒拦住 os / io、语法错与运行时错不外抛、停用脚本照样登记）。
+- **--render 新增四张图**：gestures-steps.png（多步手势详情与步骤清单）、lua-scripts.png、gesture-menus.png（菜单管理三栏）、gesture-menu-popup.png（鼠标旁的弹层），进 docs/screenshots/；README 的手势节、动作分类表、功能表与界面表同步，docs/gestures-vs-wg2.md 的 2.10 / ④ 从「缺什么」改成「v1.5.0 补了什么」。
+- 版本号 1.4.2 → **1.5.0**。
+
+## v1.4.2 — 「直达链接」与「运行程序 / 命令」讲和：同一个目标框，命令行归命令
+
+- **修冲突：填一整行命令行不再被当成网址**。以前在「直达链接」目标框里写 `notepad.exe D:\笔记.txt`，识别器认不出（不是网址，也不是磁盘上现成的文件），旧代码于是硬塞给「直达网址」，而 `UrlUtil.Normalize` 又因为句子里有空格返回 null —— 最后整串被丢给 shell，弹一个看不出原因的错。现在识别多了一档 `SmartKind.Command`：首词是可执行程序（或 `cmd` / `powershell` / `wt` 这类 shell 前缀）且后面还带参数，就算命令，绑到「系统功能 → 运行程序 / 命令」上，参数原样传过去；带空格的真实文件路径仍然优先判成文件（存在性检查在命令判断之前）。
+- **两个功能不再互相清空参数**：`IsContentArgAction` 与 `SameArgFamily` 把 `runProgram` 和 `webPage` / `openFolder` / `openFile` 收进同一族 —— 绑着命令时点一下「直达链接」分类，命令行不会再被抹成空串；反过来从「移动 5 个字符」切到「运行程序 / 命令」，那个残留的 5 也会被清掉（以前会执行「运行 5」）。
+- **「直达链接」面板认得命令**：徽标显示「命令」、说明写清「按这个键就运行它，后面的参数原样传过去」、「浏览…」按钮藏起来（命令行没有可浏览的目标）。认不出又不带空格时仍沿用补 https 的老行为；带空格则明确提示怎么写，不再静默失败。
+- **对照表修了两处过度声称**（`docs/gestures-vs-wg2.md`）：prefs.json 的 `PathBorderWidth` 在 Input Plus 没有对应字段（描边粗细是 overlay 里按轨迹粗细 + 2 算的），托盘图标也一直都有（`TrayIcon.cs` 的 NotifyIcon + 手势开关菜单），缺的只是「显示 / 隐藏托盘图标」这个偏好。
+- **自检加了 15 条**：命令识别（带参数、加引号、带空格未加引号、shell 前缀）、两个反例（`hello world`、`今天 天气` 不算命令）、真实文件优先、动作映射到 runProgram、参数族互通、提示文案说清参数原样传。4497 → **4512 项，0 失败**。
+- **`--render` 新增 `keys-command.png`**（目标框里填一整行命令时的徽标、提示与隐藏的「浏览…」），且目标栏标签与两段说明都补上了「命令」；文档图进 `docs/screenshots/`。
+- 版本号 1.4.1 → **1.4.2**。
+
+## v1.4.1 — 触发键不再和手势抢鼠标；手势设置窗改成卡片版式，补上「全屏程序里不接管」
+
+- **修 bug：按住「按住拖拽」的触发键时，鼠标归它**。以前按住 Enter 再点右键想改窗口大小，右键却被鼠标手势接走，窗口没动、反而画出一道手势 —— 两套功能抢同一颗鼠标键。现在触发键一按下，手势服务就整段让路：不吞事件、不起笔画、也不改滚轮（`AltDragSink.TriggerHeld` → `HoldDragService.IsTriggerHeld` → `GestureService` 的 `OnButton` / `OnWheel` 首部门禁），松开触发键立刻恢复。自检里钉了两条断言（按住为真、松开归零）。
+- **「手势设置」窗口改成和全站一致的卡片版式**：三张白卡 —— 「开关快捷键」「手势外观」「手势参数」，卡内是 `Text.H2` 标题 + 一句 `Text.Tertiary` 说明 + 行间细线，行左标题说明、右控件；窗口底色从 `Brush.Surface` 改成 `Brush.Background`，跟设置页、按住拖拽页站在同一个视觉体系里。v1.4.0 刚搬进来时内容是平铺在白窗口底上的，只有一条细线和一个折叠头，看着像另一套软件。
+- **窗口底栏不会再被挤掉**：根容器换成 `DockPanel`，底栏先占位、内容再滚 —— 滚动区长短都不影响「关闭」。
+- **新增「全屏程序里不接管」（WGestures 2 的 `DisableInFullscreen`）**：手势参数卡最后一行，出厂关。前台窗口（视频、游戏、浏览器 F11）的矩形盖住所在显示器整块屏幕时不接手势；桌面 `Progman`/`WorkerW` 与任务栏不算。判定只做几次很轻的 User32 查询，异常一律当「不是全屏」，不会因为一次查询失败就把手势卡死。
+- **渲染工具修了对话框截图裁边**：`RenderTools.Save(Window, …)` 现在把根元素的 `Margin` 算进 `RenderTargetBitmap` 的尺寸里 —— 以前对话框底栏会被裁掉半截（`Render(root)` 把布局偏移一起算进去了）。
+- 自检全过、0 失败（**4497 项**，比上一版多两条触发键门禁断言）；`--render` 新增 `gestures-prefs-params.png`（手势设置窗口滚到底、参数卡整张），和 `gestures-prefs.png` 一起换进 `docs/screenshots/`；README 的手势一节与界面表同步。
+- 版本号 1.4.0 → **1.4.1**。
+## v1.4.0 — 手势设置独立成窗，Qbar 接上 Everything 官方 SDK
+
+- **「鼠标手势」页瘦身**：「启用手势」开关挪到页面右上角、紧挨着「录制新手势」左边，开关旁边多了一颗齿轮。手势外观、手势参数、手势开关热键全部搬进齿轮打开的「**手势设置**」窗口 —— 以前这一页上半部分被两块折叠面板撑得很长，列表得往下翻才看得见，现在打开页面就是列表。
+- **手势开关热键可以自己定了（默认空着）**：窗口第一行「开关快捷键」，点「录制」按一下组合键就设定，点「清除」还回去。**出厂是空的 —— 不占用任何组合键**，跟按住拖拽那个默认 Enter 的做法不一样（那个功能出厂也是关的，不会抢键）。
+- **Qbar 的文件搜索改走 Everything 官方 SDK**（`Everything64.dll` 的 IPC，不是另起 `es.exe` 进程）：同一个查询通常几毫秒回来，`ext:pdf`、`size:>1mb`、`path:` 这些 Everything 自己的语法原样可用；结果按完整路径去磁盘核实一遍，索引里已经删掉的条目不会出现在下拉里。
+- **找不到 Everything 也不影响用**：DLL 自动找（`Program Files\Everything` → 注册表安装位置 → 正在运行的 Everything 进程所在目录 → `InputPlus.exe` 旁边），客户端没开就退回 `es.exe`（便携版只带命令行工具的情况），两者都不行还有本地索引兜底。
+- **「Qbar 面板」右栏多了一张「文件搜索」卡**：一行状态（**已连接 Everything 1.4.1.1026** / **Everything 没在后台运行** / **没有检测到 Everything**）+ 找到的 DLL 路径 + 「用 Everything 搜全盘文件」开关（出厂勾上）+ 「重新检测」「启动 Everything」「下载 Everything」三个按钮。关掉开关就完全不碰 Everything，进程也不会被拉起来。
+- **SDK 的坑记一笔**：`Everything_SetSearchW` / `GetResultFullPathNameW` 是 Unicode 接口，用委托绑函数指针时默认按 ANSI 编组 —— 症状是「不报错、永远 0 条」。两个委托都显式写了 `CharSet.Unicode`。
+- **顺手把 WGestures 2 的对照写进 `docs/gestures-vs-wg2.md`**（202 行）：识别内核逐项对齐，另列出还差的四样（多步手势、托盘状态图标 + 全屏禁用、手势级导入导出、手势菜单）。
+- 自检全过、0 失败（4495 项）；`--render` 新增 `gestures-prefs.png`（手势设置窗口）与 `qbar-files.png`（文件搜索卡），这两张和 `gestures.png`、`qbar.png` 一起换进 `docs/screenshots/`。
+- 版本号 1.3.1 → **1.4.0**。
+
+## v1.3.1 — 「程序例外」搬进右栏「当前状态」，改成一键一条的清单
+
+- **「程序例外」不再占左栏那段文本框**：整块挪进右边「当前状态」卡片，位置在状态行下面、分隔线之后。顶上还是那两个按钮（「选择程序…」挑 exe、「点选窗口」直接点屏幕上的窗口），下面一行一条列出来 —— 进程名一行，副行「完全不接管」，行尾「删除」一点就拿掉。一条都没有的时候是那句「还没有例外程序：所有程序都用左边的全局参数。」，版式照「平滑滚动」页右栏那版做，两个页面的例外清单现在长得一样。
+- **手输没丢**：清单下面那只小框照样能一行一个往里写，支持 `*` 通配，敲完即生效、清单跟着刷新；按钮挑来的、手输进去的是同一份数据。
+- **左栏最底下只剩「窗口例外」**：原来「程序例外 / 窗口例外」两块合成一块，标题下面直接是那只文本框，说明改成「进程名|窗口类名，如 *|TaskSwitcherWnd。程序例外在右边「当前状态」里。」，另外补了分隔线，和上面的抽帧参数分开。
+- **渲染与文档**：`--render` 里那张 `holddrag-lists.png` 的取景改成「左栏滚到底 + 右栏停在卡片顶」，一张图里两边都看得见；`docs/screenshots/holddrag.png`、`holddrag-lists.png` 换成新版面的渲染图，README 参数表与图注同步改。
+- 自检全过、0 失败（4495 项）。
+- 版本号 1.3.0 → **1.3.1**。
+
+## v1.3.0 — 「按住拖拽」定稿：触发键可自定义，界面与文档补齐
+
+- **「按住拖拽」留在正式版里**：内核就是 AltDrag 的 `hooks.c`（v1.2.12 搬进来的那一份），默认触发键 **Enter 回车**，页面上点一下「Enter 回车」就能换成任意单键 —— 空格、Shift、Ctrl、Alt、F1~F24、鼠标侧键都行，旁边的「默认」一键回到 Enter。出厂关，右上开关一开就生效，不用重启。
+- **触发键选择窗跟随主题**：`TriggerKeyWindow` 补上 `Theme.WindowChrome.AttachTo(this)`，和其它对话框一致 —— 深色主题下不再顶着一根系统白条。
+- **README 第十四节按现在的实现重写**：删掉 v1.1 旧引擎的描述（外框、HUD、方向键分屏、Ctrl+Z、按程序规则都已随 v1.2.12 一起删了），参数表换成页面上真实存在的那 14 项；首屏功能表与「界面」页表里那两行同步改掉；`docs/screenshots/holddrag.png`、`holddrag-lists.png` 换成新界面的渲染图。
+- 自检全过、0 失败（4493 项；另有 2 项取词断言因为这次是后台跑、抢不到前台焦点而自动跳过，与功能无关）。
+- 版本号 1.2.12 → **1.3.0**。
+
 ## v1.2.12 — 「按住拖拽」整体重做：内核换成 AltDrag 的 hooks.c，触发键可自定义
 
 - **旧引擎整套删掉**（18 个文件）：工作线程消息队列（`DragWorker`）、协调器（`Coordinator`）、拖拽引擎（`DragEngine`）、窗口写入器（`WindowActions`）、触发状态机、程序规则、抖动触发、键盘平铺、布局存储、逐帧轨迹账本与诊断、以及覆盖层那一套（外框、HUD、提示气泡、分层位图窗口）。跟着一起消失的是：画在窗口周围的外框、拖动时的大小胶囊、Ctrl+Z 撤销、方向键分屏、布局快照、按程序规则、黑名单，以及 `drag-diag.txt` / `drag-trace.txt` 两份日志。

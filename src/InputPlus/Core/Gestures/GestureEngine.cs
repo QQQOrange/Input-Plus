@@ -34,11 +34,29 @@ public static class GestureEngine
     /// <summary>模板点数上限（引擎硬约束：参数侧超过 128 点直接判"不可比"）。</summary>
     public const int MaxTemplatePoints = WgStroke.MaxPoints;
 
+    /// <summary>
+    /// 轨迹校正开关。默认开：模板和手绘在 <see cref="StrokeOf"/> 里过同一个
+    /// <see cref="StrokeCanonicalizer"/>，画歪的竖线会被吸成和模板同一条竖线。
+    /// 自检会临时关掉它，用"不校正"的距离做对照。
+    /// </summary>
+    internal static bool CanonicalizeEnabled = true;
+
+    /// <summary>
+    /// 模板指纹：原始轨迹 + 美化模板 + 美化档位 + 方向串。
+    /// 任何一项变了都要重建 —— 尤其是 <see cref="MouseGesture.Beauty"/>：
+    /// 重新美化后 Path 没动，但模板形状换了，缓存必须跟着换。
+    /// </summary>
+    private readonly record struct Signature(
+        int PathCount,
+        int PathHash,
+        int BeautyCount,
+        int BeautyHash,
+        string BeautyLevel,
+        string Pattern);
+
     private sealed class Template
     {
-        public int PathCount;
-        public int PathHash;
-        public string Pattern = "";
+        public Signature? Sig;
         public WgPath? Built;
 
         /// <summary>模板本身是不是闭环（闭环才有"换个起点/反着绕"的容错）。</summary>
@@ -51,16 +69,27 @@ public static class GestureEngine
     private static readonly ConditionalWeakTable<MouseGesture, Template> Cache =
         new ConditionalWeakTable<MouseGesture, Template>();
 
-    /// <summary>存档轨迹的指纹（点数 + 内容哈希 + 方向串）；任何一项变了都要重建模板。</summary>
-    private static void Fingerprint(MouseGesture g, out int count, out int hash, out string pattern)
+    /// <summary>
+    /// 存档轨迹 + 美化模板的指纹（点数 + 内容哈希 + 档位 + 方向串）。
+    /// 美化模板参与进来，是因为它现在是识别用的形状：重新美化 / 改强度都必须让缓存失效。
+    /// </summary>
+    private static Signature Fingerprint(MouseGesture g)
     {
         var path = g.Path;
+        var beauty = g.Beauty;
+        return new Signature(
+            path?.Count ?? 0, HashOf(path),
+            beauty?.Count ?? 0, HashOf(beauty),
+            g.BeautyLevel ?? "",
+            g.Pattern ?? "");
+    }
+
+    private static int HashOf(List<int>? values)
+    {
         int h = 17;
-        int n = path?.Count ?? 0;
-        for (int i = 0; i < n; i++) h = unchecked(h * 31 + path![i]);
-        count = n;
-        hash = h;
-        pattern = g.Pattern ?? "";
+        int n = values?.Count ?? 0;
+        for (int i = 0; i < n; i++) h = unchecked(h * 31 + values![i]);
+        return h;
     }
 
     /// <summary>
@@ -70,13 +99,17 @@ public static class GestureEngine
     public static WgPath? TemplateFor(MouseGesture g) => EntryFor(g)?.Built;
 
     /// <summary>
-    /// 一条手势的几何形状（归一化到 1000 空间的折线）：优先用存档轨迹；
-    /// 没有轨迹（早期版本存的、或别处导入没带点阵的配置）就把方向串画成等长折线。
-    /// 两种形状大小口径一致 —— 都过了一遍 <see cref="GestureMath.Normalize"/>。
+    /// 一条手势的几何形状（归一化到 1000 空间的折线），优先级：
+    /// ① 美化模板（<see cref="MouseGesture.Beauty"/>）—— 创建时过了语义守门，和原轨迹是同一个手势，
+    ///    用它当模板，触发时"画得糙一点"反而更容易命中；
+    /// ② 存档轨迹（老数据 / 关掉美化）；
+    /// ③ 方向串合成的等长折线（早期版本、导入时没带点阵的配置）。
+    /// 三种形状口径一致 —— 都过了一遍 <see cref="GestureMath.Normalize"/>。
     /// </summary>
     public static List<GestureMath.Pt>? ShapeOf(MouseGesture? g)
     {
         if (g == null) return null;
+        if (g.HasBeauty) return g.BeautyPoints();
         if (g.HasPath) return g.Points();
         var sketch = GesturePattern.Sketch(g.Pattern);
         return sketch.Count >= 2 ? sketch : null;
@@ -87,13 +120,10 @@ public static class GestureEngine
     {
         if (g == null) return null;
 
-        int count, hash;
-        string pattern;
-        Fingerprint(g, out count, out hash, out pattern);
+        var sig = Fingerprint(g);
 
         var tpl = Cache.GetValue(g, _ => new Template());
-        if (tpl.PathCount == count && tpl.PathHash == hash && tpl.Pattern == pattern)
-            return tpl;
+        if (tpl.Sig is { } old && old.Equals(sig)) return tpl;
 
         var shape = ShapeOf(g);
         WgStroke? stroke = shape == null ? null : StrokeOf(shape);
@@ -102,9 +132,7 @@ public static class GestureEngine
         if (stroke != null && stroke.Count >= 2 && stroke.Count <= MaxTemplatePoints)
             built = WgPath.FromStroke(stroke);
 
-        tpl.PathCount = count;
-        tpl.PathHash = hash;
-        tpl.Pattern = pattern;
+        tpl.Sig = sig;
         tpl.Built = built;
 
         /* 闭环对齐用"圈那一段"：画圈、画 Q 都是"圈 + 尾巴"，尾巴不该跟着转，
@@ -137,17 +165,23 @@ public static class GestureEngine
 
     /// <summary>
     /// 把一条形状（手绘轨迹或手势模板）加工成引擎要的那一笔：
-    /// 平滑 → 按尺度丢抖动 → 归一化 → 18° 合并。
+    /// 轨迹校正 → 平滑 → 按尺度丢抖动 → 归一化 → 18° 合并。
     ///
     /// **两侧必须走同一条路**：模板也是人手画下来存着的，里面同样带着手抖。
     /// 只平滑手绘那一侧，就会变成"干净直线 vs 抖动的模板"，距离反而更大 ——
     /// 这个坑真的踩过：平滑上线后，直线手势全好了，而带手抖模板的
-    /// 「最大化」从 3/3 掉到 0/3。
+    /// 「最大化」从 3/3 掉到 0/3。校正是同一个道理，而且要求更硬：
+    /// 模板和手绘必须过**同一个函数**（见 <see cref="StrokeCanonicalizer"/>）。
     /// </summary>
     private static WgStroke? StrokeOf(IReadOnlyList<GestureMath.Pt> shape)
     {
         double extent = GestureMath.Extent(shape);
         if (extent < 1) return null;                              // 没动过的轨迹不是一笔
+
+        /* 轨迹校正放在这里，是因为模板（EntryFor）和手绘（DrawnStroke）都从这条路走 ——
+         * 一个入口，只校正一次，不会双重校正；缓存指纹仍按原始 Path 算，不受影响。
+         * 守门不通过时 Canonicalize 原样返回，所以这一步对识别是"只赚不赔"。 */
+        if (CanonicalizeEnabled) shape = StrokeCanonicalizer.Canonicalize(shape);
 
         /* 先按弧长重采样成等距点，再平滑。
          *

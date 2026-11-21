@@ -2,13 +2,20 @@
 #pragma warning disable CS0649, CS8632, CS0414, CA1416
 // HoldDrag · Core/AltDrag.cs
 //
-// 这里是 AltDrag（altdrag-master）拖拽核心的逐条移植。凡是"怎么算位置、怎么吸附、
-// 怎么分区、最小/最大尺寸从哪来"这类问题，一律以 hooks.c 为准：
-//   MouseMove        hooks.c:632-928
-//   MoveSnap/ResizeSnap hooks.c:481-580
-//   Enum/MoveSnap    hooks.c:225-479
-//   起拖             hooks.c:1491-1877
-// 对照注释里的行号可以直接翻回原实现。Input-Plus 自己多出来的东西（外框、HUD、抖动、
+// 拖拽核心的几何与状态机。移植来源有两个，都以各自的 hooks.c 为准：
+//
+//   · AltSnap —— https://github.com/RaymondGillibert/AltSnap
+//     Copyright (C) 2022 Raymond Gillibert；上游 AltDrag Copyright (C) 2015 Stefan Sundin
+//     以 GNU GPL v3（或更新版本）发布，见仓库里的 THIRD-PARTY-NOTICES.md
+//     本文件里带「AltSnap」的行号都指 AltSnap-main/hooks.c：
+//       九宫格分区        hooks.c:3776-3856（SetEdgeAndOffsetCF / SetEdgeToClosestSide / SetEdgeAndOffset）
+//       WM_SIZING 回弹    hooks.c:1410-1465（LetWindowKickBack）
+//       锚点按比例重算    hooks.c:1969-2018（RestoreOldWin）
+//       缩放锁轴/居中     hooks.c:2310-2331
+//   · AltDrag（altdrag-master，同样 GPLv3）—— 更早那一版逐条移植留下的框架，
+//     行号指那份 hooks.c：MouseMove 632-928 / MoveSnap·ResizeSnap 481-580 / Enum 225-479 / 起拖 1491-1877
+//
+// 两份 hooks.c 的行号不能混用。Input-Plus 自己多出来的东西（外框、HUD、抖动、
 // 规则、撤销）不在这里，那些与几何无关。
 
 using System;
@@ -146,6 +153,44 @@ internal sealed class AltState
 
 	/// <summary>hooks.c 的 state.ignorectrl：自己补发的 Ctrl 不算"用户按着 Ctrl"。</summary>
 	public bool IgnoreCtrl;
+
+	/// <summary>
+	/// MouseMoveNow 里那个 static RECT wnd（hooks.c:2216-2228 / 2370-2382）。
+	///
+	/// 这是 AltSnap 与「每帧 GetWindowRect」最本质的差别，也是「跟手」的根：
+	/// 第一帧读一次真实矩形，之后每一帧都在自己上一帧写下去的目标矩形上加增量，
+	/// 写完再把目标矩形存回来。目标窗口要是夹了尺寸、晚一拍、或者压根没动，
+	/// 我们的坐标系也不会跟着漂 —— 光标走多远，窗口就走多远。
+	/// </summary>
+	public Native.RECT Track;
+
+	/// <summary>Track 有没有初始化过（第一帧才 GetWindowRect）。</summary>
+	public bool TrackValid;
+
+	/// <summary>
+	/// 起手那一刻的光标位置（屏幕坐标）。
+	///
+	/// 为什么留着：边带抓点默认只动一条边（九宫格语义），用户从窗口边上「斜着」拖的时候
+	/// 那一轴完全不动，看起来就是「只能上下或左右、不能同时」（m05425）。
+	/// <see cref="AltDragCore.AdoptFollowAxis"/> 拿它判断「斜着拖了多远」，够了就把另一轴收养过来。
+	/// </summary>
+	public Native.POINT StartPoint;
+
+	/// <summary><see cref="StartPoint"/> 有没有记过（只有 Rebase 之后才有效）。</summary>
+	public bool StartValid;
+
+	/// <summary>拖动中按下 Shift 的那一刻光标在哪（hooks.c:2837 state.shiftpt）。四向扩张时锁横轴。</summary>
+	public Native.POINT ShiftPoint;
+
+	/// <summary>拖动中按下 Ctrl 的那一刻光标在哪（hooks.c:2892 state.ctrlpt）。四向扩张时锁纵轴。</summary>
+	public Native.POINT CtrlPoint;
+
+	/// <summary>Shift 按着：四向扩张时横轴锁死（hooks.c:2311）。</summary>
+	public bool LockX;
+
+	/// <summary>Ctrl 按着：四向扩张时纵轴锁死（hooks.c:2312）。</summary>
+	public bool LockY;
+
 }
 
 internal static class AltDragCore
@@ -345,6 +390,9 @@ internal static class AltDragCore
 			// hooks.c:1710：MoveWindow(state.hwnd, wnd.left, wnd.top, origin.width, origin.height, TRUE)
 			Native.MoveWindow(hwnd, wnd.Left, wnd.Top, wnd.Width, wnd.Height, true);
 		}
+		// hooks.c:1746 只有"最大化"和"不是最大化"两条路 —— 没有第三种"铺满显示器就缩到 68%"。
+		// 那种自创分支（CoversMonitor/RestoreFullMonitorWindow）会让浏览器 F11、贴边全屏的窗口
+		// 一按住就缩成一小块，看着就像"调整功能失灵"，删掉。
 		Rebase(alt, move: false, pt, wnd);
 		SetResizeCursor(alt.EdgeX, alt.EdgeY);
 	}
@@ -391,34 +439,50 @@ internal static class AltDragCore
 	/// 按"当前窗口矩形"重新算一次 offset / 被拖的边。起拖时用，降级落账后也用它校正。
 	/// 移动：offset = 光标 - 左上角；缩放：38%/62% 九宫格，CENTER 记绝对坐标、RIGHT/BOTTOM 记到边的距离。
 	/// </summary>
-	internal static void Rebase(AltState alt, bool move, Native.POINT pt, Native.RECT wnd)
+	internal static void Rebase(AltState alt, bool move, Native.POINT pt, Native.RECT wnd, AppConfig? cfg = null)
 	{
 		if (alt == null)
 		{
 			return;
 		}
+		// hooks.c:2216-2228：起手这一帧读到的真实矩形就是本次拖动的基准（Track）。
+		alt.Track = wnd;
+		alt.TrackValid = true;
+		alt.StartPoint = pt;
+		alt.StartValid = true;
 		if (move)
 		{
 			alt.OffsetX = pt.X - wnd.Left;
 			alt.OffsetY = pt.Y - wnd.Top;
 			return;
 		}
-		int num = wnd.Width;
-		int num2 = wnd.Height;
-		if (num <= 0)
-		{
-			num = 1;
-		}
-		if (num2 <= 0)
-		{
-			num2 = 1;
-		}
-		if ((double)(pt.X - wnd.Left) < (double)num * SplitLow)
+		// hooks.c:3839-3856 SetEdgeAndOffset：先按 CenterFraction 切一刀（默认 24% 中间带），
+		// 再按 SidesFraction 切第二刀（默认 255 = 按最接近的那条边）。
+		// 这两个参数就是 AltSnap 相对 AltDrag 的算法升级：九宫格不再是死板的 38%/62%。
+		SetEdgeAndOffset(alt, wnd, pt, cfg ?? DefaultOptions);
+		alt.OriginBottom = wnd.Bottom;
+	}
+	/// <summary>参数缺省时用一份出厂配置（几何算法只读 CenterFraction/SidesFraction 这几个字段）。</summary>
+	private static readonly AppConfig DefaultOptions = new AppConfig();
+
+	/// <summary>
+	/// hooks.c:3776-3810 SetEdgeAndOffsetCF：把窗口切成九块，判定被拖的是哪条边，
+	/// 同时记下光标到那条边（或角）的 offset。centerfrac = 中间带的百分比。
+	/// </summary>
+	private static void SetEdgeAndOffsetCF(AltState alt, Native.RECT wnd, int centerfrac, Native.POINT pt)
+	{
+		int w = Math.Max(1, wnd.Width);
+		int h = Math.Max(1, wnd.Height);
+		int sideS = (100 - centerfrac) / 2;
+		int centeR = 100 - sideS;
+		int dx = pt.X - wnd.Left;
+		int dy = pt.Y - wnd.Top;
+		if (dx < w * sideS / 100)
 		{
 			alt.EdgeX = DragEdge.Left;
-			alt.OffsetX = pt.X - wnd.Left;
+			alt.OffsetX = dx;
 		}
-		else if ((double)(pt.X - wnd.Left) < (double)num * SplitHigh)
+		else if (dx < w * centeR / 100)
 		{
 			alt.EdgeX = DragEdge.Center;
 			alt.OffsetX = pt.X;
@@ -428,12 +492,12 @@ internal static class AltDragCore
 			alt.EdgeX = DragEdge.Right;
 			alt.OffsetX = wnd.Right - pt.X;
 		}
-		if ((double)(pt.Y - wnd.Top) < (double)num2 * SplitLow)
+		if (dy < h * sideS / 100)
 		{
 			alt.EdgeY = DragEdgeY.Top;
-			alt.OffsetY = pt.Y - wnd.Top;
+			alt.OffsetY = dy;
 		}
-		else if ((double)(pt.Y - wnd.Top) < (double)num2 * SplitHigh)
+		else if (dy < h * centeR / 100)
 		{
 			alt.EdgeY = DragEdgeY.Center;
 			alt.OffsetY = pt.Y;
@@ -443,19 +507,26 @@ internal static class AltDragCore
 			alt.EdgeY = DragEdgeY.Bottom;
 			alt.OffsetY = wnd.Bottom - pt.Y;
 		}
-		// Input-Plus 的偏离（用户可见的一条）：AltDrag 在"只有一条轴落在中间带"时把那一轴锁死，
-		// 抓左边框中段上下拖只改宽、不改高（hooks.c:1700-1710 的九宫格原样透传）。用户按的是
-		// "按住触发键随便拖，两个方向都能调"，所以把锁死的那一轴换成"离得近的那条边"：
-		// 上半→上边，下半→下边，左半→左边，右半→右边。两轴都落在中间带时仍走 AltDrag 的
-		// 四向对称扩张，那条手感不动。
-		bool xCenter = alt.EdgeX == DragEdge.Center;
-		bool yCenter = alt.EdgeY == DragEdgeY.Center;
-		if (xCenter && !yCenter)
+		// hooks.c:3808-3809：右边/下边到起手窗口的距离 —— LEFT/TOP 分支靠它把另一边钉住。
+		alt.OriginRight = wnd.Right;
+		alt.OriginBottom = wnd.Bottom;
+	}
+
+	/// <summary>hooks.c:3813-3838 SetEdgeToClosestSide：拿对角线判最近的那条边。</summary>
+	internal static void SetEdgeToClosestSide(AltState alt, Native.RECT wnd, Native.POINT pt)
+	{
+		int w = Math.Max(1, wnd.Width);
+		int h = Math.Max(1, wnd.Height);
+		int x = pt.X - wnd.Left;
+		int y = pt.Y - wnd.Top;
+		bool tr = (long)y * w <= (long)h * x;
+		bool tl = (long)(h - y) * w >= (long)h * x;
+		if (tr)
 		{
-			if ((pt.X - wnd.Left) * 2 < num)
+			if (tl)
 			{
-				alt.EdgeX = DragEdge.Left;
-				alt.OffsetX = pt.X - wnd.Left;
+				alt.EdgeY = DragEdgeY.Top;
+				alt.OffsetY = y;
 			}
 			else
 			{
@@ -463,21 +534,201 @@ internal static class AltDragCore
 				alt.OffsetX = wnd.Right - pt.X;
 			}
 		}
-		else if (yCenter && !xCenter)
+		else if (tl)
 		{
-			if ((pt.Y - wnd.Top) * 2 < num2)
+			alt.EdgeX = DragEdge.Left;
+			alt.OffsetX = x;
+		}
+		else
+		{
+			alt.EdgeY = DragEdgeY.Bottom;
+			alt.OffsetY = wnd.Bottom - pt.Y;
+		}
+	}
+
+	/// <summary>
+	/// hooks.c:3839-3856 SetEdgeAndOffset：按 CenterFraction（中间带）把窗口切成九宫格。
+	///
+	/// <para>和上游的差别（**这是修 bug 的一刀，别再改回去**）：上游切第二刀（SidesFraction）
+	/// 再调 SetEdgeToClosestSide，而出厂 SidesFraction=255 —— 换算出来的边带把整块窗口都盖住，
+	/// 第二刀切完两个轴全是 Center，SetEdgeToClosestSide 又只挑一个轴，结果**四角拖拽永远退化
+	/// 成单轴**：拖窗口角只能改宽、或者只能改高，宽高没法同时变（用户报的
+	/// 「右键调整大小只能左右或上下，不能两者同时进行」就是这个）。</para>
+	///
+	/// <para>现在只切一刀：落在边带里的轴各算各的边，于是九宫格是真的九宫格 ——
+	/// 两条边都命中 = 四角，宽高同时变；只命中一条 = 拖边，只变一个方向；
+	/// 一条都没命中 = 中间带，交给 <see cref="ApplyResizeCenter"/>（出厂 1 = 四向扩张）。</para>
+	///
+	/// <para><see cref="AppConfig.SidesFraction"/> 保留字段只为 ini 往返兼容，不再参与选边：
+	/// 它原来的语义（"按最近的那条边"）本身就容不下"角"这个状态。</para>
+	/// </summary>
+	internal static void SetEdgeAndOffset(AltState alt, Native.RECT wnd, Native.POINT pt, AppConfig cfg)
+	{
+		SetEdgeAndOffsetCF(alt, wnd, cfg.CenterFraction, pt);
+	}
+
+	/// <summary>
+	/// 边带抓点也让两轴一起动：拖到一定程度后，把「中间带」的那一轴收养到最近的一条边。
+	///
+	/// <para>为什么要有（m05425）：九宫格的边带各占 38%（CenterFraction=24），一块 1200x800 的窗口
+	/// 只有正中 288x192 那块是「四向扩张」。用户抓天花板附近随手一拖，落点八成在边带里 ——
+	/// 于是只有一条边跟着动，看起来就是「右键缩放有时候只能上下、或者只能左右」。
+	/// 边带在界面上是不可见的，用户不可能知道自己在哪一格，所以按**手势**纠正：
+	/// 只在某一轴拖出 ResizeAxesThreshold 像素（斜着拖的意图）时，才把那一轴收养成对应的边；
+	/// 沿着边直着拖（垂直方向几乎不动）仍然是单轴缩放，不打扰原来的手感。</para>
+	///
+	/// <para>收养时必须**当场重算 Offset**（Right 用 wnd.Right - pt.X、Left 用 pt.X - wnd.Left）：
+	/// 中间带留在 OffsetX 里的是绝对坐标，直接拿去当边带的 offset 会让这一帧宽度翻倍 ——
+	/// 上一版的 AdoptAxis 补丁就是栽在这里，表现为「那一轴在整个拖动里失灵」。</para>
+	/// </summary>
+	/// <returns>true = 这一帧刚收养了一轴，调用方应刷新缩放光标。</returns>
+	internal static bool AdoptFollowAxis(AltState alt, Native.POINT pt, Native.RECT wnd, AppConfig cfg)
+	{
+		if (alt == null || !alt.StartValid || !cfg.ResizeBothAxes)
+		{
+			return false;
+		}
+		// 只处理「一条边 + 中间带」：角（两轴都是边）与正中间（四向扩张）本来就两轴都动。
+		if (alt.EdgeX == DragEdge.Center && alt.EdgeY != DragEdgeY.Center)
+		{
+			int dx = pt.X - alt.StartPoint.X;
+			if (Math.Abs(dx) < cfg.ResizeAxesThreshold)
 			{
-				alt.EdgeY = DragEdgeY.Top;
-				alt.OffsetY = pt.Y - wnd.Top;
+				return false;
+			}
+			if (dx > 0)
+			{
+				alt.EdgeX = DragEdge.Right;
+				alt.OffsetX = wnd.Right - pt.X;
 			}
 			else
+			{
+				alt.EdgeX = DragEdge.Left;
+				alt.OffsetX = pt.X - wnd.Left;
+			}
+			return true;
+		}
+		if (alt.EdgeY == DragEdgeY.Center && alt.EdgeX != DragEdge.Center)
+		{
+			int dy = pt.Y - alt.StartPoint.Y;
+			if (Math.Abs(dy) < cfg.ResizeAxesThreshold)
+			{
+				return false;
+			}
+			if (dy > 0)
 			{
 				alt.EdgeY = DragEdgeY.Bottom;
 				alt.OffsetY = wnd.Bottom - pt.Y;
 			}
+			else
+			{
+				alt.EdgeY = DragEdgeY.Top;
+				alt.OffsetY = pt.Y - wnd.Top;
+			}
+			return true;
 		}
-		alt.OriginRight = wnd.Right;
-		alt.OriginBottom = wnd.Bottom;
+		return false;
+	}
+	/// <summary>
+	/// hooks.c:4002-4044 ActionResize 的收尾：抓到正中间时按 ResizeCenter 决定干什么。
+	/// 返回 true = 这个分支改写了边（actionMove 为 true 时调用方要把动作换成移动）。
+	/// </summary>
+	internal static bool ApplyResizeCenter(AltState alt, Native.RECT wnd, Native.POINT pt, AppConfig cfg, out bool actionMove)
+	{
+		actionMove = false;
+		if (alt.EdgeX != DragEdge.Center || alt.EdgeY != DragEdgeY.Center)
+		{
+			return false;
+		}
+		switch (cfg.ResizeCenter)
+		{
+		case 0:
+			// 固定改右下：把「居中」改回 RIGHT/BOTTOM，offset 按当前矩形重设。
+			alt.EdgeX = DragEdge.Right;
+			alt.EdgeY = DragEdgeY.Bottom;
+			alt.OffsetX = wnd.Right - pt.X;
+			alt.OffsetY = wnd.Bottom - pt.Y;
+			return true;
+		case 2:
+			// 转移动：这次缩放整个换成移动。
+			actionMove = true;
+			return true;
+		case 3:
+			// 按对角线选最近边。
+			SetEdgeToClosestSide(alt, wnd, pt);
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// hooks.c:1410-1465 LetWindowKickBack：写窗口之前先把这一帧的矩形塞进 WM_SIZING，
+	/// 问目标窗口「按这个方向缩放你打算怎么摆」。终端/控制台这类按字符格对齐的窗口会返回
+	/// 一个对齐过的新矩形，用它覆盖我们算的 —— 否则每帧都在和窗口自己的对齐打架，看着就是抖。
+	/// </summary>
+	internal static bool LetWindowKickBack(nint hwnd, AltState alt, ref Native.RECT rc, bool moveOnly)
+	{
+		if (hwnd == IntPtr.Zero || moveOnly)
+		{
+			return false;
+		}
+		if (alt.EdgeX == DragEdge.Center && alt.EdgeY == DragEdgeY.Center)
+		{
+			// 四向扩张两个轴都在动，WMSZ_* 里没有对应值（原版这里同样返回 FALSE）。
+			return false;
+		}
+		int flag = WmszFlag(alt.EdgeX, alt.EdgeY);
+		if (flag == 0)
+		{
+			return false;
+		}
+		nint buf = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Native.RECT)));
+		try
+		{
+			Marshal.StructureToPtr(rc, buf, fDeleteOld: false);
+			if (Native.SendMessageTimeoutW(hwnd, Native.WM_SIZING, (nint)flag, buf, Native.SMTO_ABORTIFHUNG, 64u, out var _) == IntPtr.Zero)
+			{
+				return false;
+			}
+			Native.RECT back = Marshal.PtrToStructure<Native.RECT>(buf);
+			if (back.Width < 1 || back.Height < 1)
+			{
+				return false;
+			}
+			if (back.Left == rc.Left && back.Top == rc.Top && back.Width == rc.Width && back.Height == rc.Height)
+			{
+				return false;
+			}
+			rc = back;
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Log.Error(ex);
+			return false;
+		}
+		finally
+		{
+			Marshal.FreeHGlobal(buf);
+		}
+	}
+
+	/// <summary>hooks.c:1435-1445 的 map[3][3]：九宫格 → WM_SIZING 的 wParam。</summary>
+	private static int WmszFlag(DragEdge x, DragEdgeY y)
+	{
+		return (x, y) switch
+		{
+			(DragEdge.Left, DragEdgeY.Top) => Native.WMSZ_TOPLEFT,
+			(DragEdge.Right, DragEdgeY.Top) => Native.WMSZ_TOPRIGHT,
+			(_, DragEdgeY.Top) => Native.WMSZ_TOP,
+			(DragEdge.Left, DragEdgeY.Bottom) => Native.WMSZ_BOTTOMLEFT,
+			(DragEdge.Right, DragEdgeY.Bottom) => Native.WMSZ_BOTTOMRIGHT,
+			(_, DragEdgeY.Bottom) => Native.WMSZ_BOTTOM,
+			(DragEdge.Left, _) => Native.WMSZ_LEFT,
+			(DragEdge.Right, _) => Native.WMSZ_RIGHT,
+			_ => 0,
+		};
 	}
 
 	/// <summary>
@@ -752,6 +1003,11 @@ internal static class AltDragCore
 	/// hooks.c:875-924：缩放几何。全部以"当前窗口矩形"为基准，不用起点矩形 ——
 	/// 这样目标程序夹了尺寸、或者分块重画（PuTTY 那类）时，下一帧会自动把误差吸收掉。
 	/// </summary>
+	/// <summary>
+	/// hooks.c:2322-2354：缩放几何。基准是 Track（上一帧写下去的目标矩形），
+	/// 不是每帧重读的 GetWindowRect —— 目标窗口夹尺寸、晚一拍、分块重画时，
+	/// 自维护的坐标系不会跟着漂，光标走多远窗口就走多远（「跟手」的另一半）。
+	/// </summary>
 	internal static void ResizeGeometry(AltState alt, Native.POINT pt, Native.RECT wnd, ref int posx, ref int posy, ref int wndwidth, ref int wndheight)
 	{
 		WndDbEntry entry = alt.Entry;
@@ -761,17 +1017,42 @@ internal static class AltDragCore
 		}
 		if (alt.EdgeX == DragEdge.Center && alt.EdgeY == DragEdgeY.Center)
 		{
-			// 中间：四向扩张（左右上下一起长），每帧把 offset 归到当前光标
-			int num = pt.X - alt.OffsetX;
-			int num2 = pt.Y - alt.OffsetY;
-			posx = wnd.Left - num;
-			posy = wnd.Top - num2;
-			wndwidth = wnd.Width + 2 * num;
-			wndheight = wnd.Height + 2 * num2;
-			alt.OffsetX = pt.X;
-			alt.OffsetY = pt.Y;
+			// hooks.c:2310-2331：正中间 = 四向扩张。Shift 锁横轴、Ctrl 锁纵轴（AltSnap 独有的两条）。
+			int px = pt.X;
+			int py = pt.Y;
+			if (alt.LockX)
+			{
+				px = alt.ShiftPoint.X;
+			}
+			else if (alt.LockY)
+			{
+				py = alt.CtrlPoint.Y;
+			}
+			int dx = px - alt.OffsetX;
+			int dy = py - alt.OffsetY;
+			int w = wnd.Width + 2 * dx;
+			int h = wnd.Height + 2 * dy;
+			posx = wnd.Left - dx;
+			posy = wnd.Top - dy;
+			// hooks.c:2318-2327：撞到最小/最大尺寸时按差值把窗口摆回正中，
+			// 否则一到极限就整块窗口朝一边挤（用户看到的「调整失灵」）。
+			int clampedW = Clamp(w, alt.MinTrack.X, alt.MaxTrack.X);
+			posx += (w - clampedW) / 2;
+			wndwidth = clampedW;
+			int clampedH = Clamp(h, alt.MinTrack.Y, alt.MaxTrack.Y);
+			posy += (h - clampedH) / 2;
+			wndheight = clampedH;
+			if (!alt.LockX)
+			{
+				alt.OffsetX = px;
+			}
+			if (!alt.LockY)
+			{
+				alt.OffsetY = py;
+			}
 			return;
 		}
+		// hooks.c:2333-2354：逐边算，LEFT/TOP 分支用 origin.right/bottom 把另一边钉住。
 		if (alt.EdgeY == DragEdgeY.Top)
 		{
 			wndheight = Clamp(wnd.Bottom - pt.Y + alt.OffsetY, alt.MinTrack.Y, alt.MaxTrack.Y);
@@ -802,6 +1083,9 @@ internal static class AltDragCore
 			posx = wnd.Left;
 			wndwidth = pt.X - posx + alt.OffsetX;
 		}
+		// hooks.c:2353-2354：两个方向最后都过一遍夹取。
+		wndwidth = Clamp(wndwidth, alt.MinTrack.X, alt.MaxTrack.X);
+		wndheight = Clamp(wndheight, alt.MinTrack.Y, alt.MaxTrack.Y);
 	}
 
 	/// <summary>
@@ -818,12 +1102,8 @@ internal static class AltDragCore
 		{
 			return;
 		}
-		// hooks.c:1630-1644：双击时如果窗口已经最大化，这里什么都不做（再 SetWindowPlacement 一次
-		// 等于把还原矩形重写一遍，Aero 双击还原时就回不到原来那块地方了）。
-		if (Native.IsZoomed(hwnd))
-		{
-			return;
-		}
+		// hooks.c:1628-1648 没有"已经最大化就早退"这一说：窗口在另一块屏上时，
+		// 原版照样把还原矩形搬到光标那块屏中央再 SW_MAXIMIZE（双击后还原落在这块屏）。
 		nint num = Native.MonitorFromWindow(hwnd, 2u);
 		nint num2 = Native.MonitorFromPoint(pt, 2u);
 		if (num2 != IntPtr.Zero && num != num2)

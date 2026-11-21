@@ -239,8 +239,9 @@ public static class GestureDefaults
          *    用不上 —— 删掉（贴边滚轮那两条音量手势是另一个 Kind，不动）。
          * ② runProgram / openUrl 是隐藏的兼容动作：界面里选不到、执行还经常失败
          *    （任务管理器写成 "cmd.exe /c taskmgr"，微信写成 D:\software\Weixin\Weixin.exe）。
-         *    能对上内置动作的就换过去：taskmgr → 打开任务管理器，纯 exe 路径 → 直达文件，
-         *    网址 → 直达网址；认不出的保持原样，免得把用户的动作改坏。
+         *    能对上内置动作的就换过去：taskmgr → 打开任务管理器，文档路径 → 直达文件，
+         *    网址 → 直达网址；认不出的保持原样，免得把用户的动作改坏
+         *    （exe 路径现在也算"认得出"—— 收窄后的「运行命令」本来就能启动它）。
          * ③ search:<key> 的 Arg 如果是一整条 URL 模板，会被当成搜索词拼进地址里 —— 清掉。 */
         if (options.BuiltinsVersion < 9)
         {
@@ -265,7 +266,12 @@ public static class GestureDefaults
                         g.Arg = "";
                         changed = true;
                     }
-                    else if (LooksLikeExePath(cmd))
+                    /* 裸 exe 路径**不再**改走「直达文件」：动作收窄成「运行命令」之后，
+                     * exe 本来就是它能直接启动的东西（UseShellExecute=false 建进程），
+                     * 改过去等于让打开文件的入口去干运行程序的事。
+                     * 真正要救的是"把 .docx / .pdf 当程序填"的老手势 —— 那些在新语义下
+                     * 会被拒绝（提示改用直达文件），迁到「直达文件」才和原来一样双击打开。 */
+                    else if (LooksLikeDocumentPath(cmd))
                     {
                         CoreLog.Info($"[手势] 「{g.Name}」改成「直达文件」：{cmd}");
                         g.Action = "openFile";
@@ -427,19 +433,29 @@ public static class GestureDefaults
     }
 
     /// <summary>
-    /// 参数是不是"一条裸 exe 路径"（不带命令行参数）：只有这种才敢换成「直达文件」。
-    /// 带参数的命令（cmd.exe /c taskmgr）换过去会把参数丢掉，反而更糟。
+    /// 参数是不是"一个存在、且不是可执行文件"的本地文件（.docx / .pdf / .mp4…）。
+    ///
+    /// 只给老手势迁移用：这类参数以前靠 UseShellExecute 交给关联程序打开，
+    /// 收窄后的「运行命令」会拒绝它（并提示改用「直达文件」），所以启动时换成「直达文件」。
+    /// 判断依据是文件真实存在 + 扩展名不是程序/脚本，而不是"看起来像路径"：
+    /// 带空格的一整行可能是命令（notepad.exe D:\笔记.txt），猜错就会把命令改成打开文件。
     /// </summary>
-    private static bool LooksLikeExePath(string? cmd)
+    private static bool LooksLikeDocumentPath(string? cmd)
     {
-        if (string.IsNullOrWhiteSpace(cmd)) return false;
-        string s = cmd.Trim().Trim('"').Trim();
-        /* 路径里可以有空格（C:\Program Files\BookxSoftware\BookxNote Pro\BookxNotePro.exe），
-         * 开头结尾的引号也已经去掉了。仍然要求"以 .exe 结尾"：
-         * 一旦后面跟着参数（cmd.exe /c taskmgr、"x.exe" -arg）就不是裸路径，
-         * 换成「直达文件」会把参数丢掉，那种保持原样。 */
-        if (s.IndexOf('"') >= 0) return false;
-        return s.Length > 4 && s.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+        string s = (cmd ?? "").Trim().Trim('"').Trim();
+        if (s.Length == 0) return false;
+        try
+        {
+            s = Environment.ExpandEnvironmentVariables(s);
+            if (!System.IO.File.Exists(s)) return false;
+            string ext = System.IO.Path.GetExtension(s);
+            foreach (string program in new[] { ".exe", ".com", ".bat", ".cmd" })
+            {
+                if (ext.Equals(program, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>

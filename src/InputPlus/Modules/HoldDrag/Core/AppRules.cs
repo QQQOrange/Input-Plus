@@ -82,6 +82,24 @@ internal static class AppRules
 		return pid == (uint)Environment.ProcessId;
 	}
 
+	/// <summary>窗口标题（hooks.c:213 GetWindowText）。原版 Blacklist 的左边写的就是标题。</summary>
+	internal static string TitleOf(nint hwnd)
+	{
+		try
+		{
+			StringBuilder stringBuilder = new StringBuilder(256);
+			if (Native.GetWindowTextW(hwnd, stringBuilder, stringBuilder.Capacity) <= 0)
+			{
+				return string.Empty;
+			}
+			return stringBuilder.ToString();
+		}
+		catch (Exception)
+		{
+			return string.Empty;
+		}
+	}
+
 	/// <summary>命中任何一条黑名单就不接管。null/空配置 = 只走原版默认的那几条。</summary>
 	internal static bool IsBlacklisted(AppConfig cfg, nint hwnd)
 	{
@@ -90,7 +108,7 @@ internal static class AppRules
 		{
 			return true;
 		}
-		return MatchesWindows(cfg.WindowBlacklist, text, text2);
+		return MatchesWindows(cfg.WindowBlacklist, text, TitleOf(hwnd), text2);
 	}
 
 	/// <summary>[Blacklist] ProcessBlacklist：一行（或逗号）一条进程映像名，支持 * 与 ?。</summary>
@@ -106,8 +124,19 @@ internal static class AppRules
 		return false;
 	}
 
-	/// <summary>[Blacklist] Blacklist：一条 "进程|类名"，两边都可以是空或 *。</summary>
 	internal static bool MatchesWindows(string? list, string process, string className)
+	{
+		return MatchesWindows(list, process, string.Empty, className);
+	}
+
+	/// <summary>
+	/// [Blacklist] Blacklist：一条 "左边|类名"，两边都可以是空或 *。
+	///
+	/// 左边在原版里是**窗口标题**（hooks.c:213-221：GetWindowText + GetClassName 逐条整串比较），
+	/// 我们额外也认进程映像名 —— 是超集，所以原版 ini 里 "Volume Control|Windows.UI.Core.CoreWindow"
+	/// 这种不写进程名的条目照样命中，界面上按"进程名|窗口类名"填的也照样管用。
+	/// </summary>
+	internal static bool MatchesWindows(string? list, string process, string title, string className)
 	{
 		foreach (string item in Rows(list))
 		{
@@ -118,7 +147,7 @@ internal static class AppRules
 			{
 				text = item.Substring(0, num).Trim();
 			}
-			if (Wildcard(text, process) || Wildcard(text, StripExe(process)))
+			if (Wildcard(text, process) || Wildcard(text, StripExe(process)) || Wildcard(text, title))
 			{
 				if (Wildcard(text2, className))
 				{

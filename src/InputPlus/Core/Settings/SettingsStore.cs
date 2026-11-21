@@ -1,6 +1,7 @@
 using InputPlus.Core.Security;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using InputPlus.Core.Gestures;
 using InputPlus.Core.Input;
 using InputPlus.Core.Settings;
 
@@ -100,7 +101,6 @@ public static class SettingsStore
         target.BuiltinWebVersion = copy.BuiltinWebVersion;
         target.BuiltinRunVersion = copy.BuiltinRunVersion;
         target.CapsloxDefaultsVersion = copy.CapsloxDefaultsVersion;
-        target.WindowSlots = copy.WindowSlots;
     }
 
     /// <summary>所有绑定列表（各层的 Keys + 老的顶层 Keys）。</summary>
@@ -1241,6 +1241,10 @@ public static class SettingsStore
          * 洗成空串就是"没填"，所有判断都走匿名路径。 */
         s.Global.GitHubToken = Core.Update.UpdateService.NormalizeToken(s.Global.GitHubToken);
         s.Qbar.ListCount = Math.Clamp(s.Qbar.ListCount, 3, 12);
+        /* 空面板的"最近打开"条数：0 = 不显示；上限和界面滑杆一致。
+         * 老配置里没有这个字段时，反序列化会保留 QbarOptions 的默认值 5；
+         * 这里只夹范围，绝不能把 0 当"没设置"改写成 5 —— 0 是用户主动选的合法值。 */
+        s.Qbar.RecentCount = Math.Clamp(s.Qbar.RecentCount, 0, 20);
 
         /* 平滑滚动：老配置里没有这一段（null），手改也可能写出越界值。
          * 不夹的话 0 会造成"一格滚 0 像素"—— 表现是"滚轮彻底失灵"，
@@ -1258,15 +1262,96 @@ public static class SettingsStore
             if (rule.StepSize is { } stepSize) rule.StepSize = Math.Clamp(stepSize, 10, 1000);
             if (rule.AnimationTime is { } animation) rule.AnimationTime = Math.Clamp(animation, 40, 2000);
         }
+        /* 手势名称 / 提示条（v1.6.3）：v1.6.0 曾把两者合并成一套「通知样式」，
+         * 用下来两边的需求并不一样（名称框跟着手势、提示条贴死右下角），所以又拆回两套。
+         *
+         * 搬运分两档，靠 GestureLabel.MigrateVersion 记方向：
+         *   · 0 + 合并期那份 MigrateVersion ≥ 1 → v1.6.0 的用户：值搬给名称框，
+         *     同时复制一份给提示条 —— 它当时吃的就是这套外观，不复制等于把用户调过的样子丢掉；
+         *   · 0 + 合并期那份没动过 → v1.6.0 之前的配置，五个字段还散在 GestureOptions 上；
+         *     那时的提示条走主题色、没有可调项，所以保持出厂值不动。
+         * 搬完置 2：以后用户改了哪一份，都不会再被老字段压回去。 */
+        s.GestureOptions ??= new GestureOptions();
+        s.GestureLabel ??= new GestureLabelStyle();
+        s.Toasts ??= new ToastStyle();
+        if (s.GestureLabel.MigrateVersion < GestureLabelStyle.MigrateVersionCurrent)
+        {
+            var merged = s.Notifications;
+            if (merged != null && merged.MigrateVersion >= NotificationStyle.MigrateVersionCurrent)
+            {
+                s.GestureLabel.ShowBorder = merged.ShowBorder;
+                s.GestureLabel.BorderWidth = merged.BorderWidth;
+                s.GestureLabel.Position = merged.Position;
+                if (!string.IsNullOrWhiteSpace(merged.ColorNormal))
+                    s.GestureLabel.ColorNormal = merged.ColorNormal;
+                if (!string.IsNullOrWhiteSpace(merged.ColorExecuted))
+                    s.GestureLabel.ColorExecuted = merged.ColorExecuted;
+
+                /* 提示条只吃「平时」那一档：它没有「执行完」的第二种状态。 */
+                s.Toasts.ShowBorder = merged.ShowBorder;
+                s.Toasts.BorderWidth = merged.BorderWidth;
+                if (!string.IsNullOrWhiteSpace(merged.ColorNormal))
+                    s.Toasts.Color = merged.ColorNormal;
+            }
+            else
+            {
+                var legacyStyle = s.GestureOptions;
+                s.GestureLabel.ShowBorder = legacyStyle.ShowLabelBorder;
+                s.GestureLabel.BorderWidth = legacyStyle.LabelBorderWidth;
+                if (!string.IsNullOrWhiteSpace(legacyStyle.LabelColorNormal))
+                    s.GestureLabel.ColorNormal = legacyStyle.LabelColorNormal;
+                if (!string.IsNullOrWhiteSpace(legacyStyle.LabelColorExecuted))
+                    s.GestureLabel.ColorExecuted = legacyStyle.LabelColorExecuted;
+                s.GestureLabel.Position = legacyStyle.GestureNamePos;
+            }
+            s.GestureLabel.MigrateVersion = GestureLabelStyle.MigrateVersionCurrent;
+        }
+
+        /* 合并期那份只读：搬完就丢掉。留着它，配置里会同时存在两代数据，
+         * 用户手改配置时根本分不清该改哪一段（而且 Save 会把 null 省略，
+         * 下次写文件时这一段自然消失）。 */
+        s.Notifications = null;
+
+        // 手改配置能写出越界值：描边 0 会让白边彻底消失（看起来像「设置没生效」），
+        // 位置越界会把名称框钉在屏幕外。
+        s.GestureLabel.BorderWidth = Math.Clamp(s.GestureLabel.BorderWidth, 0.5, 3);
+        s.GestureLabel.Position = Math.Clamp(s.GestureLabel.Position, 0, 1);
+        s.Toasts.BorderWidth = Math.Clamp(s.Toasts.BorderWidth, 0.5, 3);
+
+        /* 提示条外观回退到 v1.6.0 之前（v1.0~v1.2 的旧观感）：
+         * 老配置若三项都还是 v1.6.3 的出厂值（白边开 / 1.0 / #00000030），
+         * 说明用户从没调过，搬回「跟随主题 + 不画可调白边 + 0.5」；
+         * 只要动过其中任意一项就原样保留 —— 用户挑过的样子优先。
+         * MigrateVersion 保证只搬一次，之后用户再调回同样的值也不会被压回去。 */
+        if (s.Toasts.MigrateVersion < ToastStyle.MigrateVersionCurrent)
+        {
+            if (s.Toasts.ShowBorder
+                && Math.Abs(s.Toasts.BorderWidth - 1.0) < 0.0001
+                && string.Equals(s.Toasts.Color, Wg2Color.LabelColorNormal, StringComparison.OrdinalIgnoreCase))
+            {
+                s.Toasts.ShowBorder = false;
+                s.Toasts.BorderWidth = 0.5;
+                s.Toasts.Color = "";
+            }
+            s.Toasts.MigrateVersion = ToastStyle.MigrateVersionCurrent;
+        }
+
+        var labelStyleDefaults = GestureLabelStyle.Default;
+        if (string.IsNullOrWhiteSpace(s.GestureLabel.ColorNormal))
+            s.GestureLabel.ColorNormal = labelStyleDefaults.ColorNormal;
+        if (string.IsNullOrWhiteSpace(s.GestureLabel.ColorExecuted))
+            s.GestureLabel.ColorExecuted = labelStyleDefaults.ColorExecuted;
+        if (string.IsNullOrWhiteSpace(s.Toasts.Color))
+            s.Toasts.Color = ToastStyle.Default.Color;
 
         /* 已删除的动作：老配置里可能还绑着，统一改成"什么都不做"。
          *
          * 不这么做的话，按下去会提示"未知动作：translate" —— 用户不知道
          * 是软件坏了还是功能被删了。翻译功能整块移除，这里把它清干净。
          *
-         * 窗口槽位（winbindActivate1~10 / winbindBind1~10）同理：槽位机制
-         * 早已移除，但老配置里还留着这些 id。不清掉的话每按一次就写两条
-         * WARN 日志（"未知动作" / "动作未执行"），实际行为却是什么都不做 ——
+         * 窗口槽位（winbindActivate1~10 / winbindBind1~10 / bindWindowSlot）同理：
+         * 槽位机制已经整块删除，但老配置里还留着这些 id。不清掉的话每按一次
+         * 就写两条 WARN 日志（"未知动作" / "动作未执行"），实际行为却是什么都不做 ——
          * 用户看到的只有"这个键按了没反应"。 */
         int retiredActions = 0;
         foreach (var list in AllBindingLists(s))
@@ -1278,7 +1363,8 @@ public static class SettingsStore
                 bool retired =
                     string.Equals(b.Action, "translate", StringComparison.OrdinalIgnoreCase) ||
                     b.Action.StartsWith("winbindActivate", StringComparison.OrdinalIgnoreCase) ||
-                    b.Action.StartsWith("winbindBind", StringComparison.OrdinalIgnoreCase);
+                    b.Action.StartsWith("winbindBind", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(b.Action, "bindWindowSlot", StringComparison.OrdinalIgnoreCase);
 
                 if (!retired) continue;
                 b.Action = "doNothing";
@@ -1424,8 +1510,7 @@ public static class SettingsStore
     }
 
     /// <summary>
-    /// 把老默认表升级到 Capslox 3.0 语义：<c>cx-shift-*</c>、<c>cx-alt-数字</c> 槽位捕获、
-    /// 以及 Alt 层"一次走 5 格"（老默认是 3 格）。
+    /// 把老默认表升级到 Capslox 3.0 语义：<c>cx-shift-*</c>，以及 Alt 层"一次走 5 格"（老默认是 3 格）。
     ///
     /// ## 只改"还是老默认值"的那些键
     ///
@@ -1513,13 +1598,6 @@ public static class SettingsStore
         Upgrade("caps_lalt_i", "selectUp", "3", "selectUp", "5");
         Upgrade("caps_lalt_k", "selectDown", "3", "selectDown", "5");
         Upgrade("caps_lalt_dot", "selectWordRight", "3", "selectWordRight", "5");
-
-        // cx-alt-1..0 = 把当前窗口记到槽位 N（老默认是 doNothing）
-        for (int slot = 1; slot <= 10; slot++)
-        {
-            string combo = "caps_lalt_" + (slot == 10 ? "0" : slot.ToString());
-            Upgrade(combo, "doNothing", "", "bindWindowSlot", slot.ToString());
-        }
 
         // ---- 2) Capslox 3.0 才有的 combo：只在缺失时补 ----
         AddIfMissing("caps_shift_v", "paste1", "");
@@ -1814,7 +1892,6 @@ new() { Key = "notepad", Value = "notepad.exe", Comment = "记事本" },
             new() { Key = "spotify", Value = "Spotify.exe", Comment = "Spotify" },
             new() { Key = "steam", Value = "steam.exe", Comment = "Steam" },
             new() { Key = "epic", Value = "EpicGamesLauncher.exe", Comment = "Epic Games" },
-            new() { Key = "everything", Value = "Everything.exe", Comment = "Everything" },
             new() { Key = "powertoys", Value = "PowerToys.exe", Comment = "PowerToys" },
             new() { Key = "snipaste", Value = "Snipaste.exe", Comment = "Snipaste" },
             new() { Key = "sharex", Value = "ShareX.exe", Comment = "ShareX" },
@@ -2287,17 +2364,16 @@ new() { Key = "notepad", Value = "notepad.exe", Comment = "记事本" },
         B("caps_lalt_x", "cut2"), B("caps_lalt_y", "selectUp", "30"), B("caps_lalt_z", "doNothing"),
 
         B("caps_lalt_backquote", "doNothing"),
-        /* cx-alt-1..0 = bind_window slot1..10：把**当前前台窗口**记到槽位 N。
+        /* cx-alt-1..0 曾经是「把当前前台窗口记到槽位 N」（bindWindowSlot）。
          *
-         * 动作只有一个 bindWindowSlot，槽位号走参数 —— 不是 20 个固定槽位动作。
-         * 它做的事是把第 1 层的 caps_<N> 写成普通的 winBind + 该 exe，
-         * 于是 Caps+数字 的切换 / 循环 / 没开就启动全部复用 ActivateExe。
-         * 默认表里 caps_1..0 仍是 doNothing（还不知道用户要绑哪个程序）。 */
-        B("caps_lalt_1", "bindWindowSlot", "1"), B("caps_lalt_2", "bindWindowSlot", "2"),
-        B("caps_lalt_3", "bindWindowSlot", "3"), B("caps_lalt_4", "bindWindowSlot", "4"),
-        B("caps_lalt_5", "bindWindowSlot", "5"), B("caps_lalt_6", "bindWindowSlot", "6"),
-        B("caps_lalt_7", "bindWindowSlot", "7"), B("caps_lalt_8", "bindWindowSlot", "8"),
-        B("caps_lalt_9", "bindWindowSlot", "9"), B("caps_lalt_0", "bindWindowSlot", "10"),
+         * v1.3.1 起整套窗口绑定管理（10 个槽位 + 那个动作）按用户要求彻底删除：
+         * 想用一个键打开某个程序，直接给它绑「直达文件」动作就行，不用先记槽位。
+         * 这里退回 doNothing —— 绝不留下指向已删除动作的死键。 */
+        B("caps_lalt_1", "doNothing"), B("caps_lalt_2", "doNothing"),
+        B("caps_lalt_3", "doNothing"), B("caps_lalt_4", "doNothing"),
+        B("caps_lalt_5", "doNothing"), B("caps_lalt_6", "doNothing"),
+        B("caps_lalt_7", "doNothing"), B("caps_lalt_8", "doNothing"),
+        B("caps_lalt_9", "doNothing"), B("caps_lalt_0", "doNothing"),
         B("caps_lalt_minus", "doNothing"), B("caps_lalt_equal", "doNothing"),
         B("caps_lalt_backspace", "deleteAll"), B("caps_lalt_tab", "doNothing"),
         B("caps_lalt_leftSquareBracket", "deleteToPageBeginning"), B("caps_lalt_rightSquareBracket", "doNothing"),

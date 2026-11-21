@@ -1,6 +1,9 @@
 using InputPlus.Core.Gestures;
+using InputPlus.Core.Qbar.Search;
 using System.Text.Json.Serialization;
 using InputPlus.Core.Input;
+
+using InputPlus.Core.Scripting;
 
 namespace InputPlus.Core.Settings;
 
@@ -477,7 +480,15 @@ public sealed class GlobalOptions
     ///
     /// 只有确实要操作提权窗口时才需要打开它。
     /// </summary>
-    public bool RunAsAdmin { get; set; } = false;
+    /// <summary>
+    /// 默认以管理员身份运行。
+    ///
+    /// 为什么默认开：本地搜索要读全盘索引、提权打开程序也是常用动作，
+    /// 每次点"以管理员运行"都弹一次 UAC 更烦。代价是键盘钩子在管理员进程里
+    /// 收不到普通权限窗口的按键（Windows 的 UIPI 限制），所以 <see cref="ElevationHelper"/> 保留
+    /// 了 CLP_SKIP_ELEVATE=1 逃生开关，设置页也能一键取消。
+    /// </summary>
+    public bool RunAsAdmin { get; set; } = true;
 
     /// <summary>
     /// 自动更新完成后是否弹出「已更新到 x.x.x」提示。
@@ -1158,6 +1169,14 @@ public sealed class QbarOptions
     public bool ShowIcons { get; set; } = true;
 
     /// <summary>
+    /// 空面板最上面先列几条"最近打开的项目"。
+    ///
+    /// 0 = 不显示。只在**直接唤出** Qbar（没有关键字、没有指定搜索引擎）时出现；
+    /// 带引擎标签或已经输入关键字时列表是搜索/候选结果，不掺最近项。
+    /// </summary>
+    public int RecentCount { get; set; } = 5;
+
+    /// <summary>
     /// 面板一出来就先切到英文输入。
     ///
     /// 引擎关键字（bd / gg / zhihu）只能用英文字母打，而中文输入法下敲下去是拼音，
@@ -1174,11 +1193,67 @@ public sealed class QbarOptions
     public bool SwitchBackOnEngine { get; set; }
 
     /// <summary>
+    /// 是否在 Qbar 里显示搜索联想。
+    ///
+    /// 默认开：联想只在“已选定搜索引擎 + 有关键词”时出现，平时完全不占地方；
+    /// 关掉之后也不会影响任何现有搜索路径，只是不再发联想请求。
+    /// </summary>
+    public bool SuggestEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 联想词来自哪家：auto / baidu / google / bing。
+    ///
+    /// auto = 跟随当前搜索源（看标签里 URL 的域名），这样用户选“百度”搜索时
+    /// 联想也自然是百度的词，不用再配一次。存字符串而不是枚举，是为了
+    /// 以后加引擎时老配置文件仍然能读（未知值一律按 auto 处理）。
+    /// </summary>
+    public string SuggestEngine { get; set; } = "auto";
+
+    /// <summary>
+    /// 最多显示几条联想（1..10）。
+    ///
+    /// 面板高度是 SizeToContent，联想多了会把结果列表往下挤；
+    /// 默认 6 条和结果列表的默认条数一致，视觉上比较稳。
+    /// </summary>
+    public int SuggestMax { get; set; } = 6;
+
+    /// <summary>
+    /// 单次联想请求的超时（毫秒，200..5000）。
+    ///
+    /// 联想是“打字过程中的辅助”，超过 800ms 用户基本已经打完下一个词了，
+    /// 再回来也没意义；所以默认值取得比一般网络请求短。
+    /// </summary>
+    public int SuggestTimeoutMs { get; set; } = 800;
+
+    /// <summary>
+    /// 联想结果的内存缓存时长（分钟，0..1440）。
+    ///
+    /// 同一个词删一个字再打回来很常见，缓存能省掉重复请求；
+    /// 0 = 不缓存，每次都发请求（调试接口时用）。
+    /// </summary>
+    public int SuggestCacheMinutes { get; set; } = 10;
+
+    /// <summary>
     /// 固定在 Qbar 空面板/搜索里的文件、文件夹、网址或程序。
     /// 和搜索/程序/网址三张表分开：这里不参与“关键字+空格”的标签解析，
     /// 只是把常用目标直接摆在候选里，输入名称就能命中。
     /// </summary>
     public List<QEntry> Pinned { get; set; } = new();
+
+    /// <summary>
+    /// 文件搜索语义层（过滤器 / 优先级 / 命令 / 拼音 / 调试面板）的全局开关。
+    /// 挂在 Qbar 下面而不是 AppSettings 顶层：它只影响 Qbar 面板里的文件搜索。
+    /// </summary>
+    public QbarSearchOptions Search { get; set; } = new();
+
+    /// <summary>过滤器表（doc:/pic:/... 内置项也在这里落一份副本，用户改了同名的会覆盖内置）。</summary>
+    public List<QbarFilter> Filters { get; set; } = new();
+
+    /// <summary>优先级规则（不含内置规则包，内置包由代码生成）。</summary>
+    public List<QbarPriorityRule> Priority { get; set; } = new();
+
+    /// <summary>用户命令表（内置命令由代码生成，这里只存用户新增/覆盖的）。</summary>
+    public List<QbarCommand> Commands { get; set; } = new();
 }
 
 public sealed class AppSettings
@@ -1224,13 +1299,6 @@ public sealed class AppSettings
     public SecurityOptions Security { get; set; } = new();
     public List<KeyBinding> Keys { get; set; } = new();
 
-    /// <summary>
-    /// <c>Caps+1~0</c> 记住的 10 个窗口槽位（Capslox 的 <c>cx-alt-1..0</c> 语义）。
-    ///
-    /// 老配置里没有这一段 → 反序列化后是空表，不影响任何现有绑定；
-    /// 真正生效的绑定仍然在第 1 层的 <c>caps_&lt;N&gt;</c> 上（见 WindowSlotBinder）。
-    /// </summary>
-    public List<WindowSlot> WindowSlots { get; set; } = new();
 
     public List<QEntry> Search { get; set; } = new();
     public List<QEntry> Run { get; set; } = new();
@@ -1248,6 +1316,15 @@ public sealed class AppSettings
 
     /// <summary>宏列表。</summary>
     public List<Macro> Macros { get; set; } = new();
+
+    /// <summary>
+    /// Lua 脚本（v1.5.0）。每个脚本在动作目录里是一条「Lua 脚本」分类的动作，
+    /// 可以像普通动作一样绑到按键或手势上；脚本里能调用软件已有的动作与输入能力。
+    /// </summary>
+    public List<LuaScript> Scripts { get; set; } = new();
+
+    /// <summary>手势菜单（v1.5.0）：一个菜单一列条目，每个条目指向一个已有动作。</summary>
+    public List<GestureMenuDef> GestureMenus { get; set; } = new();
 
     /// <summary>
     /// 原键替换层：**不需要触发键**的一组绑定。
@@ -1288,6 +1365,29 @@ public sealed class AppSettings
 
     /// <summary>手势功能的全局选项（开关、轨迹、阈值）。</summary>
     public GestureOptions GestureOptions { get; set; } = new();
+
+    /// <summary>
+    /// 手势名称框的外观（设置落在「鼠标手势 → 手势设置」）。
+    ///
+    /// v1.6.0 曾把它和右下角提示条合并成一套，用下来两边要的东西并不一样，
+    /// 于是又拆成两份各自独立的配置 —— 改名字框的底色不该把提示条也带着变。
+    /// 老配置里的值由 SettingsStore.Normalize 迁移过来（见 <see cref="GestureLabelStyle.MigrateVersion"/>）。
+    /// </summary>
+    public GestureLabelStyle GestureLabel { get; set; } = new();
+
+    /// <summary>
+    /// 右下角提示条的外观：描边 + 一种底色，位置固定贴右下角。
+    /// 与 <see cref="GestureLabel"/> 互不影响。
+    /// </summary>
+    public ToastStyle Toasts { get; set; } = new();
+
+    /// <summary>
+    /// v1.6.0 合并期的「通知样式」，**只读兼容字段**：老配置里的值由
+    /// <see cref="SettingsStore.Normalize"/> 搬到 <see cref="GestureLabel"/> 与
+    /// <see cref="Toasts"/>，搬完置 null（null 不会被写回文件）。
+    /// 新代码一律用上面两份，不要再读这里。
+    /// </summary>
+    public NotificationStyle? Notifications { get; set; }
 
     /// <summary>
     /// 平滑滚动的参数（字段与默认值照 SmoothScroll 的 AppOptions）。

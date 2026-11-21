@@ -1740,7 +1740,14 @@ public static partial class SelfTest
             s.Global.Snippets.Add(new Snippet { Trigger = "/mail", Text = "a@b.com", Comment = "常用邮箱" });
             s.Global.Snippets.Add(new Snippet { Trigger = "/tel", Text = "123", Comment = "手机号" });
 
-            var hits = InputPlus.Core.Search.GlobalSearch.Build(s, x => x);
+            /* 动作目录按一条样例喂进去：正式运行是 AppHost.Actions.Items，
+             * 自检里没必要为了建目录去构造整个动作上下文。 */
+            var actionSamples = new List<InputPlus.Core.Actions.ActionInfo>
+            {
+                new("selftest.snapLeft", "窗口", "把窗口贴到左半屏", "窗口控制"),
+            };
+
+            var hits = InputPlus.Core.Search.GlobalSearch.Build(s, x => x, actionSamples);
             Check("搜索：索引里有页面", hits.Any(h => h.Kind == "页面"), "");
             Check("搜索：索引里有别名", hits.Count(h => h.Kind == "别名") == 2, "");
             Check("搜索：别名显示不带前缀", hits.Any(h => h.Kind == "别名" && h.Title == "mail"), "");
@@ -1755,6 +1762,46 @@ public static partial class SelfTest
 
             Check("搜索：无匹配返回空", InputPlus.Core.Search.GlobalSearch.Query(hits, "zzzz不存在的词").Count == 0, "");
             Check("搜索：空查询给默认列表", InputPlus.Core.Search.GlobalSearch.Query(hits, "").Count > 0, "");
+
+            /* v1.6.0：索引范围从"十二个页面"扩到"整个软件"。
+             * 下面这几条守的就是"搜不到功能"这个反馈 —— 加功能忘了补索引，这里会红。 */
+            Check("搜索：三个新页面都在索引里", new[] { "gestures", "scroll", "holddrag" }
+                .All(p => hits.Any(h => h.Kind == "页面" && h.Page == p)), "");
+            Check("搜索：索引里有页面里的功能条目", hits.Any(h => h.Kind == "功能"), "");
+            Check("搜索：索引里有动作", hits.Any(h => h.Kind == "动作"), "");
+
+            var qNotice = InputPlus.Core.Search.GlobalSearch.Query(hits, "提示条");
+            Check("搜索：按功能名找到「提示条」",
+                qNotice.Any(h => h.Kind == "功能" && h.Page == "settings" && h.Title.Contains("提示条")),
+                qNotice.FirstOrDefault()?.Title ?? "空");
+
+            var qIndex = InputPlus.Core.Search.GlobalSearch.Query(hits, "索引");
+            Check("搜索：英文关键词能找到 Qbar 的文件搜索", qIndex.Any(h => h.Page == "qbar"), "");
+
+            var qDrag = InputPlus.Core.Search.GlobalSearch.Query(hits, "拖拽");
+            Check("搜索：拖拽能找到「按住拖拽」", qDrag.Any(h => h.Page == "holddrag"), "");
+
+            var qAction = InputPlus.Core.Search.GlobalSearch.Query(hits, "贴到左半屏");
+            Check("搜索：动作标题可搜", qAction.Any(h => h.Kind == "动作"), "");
+
+            Check("搜索：多个词是「且」的关系",
+                InputPlus.Core.Search.GlobalSearch.Query(hits, "深色 主题").Count > 0, "");
+            Check("搜索：有一个词不中就不算命中",
+                InputPlus.Core.Search.GlobalSearch.Query(hits, "深色 别名").Count == 0, "");
+
+            /* 手势 / 宏 / 脚本 / 菜单 / 触发键 / 绑定 都要进索引。 */
+            s.Gestures.Add(new InputPlus.Core.Gestures.MouseGesture { Name = "贴边收起", Button = "Right", Pattern = "L" });
+            s.Macros.Add(new Macro { Name = "一键三连" });
+            s.Scripts.Add(new InputPlus.Core.Scripting.LuaScript { Name = "整理剪贴板", Comment = "去重" });
+            s.GestureMenus.Add(new InputPlus.Core.Scripting.GestureMenuDef { Name = "窗口菜单" });
+
+            var hits2 = InputPlus.Core.Search.GlobalSearch.Build(s, x => x, actionSamples);
+            Check("搜索：手势进索引", hits2.Any(h => h.Kind == "手势" && h.Title == "贴边收起"), "");
+            Check("搜索：宏进索引", hits2.Any(h => h.Kind == "宏" && h.Title == "一键三连"), "");
+            Check("搜索：Lua 脚本进索引", hits2.Any(h => h.Kind == "脚本" && h.Title == "整理剪贴板"), "");
+            Check("搜索：手势菜单进索引", hits2.Any(h => h.Kind == "菜单" && h.Title == "窗口菜单"), "");
+            Check("搜索：搜手势名能定位到手势页",
+                InputPlus.Core.Search.GlobalSearch.Query(hits2, "贴边收起").Any(h => h.Page == "gestures"), "");
         }
 
         /* ---- 别名体检 ---- */

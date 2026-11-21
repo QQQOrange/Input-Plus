@@ -344,6 +344,23 @@ internal static class KeysUtil
 		}
 	}
 
+	/// <summary>
+	/// 这个键此刻物理上还按着吗（hooks.c:1494-1508 用来复查触发键）。
+	/// GetAsyncKeyState 看的是全系统状态，哪怕键被别的程序吞掉也照样有答案。
+	/// </summary>
+	internal static bool IsPhysicallyDown(string id)
+	{
+		try
+		{
+			int num = ToVirtualKey(id);
+			return num != 0 && (Native.GetAsyncKeyState(num) & 0x8000) != 0;
+		}
+		catch (Exception)
+		{
+			return false;
+		}
+	}
+
 	public static string DisplayName(string id)
 	{
 		if (string.IsNullOrEmpty(id))

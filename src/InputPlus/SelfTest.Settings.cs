@@ -1015,7 +1015,7 @@ public static partial class SelfTest
 
         /* ---- 参数没填时必须"说出来"，不能静默成功 ----
          *
-         * 这一组动作（直达网址/文件夹/文件、输入文本、运行程序）以前遇到空参数是
+         * 这一组动作（直达网址/文件、输入文本、运行命令）以前遇到空参数是
          * `if (empty) return true;`：按下去什么都不发生，AppHost 还记一条成功日志。
          * 用户只会认为"这个键坏了"，日志里也看不出来。 */
         var notes = new List<string>();
@@ -1119,13 +1119,61 @@ public static partial class SelfTest
 
         /* 老动作不能从表里删掉（老配置还绑着），但界面上必须给出等价的新去处：
          *   openUrl    → 仍然隐藏，启动时由 LegacyActionMigration 换成「直达网址」(webPage)；
-         *   runProgram → 直接升级成可见的「系统功能 → 运行程序 / 命令」，
+         *   openFolder → 隐藏，换成「直达文件」(openFile)，两者都落到 OpenFolder；
+         *   runProgram → 直接升级成可见的「系统功能 → 运行命令」，
          *                id 不变 ⇒ 老绑定/手势不用迁移，参数框也终于会显示。 */
         Check("openUrl 仍保留执行能力（隐藏）", catalog.Get("openUrl")?.Hidden == true);
+        Check("openFolder 仍保留执行能力（隐藏）", catalog.Get("openFolder")?.Hidden == true);
         var runProgram = catalog.Get("runProgram");
         Check("runProgram 已是可见动作", runProgram is { Hidden: false });
         CheckEqual("runProgram 归到系统功能", runProgram?.Category, "系统功能");
         Check("runProgram 会显示参数框", runProgram?.NeedsArg == true);
+        CheckEqual("runProgram 标题改成「运行命令」", runProgram?.Title, "运行命令");
+
+        /* 标题改了，说明也必须跟着说清"只跑命令" —— 否则用户还是会把文件路径填进来，
+         * 而旧实现用 UseShellExecute=true 会真的把它打开，冲突原样存在。 */
+        Check("运行命令的说明里指向「直达文件」",
+            runProgram?.Description.Contains("直达文件", StringComparison.Ordinal) == true,
+            runProgram?.Description ?? "(null)");
+
+        /* ---- 运行命令：只跑命令，不兼职打开文件 ---- */
+        var ran = new List<string>();
+        ActionContext.RunCommandInterceptForTest = (exe, args, viaCmd) => ran.Add(exe + " | " + args + " | " + viaCmd);
+        try
+        {
+            Check("运行命令：程序 + 参数直接启动（不经 shell）",
+                probeCat.Invoke("runProgram", @"notepad.exe D:\笔记.txt")
+                && ran.Any(r => r.StartsWith(@"notepad.exe | D:\笔记.txt | False", StringComparison.Ordinal)),
+                string.Join(" | ", ran));
+
+            ran.Clear();
+            Check("运行命令：内置命令交给 cmd /c",
+                probeCat.Invoke("runProgram", "ipconfig /all")
+                && ran.Count == 1 && ran[0].EndsWith("| True", StringComparison.Ordinal),
+                string.Join(" | ", ran));
+
+            /* 真实存在的目录是"这不是命令"的稳定样本，不必依赖假文件系统。
+             * 期望：不启动任何进程 + 明确提示改用「直达文件」（旧实现会弹出资源管理器）。 */
+            ran.Clear();
+            notes.Clear();
+            probeCat.Invoke("runProgram", @"C:\Windows");
+            Check("运行命令：填文件夹不启动进程", ran.Count == 0, string.Join(" | ", ran));
+            Check("运行命令：填文件夹提示改用「直达文件」",
+                notes.Any(n => n.Contains("不是命令", StringComparison.Ordinal)
+                            && n.Contains("直达文件", StringComparison.Ordinal)),
+                string.Join(" | ", notes));
+
+            ran.Clear();
+            notes.Clear();
+            probeCat.Invoke("runProgram", @"C:\Windows\notepad.exe");
+            Check("运行命令：exe 路径本身仍是合法命令",
+                ran.Count == 1 && ran[0].StartsWith(@"C:\Windows\notepad.exe | ", StringComparison.Ordinal),
+                string.Join(" | ", ran));
+        }
+        finally
+        {
+            ActionContext.RunCommandInterceptForTest = null;
+        }
         Check("界面上不再有「系统」分类",
             catalog.Items.Where(i => !i.Hidden).All(i => i.Category != "系统"),
             string.Join(",", catalog.Items.Where(i => !i.Hidden && i.Category == "系统").Select(i => i.Id)));
@@ -1133,7 +1181,7 @@ public static partial class SelfTest
         /* 每个隐藏动作都必须有一个"看得见"的正式替代：
          * 否则用户打开那条绑定，下拉里选不出等价功能，只能显示一个旧名字
          * —— 那正是「旧功能，建议换掉」这类补偿文案的来历。 */
-        foreach (var id in new[] { "openUrl", "esc", "enter", "tab", "space", "backspace", "delete" })
+        foreach (var id in new[] { "openUrl", "openFolder", "esc", "enter", "tab", "space", "backspace", "delete" })
         {
             string to = InputPlus.Core.Actions.LegacyActionMigration.MapId(id);
             Check($"隐藏动作 {id} 有正式替代（{to}）",
@@ -1147,6 +1195,12 @@ public static partial class SelfTest
         legacy.Gestures.Add(new InputPlus.Core.Gestures.MouseGesture
         {
             Action = "openUrl", Arg = "https://example.com/g", Name = "迁移样例",
+        });
+        /* 直达文件夹（老 id）→ 直达文件：两者都落到 OpenFile → OpenFolder，
+         * 参数（目录路径）原样带走，按下去还是打开同一个目录。 */
+        legacy.Gestures.Add(new InputPlus.Core.Gestures.MouseGesture
+        {
+            Action = "openFolder", Arg = @"D:\Work", Name = "老文件夹样例",
         });
         legacy.Keys.Add(new InputPlus.Core.Settings.KeyBinding
         {
@@ -1173,13 +1227,15 @@ public static partial class SelfTest
             Key = "esc", DoubleTapAction = "delete",
         });
         int movedLegacy = InputPlus.Core.Actions.LegacyActionMigration.Apply(legacy);
-        CheckEqual("老动作迁移：共换掉 7 处", movedLegacy, 7);
+        CheckEqual("老动作迁移：共换掉 8 处", movedLegacy, 8);
         CheckEqual("Caps 短按动作迁移成 key:20", legacy.Global.TapCapsAction, "key:20");
         CheckEqual("触发键短按动作迁移成 key:09", legacy.Triggers[0].TapAction, "key:09");
         CheckEqual("触发键双击动作迁移成 key:1B", legacy.Triggers[0].DoubleTapAction, "key:1B");
         CheckEqual("双击键动作迁移成 key:2E", legacy.Global.KeyGestures[0].DoubleTapAction, "key:2E");
         CheckEqual("手势动作迁移成 webPage", legacy.Gestures[0].Action, "webPage");
         CheckEqual("手势参数跟着一起走", legacy.Gestures[0].Arg, "https://example.com/g");
+        CheckEqual("「直达文件夹」迁移成 openFile", legacy.Gestures[1].Action, "openFile");
+        CheckEqual("文件夹路径跟着一起走", legacy.Gestures[1].Arg, @"D:\Work");
         CheckEqual("按键绑定动作迁移成 webPage", legacy.Keys[0].Action, "webPage");
         CheckEqual("按键参数跟着一起走", legacy.Keys[0].Arg, "https://example.com/k");
         CheckEqual("宏步骤里的老动作也能迁移", legacy.Macros[0].Steps[0].ActionId, "key:0D");
@@ -1953,5 +2009,132 @@ public static partial class SelfTest
         var third = new Mutex(true, name, out bool createdThird);
         Check("释放后可重新获取（重启不卡死）", createdThird);
         try { third.ReleaseMutex(); third.Dispose(); } catch { }
+    }
+
+    /// <summary>
+    /// 两套浮层外观：手势名称框（鼠标手势 → 手势设置）与右下角提示条（设置 → 外观 → 提示条）。
+    ///
+    /// v1.6.0 曾把两者合并成一套「通知样式」，v1.6.3 又拆开，所以这里要盯住三件事：
+    ///   · 出厂值（两套各是什么）；
+    ///   · 迁移两档：v1.6.0 的合并版（MigrateVersion=1）与更早散在 GestureOptions 上的五个字段；
+    ///   · 两套互不影响 —— 改一边，另一边的值必须一动不动。
+    /// </summary>
+    private static void TestNotificationStyle()
+    {
+        var fresh = new AppSettings();
+        Check("手势名称：默认画描边", fresh.GestureLabel.ShowBorder);
+        CheckEqual("手势名称：默认描边 1.0", fresh.GestureLabel.BorderWidth.ToString("0.0"), "1.0");
+        CheckEqual("手势名称：默认底色沿用 WGestures 2", fresh.GestureLabel.ColorNormal, Core.Gestures.Wg2Color.LabelColorNormal);
+        CheckEqual("手势名称：默认执行后底色沿用 WGestures 2", fresh.GestureLabel.ColorExecuted, Core.Gestures.Wg2Color.LabelColorExecuted);
+        CheckEqual("手势名称：默认高度 25%", fresh.GestureLabel.Position.ToString("0.00"), "0.25");
+        CheckEqual("手势名称：新配置还没迁移过", fresh.GestureLabel.MigrateVersion, 0);
+
+        Check("提示条：默认不画可调白边", !fresh.Toasts.ShowBorder);
+        CheckEqual("提示条：默认描边 0.5（最小值，开关关着不画）", fresh.Toasts.BorderWidth.ToString("0.0"), "0.5");
+        Check("提示条：默认底色跟随主题", string.IsNullOrEmpty(fresh.Toasts.Color));
+
+        /* 任务要求的回归断言：默认 ToastStyle 必须等于 v1.6.0 之前的旧观感
+         * —— 主题卡底、没有可调白边、0.5 最小值；任何一项被改回新默认都会在这里红。 */
+        var oldLook = ToastStyle.Default;
+        Check("提示条：出厂值回到旧观感（主题底 / 无可调白边 / 0.5）",
+              !oldLook.ShowBorder
+              && Math.Abs(oldLook.BorderWidth - 0.5) < 1e-9
+              && string.IsNullOrEmpty(oldLook.Color));
+
+        // 老配置之一：v1.6.0 之前的配置，五个字段还散在 GestureOptions 上。
+        var legacy = new AppSettings();
+        legacy.GestureOptions.ShowLabelBorder = false;
+        legacy.GestureOptions.LabelBorderWidth = 2;
+        legacy.GestureOptions.LabelColorNormal = "#11223344";
+        legacy.GestureOptions.LabelColorExecuted = "#55667788";
+        legacy.GestureOptions.GestureNamePos = 0.8;
+        SettingsStore.Normalize(legacy);
+        Check("手势名称：老配置的描边开关搬过来了", !legacy.GestureLabel.ShowBorder);
+        CheckEqual("手势名称：老配置的描边粗细搬过来了", legacy.GestureLabel.BorderWidth.ToString("0.0"), "2.0");
+        CheckEqual("手势名称：老配置的平时底色搬过来了", legacy.GestureLabel.ColorNormal, "#11223344");
+        CheckEqual("手势名称：老配置的执行后底色搬过来了", legacy.GestureLabel.ColorExecuted, "#55667788");
+        CheckEqual("手势名称：老配置的位置搬过来了", legacy.GestureLabel.Position.ToString("0.00"), "0.80");
+        CheckEqual("手势名称：迁移完打上版本号", legacy.GestureLabel.MigrateVersion, GestureLabelStyle.MigrateVersionCurrent);
+        /* 那时提示条走的是主题色、没有可调项，所以不该吃这五个字段。 */
+        Check("提示条：不吃合并前的五个字段（仍跟随主题）", string.IsNullOrEmpty(legacy.Toasts.Color));
+
+        // 迁移只做一次：之后改配置，不能再被手势设置里的老值盖掉。
+        legacy.GestureLabel.ColorNormal = "#AABBCCDD";
+        legacy.GestureLabel.Position = 0.1;
+        SettingsStore.Normalize(legacy);
+        CheckEqual("手势名称：迁移只做一次（后来改的值不会被老字段压回去）", legacy.GestureLabel.ColorNormal, "#AABBCCDD");
+        CheckEqual("手势名称：迁移只做一次（位置也一样）", legacy.GestureLabel.Position.ToString("0.00"), "0.10");
+
+        // 老配置之二：v1.6.0 的合并版，值在 Notifications 里（MigrateVersion=1）。
+        var merged = new AppSettings
+        {
+            Notifications = new NotificationStyle
+            {
+                ShowBorder = false,
+                BorderWidth = 2.5,
+                ColorNormal = "#11223344",
+                ColorExecuted = "#55667788",
+                Position = 0.8,
+                MigrateVersion = NotificationStyle.MigrateVersionCurrent,
+            },
+        };
+        SettingsStore.Normalize(merged);
+        Check("手势名称：v1.6.0 的描边开关搬过来了", !merged.GestureLabel.ShowBorder);
+        CheckEqual("手势名称：v1.6.0 的描边粗细搬过来了", merged.GestureLabel.BorderWidth.ToString("0.0"), "2.5");
+        CheckEqual("手势名称：v1.6.0 的平时底色搬过来了", merged.GestureLabel.ColorNormal, "#11223344");
+        CheckEqual("手势名称：v1.6.0 的执行后底色搬过来了", merged.GestureLabel.ColorExecuted, "#55667788");
+        CheckEqual("手势名称：v1.6.0 的位置搬过来了", merged.GestureLabel.Position.ToString("0.00"), "0.80");
+        Check("提示条：v1.6.0 的描边开关复制了一份", !merged.Toasts.ShowBorder);
+        CheckEqual("提示条：v1.6.0 的描边粗细复制了一份", merged.Toasts.BorderWidth.ToString("0.0"), "2.5");
+        CheckEqual("提示条：v1.6.0 的底色取「平时」那一档", merged.Toasts.Color, "#11223344");
+        Check("合并期的那份搬完就清掉（配置里不再留两代数据）", merged.Notifications == null);
+
+        // 两套互不影响：改一边，另一边一动不动。
+        var two = new AppSettings();
+        SettingsStore.Normalize(two);
+        two.GestureLabel.ColorNormal = "#0A0B0C0D";
+        two.GestureLabel.ShowBorder = false;
+        SettingsStore.Normalize(two);
+        Check("两套互不影响：改名称框不动提示条底色", string.IsNullOrEmpty(two.Toasts.Color));
+        Check("两套互不影响：改名称框不动提示条描边", !two.Toasts.ShowBorder);
+        two.Toasts.Color = "#01020304";
+        two.Toasts.BorderWidth = 1.5;
+        SettingsStore.Normalize(two);
+        CheckEqual("两套互不影响：改提示条不动名称框底色", two.GestureLabel.ColorNormal, "#0A0B0C0D");
+        CheckEqual("两套互不影响：改提示条不动名称框粗细", two.GestureLabel.BorderWidth.ToString("0.0"), "1.0");
+
+        // 手改配置写出越界值：收敛，而不是让浮层飘到屏幕外。
+        var clamped = new AppSettings();
+        clamped.GestureLabel.MigrateVersion = GestureLabelStyle.MigrateVersionCurrent;
+        clamped.GestureLabel.BorderWidth = 9;
+        clamped.GestureLabel.Position = 4;
+        clamped.Toasts.BorderWidth = 9;
+        SettingsStore.Normalize(clamped);
+        CheckEqual("手势名称：越界的描边粗细被收回来", clamped.GestureLabel.BorderWidth.ToString("0.0"), "3.0");
+        CheckEqual("手势名称：越界的位置被收回来", clamped.GestureLabel.Position.ToString("0.00"), "1.00");
+        CheckEqual("提示条：越界的描边粗细被收回来", clamped.Toasts.BorderWidth.ToString("0.0"), "3.0");
+
+        // 取值口：两个各挂各的，没挂宿主（自检 / 渲染）时回落到各自的出厂值。
+        Check("手势名称外观：没有宿主时也能取到一份", GestureLabelStyles.Current != null);
+        Check("提示条外观：没有宿主时也能取到一份", ToastStyles.Current != null);
+
+        var wired = new AppSettings();
+        wired.GestureLabel.ColorNormal = "#0F0E0D0C";
+        GestureLabelStyles.Attach(() => wired.GestureLabel);
+        ToastStyles.Attach(() => wired.Toasts);
+        var labelFromProvider = GestureLabelStyles.Current!;
+        CheckEqual("手势名称外观：取值口拿到的是名称框那一份", labelFromProvider.ColorNormal, "#0F0E0D0C");
+        Check("两个取值口不会拿到同一个对象", !ReferenceEquals(GestureLabelStyles.Current, ToastStyles.Current));
+
+        GestureLabelStyles.Attach(() => null);
+        ToastStyles.Attach(() => null);
+        Check("手势名称外观：宿主返回 null 也不炸", GestureLabelStyles.Current != null);
+        Check("提示条外观：宿主返回 null 也不炸", ToastStyles.Current != null);
+
+        GestureLabelStyles.Attach(null);
+        ToastStyles.Attach(null);
+        var labelFallback = GestureLabelStyles.Current!;
+        CheckEqual("手势名称外观：摘掉宿主后回到出厂值", labelFallback.ColorNormal, Core.Gestures.Wg2Color.LabelColorNormal);
+        Check("提示条外观：摘掉宿主后仍然有出厂值", ToastStyles.Current != null);
     }
 }

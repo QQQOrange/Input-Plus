@@ -18,6 +18,13 @@ public enum SmartKind
     MissingFolder,
     /// <summary>看起来是文件，但磁盘上不存在。</summary>
     MissingFile,
+    /// <summary>
+    /// 命令行：程序名或程序路径打头，后面还带参数（notepad.exe D:\笔记.txt）。
+    ///
+    /// 与「文件」的区别在**怎么执行**：文件交给 shell 双击（默认程序打开），
+    /// 命令行直接起进程、参数原样传过去。同一串文字在两边行为不同，所以必须分开。
+    /// </summary>
+    Command,
 }
 
 /// <summary>一次识别的结果。</summary>
@@ -32,6 +39,7 @@ public sealed record SmartTarget(SmartKind Kind, string Target, string Raw)
         SmartKind.Url => "网址",
         SmartKind.Folder or SmartKind.MissingFolder => "文件夹",
         SmartKind.File or SmartKind.MissingFile => "文件",
+        SmartKind.Command => "命令",
         _ => "未知",
     };
 
@@ -59,6 +67,7 @@ public sealed record SmartTarget(SmartKind Kind, string Target, string Raw)
 ///      必须先于"裸域名"，否则 `D:\a.com\x` 会被当成网址
 ///   ④ 相对路径能命中磁盘上的真实文件/目录 → 按文件/目录处理
 ///   ⑤ 裸域名（github.com、www.baidu.com/s?wd=x）
+///   ⑤.5 程序 + 参数（notepad.exe D:\笔记.txt）→ <see cref="SmartKind.Command"/>
 ///   ⑥ 都不是 → <see cref="SmartKind.None"/>
 ///
 /// 第 ④ 步之所以要排掉一批"看着像域名、其实是扩展名"的后缀
@@ -157,6 +166,17 @@ public static class SmartTargetDetector
             string url = text.TrimEnd(UrlTrailingPunct.ToCharArray());
             return new SmartTarget(SmartKind.Url, url.Length > 0 ? url : text, raw ?? "");
         }
+
+        /* ②.5 命令行：程序名/程序路径 + 参数。
+         *
+         * 必须排在路径识别**之前**：D:\tools\app.exe -x 整串不是一个路径，
+         * 落到 ③ 会判成"文件不存在"，按下去只能报错。识别成命令后交给
+         * 「运行命令」执行，参数原样传过去。
+         *
+         * 只认"带参数"的写法：单写一个 C:\Windows\notepad.exe 仍然是「文件」
+         * （双击打开和直接运行对它是一回事），不会把已有行为改掉。 */
+        if (TryCommandLine(text, fileExists, out string commandLine))
+            return new SmartTarget(SmartKind.Command, commandLine, raw ?? "");
 
         // ③ 路径特征
         if (LooksLikePath(text))
@@ -311,5 +331,127 @@ public static class SmartTargetDetector
     private static string SafeExtension(string path)
     {
         try { return Path.GetExtension(path); } catch { return ""; }
+    }
+
+    // ---------------- 命令行识别（程序 + 参数） ----------------
+
+    /// <summary>可以直接起进程的程序扩展名（脚本类不算：双击它们只会打开编辑器）。</summary>
+    private static readonly string[] ProgramExtensions =
+        { ".exe", ".com", ".bat", ".cmd", ".msc", ".cpl" };
+
+    /// <summary>
+    /// 常见的"第一段是解释器 / 外壳"的写法。
+    /// cmd /c dir、powershell -File x.ps1、npm run dev 这类没有扩展名，
+    /// 只能靠第一段的名字认。
+    /// </summary>
+    private static readonly string[] ShellPrefixes =
+    {
+        "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "wt", "explorer",
+        "rundll32", "mshta", "cscript", "wscript", "start",
+        "python", "python3", "py", "node", "npm", "npx", "dotnet", "git", "java",
+    };
+
+    /// <summary>
+    /// 这段文字是"程序 + 参数"吗？是就把整理后的整行写进 line。
+    ///
+    /// 三条判据（都要**有参数**，否则交给「文件」分支）：
+    ///   ① 第一个词（引号里算一个词）是程序，后面还有参数 ——
+    ///      带目录的必须在磁盘上真实存在，裸程序名（notepad.exe）交给 PATH；
+    ///   ② 第一个词是 shell 前缀（cmd、powershell、npm…），后面还有参数；
+    ///   ③ 没加引号又带空格的完整路径：取最后一个程序扩展名之前那段当程序，
+    ///      它存在就算 —— C:\Program Files\App\app.exe -x。
+    /// </summary>
+    private static bool TryCommandLine(string text, Func<string, bool> fileExists, out string line)
+    {
+        line = "";
+        if (text.Length == 0) return false;
+
+        /* 整串本身就是磁盘上存在的文件/目录 → 那是「文件」，不是命令行。
+         * 少了这一步，D:\Work\项目 备份 这种带空格的真实目录会被当成命令。 */
+        if (SafeExists(fileExists, ActionContext.ExpandPath(text))) return false;
+
+        SplitFirstToken(text, out string first, out string rest);
+
+        // ① 程序 + 参数
+        if (rest.Length > 0 && IsProgramPath(first) && ProgramResolves(first, fileExists))
+        {
+            line = text;
+            return true;
+        }
+
+        // ② shell 前缀 + 参数
+        if (rest.Length > 0)
+        {
+            foreach (string p in ShellPrefixes)
+            {
+                if (!string.Equals(first, p, StringComparison.OrdinalIgnoreCase)) continue;
+                line = text;
+                return true;
+            }
+        }
+
+        // ③ 没加引号、路径里带空格
+        int cut = LastProgramExtensionEnd(text);
+        if (cut > 0 && cut < text.Length && char.IsWhiteSpace(text[cut]))
+        {
+            string exe = text[..cut].Trim().Trim('"');
+            if (IsProgramPath(exe) && ProgramResolves(exe, fileExists))
+            {
+                line = text;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>切成"第一个词"和"剩下的参数"。引号里的一整段算一个词。</summary>
+    private static void SplitFirstToken(string text, out string first, out string rest)
+    {
+        first = "";
+        rest = "";
+        if (text.Length == 0) return;
+
+        if (text[0] == '"')
+        {
+            int end = text.IndexOf('"', 1);
+            if (end < 0) { first = text; return; }
+            first = text[1..end];
+            rest = text[(end + 1)..].Trim();
+            return;
+        }
+
+        int sp = text.IndexOf(' ');
+        if (sp < 0) { first = text; return; }
+        first = text[..sp];
+        rest = text[(sp + 1)..].Trim();
+    }
+
+    /// <summary>结尾是不是可直接执行的程序扩展名。</summary>
+    private static bool IsProgramPath(string s)
+    {
+        foreach (string e in ProgramExtensions)
+            if (s.EndsWith(e, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>程序能不能落地：裸程序名交给 PATH，带路径的要求文件真实存在。</summary>
+    private static bool ProgramResolves(string program, Func<string, bool> fileExists)
+    {
+        if (program.IndexOf('\\') < 0 && program.IndexOf('/') < 0 && program.IndexOf(':') < 0)
+            return true;
+        return SafeExists(fileExists, ActionContext.ExpandPath(program));
+    }
+
+    /// <summary>最后一个程序扩展名的结束位置（找不到返回 -1）。</summary>
+    private static int LastProgramExtensionEnd(string text)
+    {
+        int end = -1;
+        foreach (string e in ProgramExtensions)
+        {
+            int at = text.LastIndexOf(e, StringComparison.OrdinalIgnoreCase);
+            if (at >= 0 && at + e.Length > end) end = at + e.Length;
+        }
+        return end;
     }
 }

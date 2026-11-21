@@ -66,10 +66,17 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
 
+                    <!-- 图标化（m01050）：和「宏」「别名替换」两页的底部工具条统一成图标 + 提示。 -->
                     <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
-                        <Button Content="{loc:T '+ 添加触发键'}" Style="{StaticResource Button.Primary}" Click="OnAddTrigger" />
-                        <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}" Margin="8,0,0,0"
-                                Click="OnDeleteTrigger" />
+                        <Button Content="&#xE710;" Style="{StaticResource Button.Icon}" Click="OnAddTrigger"
+                                Background="{DynamicResource Brush.Accent}"
+                                BorderBrush="{DynamicResource Brush.Accent}" Foreground="White"
+                                AutomationProperties.Name="{loc:T '添加触发键'}"
+                                ToolTip="{loc:T '添加触发键'}" />
+                        <Button Content="&#xE74D;" Style="{StaticResource Button.Icon}" Margin="6,0,0,0"
+                                Foreground="{DynamicResource Brush.Danger}" Click="OnDeleteTrigger"
+                                AutomationProperties.Name="{loc:T '删除触发键'}"
+                                ToolTip="{loc:T '删除选中的触发键'}" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -183,12 +190,19 @@
                                         <TextBlock x:Name="DoubleTapCurrentLabel" Style="{StaticResource Text.Tertiary}"
                                                    TextWrapping="Wrap" Margin="0,6,0,0" />
                                     </StackPanel>
+                                    <!-- 图标化（m01050）：这一列被右边的动作下拉挤得很窄，两个字的按钮换成勾 / 叉。
+                                         界面语里这一对永远是「确认写进去 / 把它清空」，图形比文字更快认。 -->
                                     <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                                        <Button Content="{loc:T '应用'}" Style="{StaticResource Button.Primary}"
-                                                Padding="12,7" Click="OnApplyDoubleTapAction" />
-                                        <Button Content="{loc:T '清除'}" Style="{StaticResource Button.Ghost}"
-                                                Padding="12,7" Margin="0,8,0,0"
-                                                Click="OnClearDoubleTapAction" />
+                                        <Button Content="&#xE73E;" Style="{StaticResource Button.Icon}"
+                                                Background="{DynamicResource Brush.Accent}"
+                                                BorderBrush="{DynamicResource Brush.Accent}" Foreground="White"
+                                                Click="OnApplyDoubleTapAction"
+                                                AutomationProperties.Name="{loc:T '应用'}"
+                                                ToolTip="{loc:T '应用：把上面选的分类和功能写到这个键上'}" />
+                                        <Button Content="&#xE894;" Style="{StaticResource Button.Icon}"
+                                                Margin="0,8,0,0" Click="OnClearDoubleTapAction"
+                                                AutomationProperties.Name="{loc:T '清除'}"
+                                                ToolTip="{loc:T '清除：这个键不再挂双击动作'}" />
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

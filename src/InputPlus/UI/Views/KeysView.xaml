@@ -59,8 +59,11 @@
                           Margin="10,0,0,0" VerticalAlignment="Center" Click="OnScopeAllClick"
                           ToolTip="{loc:T '勾上：所有键盘和鼠标都生效。取消：只有下面打勾的设备生效。'}" />
 
-                <Button Grid.Column="4" Content="{loc:T '恢复本页默认设置'}" Style="{StaticResource Button.Base}"
-                        Margin="16,0,0,0" Click="OnResetClick"
+                <!-- 图标化（m01050）：这一行是「设备胶囊 + 全部生效 + 恢复默认」，前面两个可变宽，
+                     文字按钮把设备名挤得没有余量，改成 ↺ 图标 + 提示（语义和按住拖拽页的触发键重置一致）。 -->
+                <Button Grid.Column="4" Content="&#xE7A7;" Style="{StaticResource Button.Icon}"
+                        Margin="12,0,0,0" Click="OnResetClick"
+                        AutomationProperties.Name="{loc:T '恢复本页默认设置'}"
                         ToolTip="{loc:T '只把「按键映射」这一页的基础层绑定恢复成默认；层、触发键、宏、别名都不动'}" />
 
                 <Popup x:Name="DevicePopup" PlacementTarget="{Binding ElementName=DeviceCapsuleButton}"
@@ -624,7 +627,7 @@
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="2" Margin="0,0,8,0">
-                                        <TextBlock x:Name="LinkTargetLabel" Text="{loc:T '目标（网址 / 文件夹 / 文件，自动识别）'}"
+                                        <TextBlock x:Name="LinkTargetLabel" Text="{loc:T '目标（网址 / 文件夹 / 文件 / 命令，自动识别）'}"
                                                    Style="{StaticResource Text.Secondary}" Margin="0,0,0,7"
                                                    TextTrimming="CharacterEllipsis" />
                                         <TextBox x:Name="WebUrlBox" Style="{StaticResource TextBox.Base}"
@@ -679,7 +682,7 @@
                                            TextWrapping="Wrap" Margin="0,5,0,0" />
                                 <TextBlock x:Name="LinkHint" Style="{StaticResource Text.Tertiary}"
                                            TextWrapping="Wrap" Margin="0,3,0,0"
-                                           Text="{loc:T '网址、文件夹、文件都填在这里，类型自动识别，不用自己选。填网址会自动抓网页标题当备注；路径不填备注时用文件夹名或文件名。备注会显示在键帽上。'}" />
+                                           Text="{loc:T '网址、路径、命令行都填在这里，类型自动识别，不用自己选：网址用默认浏览器打开；路径落到「直达文件」（文件夹进资源管理器，文件进默认程序）；一整行命令行绑成「运行命令」，参数原样传过去。填网址会自动抓网页标题当备注；路径不填备注时用文件夹名或文件名。备注会显示在键帽上。'}" />
                             </StackPanel>
 
                             <!-- ================= 输入文本 =================

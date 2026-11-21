@@ -25,7 +25,10 @@ public sealed partial class AppHost
         _tray.SetEnabled(Engine.Enabled);
     }
 
-    public void RefreshTray() => _tray?.SetEnabled(Engine.Enabled);
+    public void RefreshTray()
+    {
+        _tray?.SetEnabled(Engine.Enabled);
+    }
 
     /// <summary>
     /// 界面语言切换后调用：把「文本在构造时就写死」的长生命周期界面全部重建一遍。
@@ -79,6 +82,7 @@ public sealed partial class AppHost
     public void Dispose()
     {
         try { SingleInstance.StopWakeListener(); } catch { }
+        try { Core.App.InjectionBridge.Detach(); _hookHostRelay = false; } catch { }
         try { _hookHost?.Kill(); _hookHost = null; } catch { }
         try { _foreground?.Dispose(); _foreground = null; } catch { }
         try { _deviceTracker?.Dispose(); _deviceTracker = null; } catch { }

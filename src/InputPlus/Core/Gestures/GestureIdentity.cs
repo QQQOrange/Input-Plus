@@ -113,6 +113,9 @@ public static class GestureIdentity
             var twin = kept.FirstOrDefault(k => SameTrigger(k, g));
             if (twin != null && SameShape(twin, g))
             {
+                /* 说清楚删了哪一条：这条路径在启动时静默跑，用户只会发现
+                 * "我那条手势没了"，日志里得能找到原因。 */
+                CoreLog.Info($"[手势] 「{g.Name}」和「{twin.Name}」画法一样（{twin.Button} {twin.Pattern}），只保留排在前面的「{twin.Name}」");
                 removed++;
                 continue;
             }
@@ -139,11 +142,15 @@ public static class GestureIdentity
 
         if (a.HasPath && b.HasPath)
         {
-            /* 只有"同一笔"才算重复：点阵逐点一致就直接算；否则形状差要小到 0.2%（1000 空间）。
-             * 原来的 1% 太松 —— 关闭/休眠这一对（WG2 里都是 右键 ↓→）只差 0.0071，
-             * 按 1% 会被当成重复删掉一条，而它们其实是两条能分得开的手势。 */
+            /* 方向串一样，就只剩"形状差多少"这一道关。
+             *
+             * 门槛定在 2%（1000 空间），不是 0.2%：0.2% 曾放过「关闭」和「休眠」
+             * 这一对（都是右键 ↓→，形状只差 0.0071），可手画的时候这点差别根本
+             * 分不出来 —— 引擎按距离随便挑一条，用户画「关闭」结果触发了「休眠」。
+             * 2% 以内算"手画不出来的差别"，直接按重复收掉；超过 2% 的两条
+             * （比如一条直着一拐、和一条先往下再往右的 L 形）仍然各自保留。 */
             if (SamePoints(a, b)) return true;
-            return GestureMath.Distance(a.Points(), b.Points()) <= 0.002;
+            return GestureMath.Distance(a.Points(), b.Points()) <= 0.02;
         }
         return true;
     }

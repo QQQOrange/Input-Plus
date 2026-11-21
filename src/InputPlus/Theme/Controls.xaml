@@ -552,6 +552,146 @@
         </Setter>
     </Style>
 
+    <!-- 紧凑行：分面栏那种一屏要塞七八行的列表用。
+         和 RowItem 只差上下内边距（7 → 2），小窗时能少掉一半滚动。 -->
+    <Style x:Key="RowItem.Compact" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
+        <Setter Property="Margin" Value="0,0" />
+        <!-- 分面栏的行要能撑满 UniformGrid 分给它的格子，栏底才不留空白。 -->
+        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="9,2">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Selected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ListView（带 GridView 列）用的行样式。
+         RowItem 的模板里只有一个裸 ContentPresenter，套到 ListView 上会把
+         GridView 的列整个绕过去 —— 表头还在、每行却只剩对象的 ToString()。
+         所以这里用 GridViewRowPresenter 把列真正画出来，再补上一样的
+         hover / 选中底色。 -->
+    <Style x:Key="RowItem.Grid" TargetType="ListViewItem">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListViewItem">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="10,6">
+                        <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
+                                              Content="{TemplateBinding Content}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Selected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 紧凑结果行：42px → 30px，一屏多出将近一半行数。 -->
+    <Style x:Key="RowItem.Grid.Compact" TargetType="ListViewItem" BasedOn="{StaticResource RowItem.Grid}">
+        <Setter Property="Margin" Value="0,0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListViewItem">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="9,2">
+                        <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
+                                              Content="{TemplateBinding Content}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Selected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+
+    <!-- 表头：跟设置页里的表格标题同一套视觉 —— 透明底、11.5 号 TextTertiary、
+         只有一条下边线。默认的 Aero 表头是灰渐变 + 边框 + 居中字，在浅色卡片上
+         像另一个程序，而且居中的字跟左对齐的列内容完全对不上。
+         PART_HeaderGripper 必须留着，否则列宽就拖不动了。 -->
+    <Style x:Key="GridView.Header" TargetType="GridViewColumnHeader">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextTertiary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="9,0,9,6" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GridViewColumnHeader">
+                    <Grid>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </Border>
+                        <!-- 拖动列宽的小把手：默认 Thumb 模板会画一根深色竖条，在浅色表头里像
+                             多出来一条分隔线，所以自己给一个"平时全透明、指上去才显一条淡线"的模板。 -->
+                        <Thumb x:Name="PART_HeaderGripper" HorizontalAlignment="Right" Width="8"
+                               Margin="0,4,0,6" Cursor="SizeWE">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Border x:Name="Grip" Background="Transparent" CornerRadius="1" />
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Grip" Property="Background"
+                                                    Value="{DynamicResource Brush.Border}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 数字列（大小）的表头要跟右对齐的数字贴同一侧，否则标题在中间、数字在右边。 -->
+    <Style x:Key="GridView.Header.Right" TargetType="GridViewColumnHeader" BasedOn="{StaticResource GridView.Header}">
+        <Setter Property="HorizontalContentAlignment" Value="Right" />
+        <Setter Property="Padding" Value="9,0,12,6" />
+    </Style>
+
     <!-- ============ 提示条 ============ -->
     <Style x:Key="Badge" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Brush.AccentSoft}" />

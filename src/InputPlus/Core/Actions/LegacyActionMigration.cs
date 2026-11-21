@@ -21,11 +21,13 @@ namespace InputPlus.Core.Actions;
 ///
 /// 只换语义完全一致的（handler 都是同一个实现，参数原样带走）：
 ///   openUrl(arg)        →  webPage(arg)      都用默认浏览器打开这个网址；
+///   openFolder(arg)     →  openFile(arg)     两者都落到 OpenFile → OpenFolder，
+///                                            文件夹和文件合并成「直达文件」；
 ///   esc / enter / tab / space / backspace / delete
 ///                       →  key:1B / 0D / 09 / 20 / 08 / 2E
 ///                          （基础分类里那六条隐藏重复项 → 「键盘按键」里的同名项）。
-/// runProgram 不需要迁移 —— 它已经升级成「系统功能 → 运行程序 / 命令」正式动作，
-/// id 没变，老绑定和手势直接就能用（并且现在会显示参数框）。
+/// runProgram 不需要迁移 —— 它已经升级成「系统功能 → 运行命令」正式动作，
+/// id 没变，老绑定和手势直接就能用（只是不再兼职打开文件）。
 /// </summary>
 public static class LegacyActionMigration
 {
@@ -38,6 +40,9 @@ public static class LegacyActionMigration
     {
         // 系统：打开网址 → 直达链接 / 直达网址
         ["openUrl"] = "webPage",
+
+        // 直达链接：直达文件夹 → 直达文件（OpenFile 先认目录，再走 OpenFolder 那一套）
+        ["openFolder"] = "openFile",
 
         // 基础里的六个键码动作，和「键盘按键」分类里的 key:XX 完全等价
         ["esc"] = "key:1B",

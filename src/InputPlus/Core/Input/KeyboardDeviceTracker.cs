@@ -278,12 +278,16 @@ public sealed class KeyboardDeviceTracker : IDisposable
 
         if (TryTake(vk, down, out string? device)) return device;
 
-        for (int waited = 0; waited < waitMs; waited++)
+        /* 按**真实经过时间**收口，而不是数循环次数：
+         * Thread.Sleep(1) 在系统定时器精度 15.6ms 时实际睡 15.6ms，数 60 次就是 900 多毫秒
+         * （实测把键盘钩子回调卡了 928ms，整个系统输入跟着停摆）。 */
+        long start = Environment.TickCount64;
+        while (Environment.TickCount64 - start < waitMs)
         {
             Thread.Sleep(1);                      // 让 UI 线程有机会处理 WM_INPUT
             if (TryTake(vk, down, out device)) return device;
         }
-        return null;
+        return TryTake(vk, down, out device) ? device : null;
     }
 
     private bool TryTake(int vk, bool down, out string? device)

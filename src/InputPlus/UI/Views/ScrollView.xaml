@@ -288,9 +288,13 @@
                                             <Button Grid.Column="1" Content="{Binding ToggleText}"
                                                     Tag="{Binding Rule}" Click="OnToggleApp"
                                                     Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="8,0,0,0" />
-                                            <Button Grid.Column="2" Content="{loc:T '删除'}"
+                                            <!-- 图标化（m01050）：每行两个文字按钮，应用名被挤得只剩几个字 -->
+                                            <Button Grid.Column="2" Content="&#xE74D;"
                                                     Tag="{Binding Rule}" Click="OnDeleteApp"
-                                                    Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0" />
+                                                    Style="{StaticResource Button.Icon}" Margin="6,0,0,0"
+                                                    Foreground="{DynamicResource Brush.Danger}"
+                                                    AutomationProperties.Name="{loc:T '删除'}"
+                                                    ToolTip="{loc:T '删除这条应用例外'}" />
                                         </Grid>
                                     </Border>
                                 </DataTemplate>

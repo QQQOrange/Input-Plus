@@ -278,13 +278,16 @@ public partial class KeysView : UserControl
         if (id == "webPage")
             return Core.Actions.UrlUtil.LabelOf(binding.Note, binding.Arg);
 
-        // 直达文件夹：备注优先，否则用文件夹名（"项目"比 "D:\Work\项目" 好认）
+        // 直达文件夹（老 id）：备注优先，否则用文件夹名（"项目"比 "D:\Work\项目" 好认）
         if (id == "openFolder")
             return FolderLabelOf(binding.Note, binding.Arg);
 
-        // 直达文件：备注优先，否则用文件名
+        // 直达文件：备注优先；填的是目录就用文件夹名，否则用文件名 ——
+        // 合并成一条之后，键帽上还得让人一眼看出打开的是"项目"还是"方案.docx"
         if (id == "openFile")
-            return FileLabelOf(binding.Note, binding.Arg);
+            return Core.Actions.ActionContext.IsFolderTarget(binding.Arg)
+                ? FolderLabelOf(binding.Note, binding.Arg)
+                : FileLabelOf(binding.Note, binding.Arg);
 
         // 输入文本：备注优先，否则显示文字开头几个字
         if (id == "typeText")

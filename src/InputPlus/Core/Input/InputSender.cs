@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using InputPlus.Core.App;
 using InputPlus.Core.Interop;
 using static InputPlus.Core.Interop.NativeMethods;
 
@@ -74,6 +75,22 @@ public static class InputSender
     private static int _injectLogged;
     private static bool _quietBlockLogged;
 
+    /// <summary>
+    /// 当前这批事件是不是"从钩子宿主回放进来"的。
+    ///
+    /// 宿主内部也走 Send：必须让它直接发，否则会提升进程下沉 → 宿主
+    /// 再下沉一次（宿主没有别的宿主可下沉），注入就丢了。
+    /// </summary>
+    [ThreadStatic] private static bool _fromHost;
+
+    /// <summary>
+    /// 最近一次注入被完整性级别挡住的原因（None = 没被挡）。
+    ///
+    /// 界面拿它决定要不要提示"目标窗口是管理员权限"。以前这种情况
+    /// 只剩一个错误码 5，用户看到的是"按了没反应"。
+    /// </summary>
+    internal static InjectionBarrier LastInjectBarrier { get; private set; }
+
     private static bool Send(params INPUT[] inputs)
     {
         if (BeforeSendForTest is { } probe) probe();
@@ -90,19 +107,28 @@ public static class InputSender
             return true;
         }
 
+        /* 管理员模式先把这批事件下沉给普通权限的钩子宿主（见
+         * Core/App/ElevationState.cs 的 RouteFor）。为什么：钩子挂在哪个
+         * 完整性级别，就只看得见那个级别以下的输入 —— 注入端必须和钩子端
+         * 对齐，否则自己发的键会把自己再触发一次。 */
+        bool forwarded = TryForwardToRelay(inputs);
+
         /* SendInput 会返回"真正插入队列的条数"。返回 0 通常就是 UIPI 拒绝
          * （前台窗口比我们完整性高，错误码 5），以前这里不看返回值，宏播放
          * 看起来"执行了"却什么都没发生。把错误留给 MacroPlayer 转成用户能
          * 看懂的提示，比静默失败强。 */
-        uint sent = SendInput((uint)inputs.Length, inputs, InputSize);
-        if (sent != inputs.Length)
+        uint sent = forwarded
+            ? (uint)inputs.Length
+            : SendInput((uint)inputs.Length, inputs, InputSize);
+        if (!forwarded && sent != inputs.Length)
         {
             LastInjectError = Marshal.GetLastWin32Error();
-            CoreLog.Warn($"[注入] SendInput 失败：写入 {sent}/{inputs.Length}，错误 {LastInjectError}");
+            ReportInjectFailure(inputs.Length, sent, LastInjectError);
             return false;
         }
 
         LastInjectError = 0;
+        LastInjectBarrier = InjectionBarrier.None;
         LastInjectAt = DateTime.Now;
         Interlocked.Increment(ref _injectSeq);
         InjectCount++;
@@ -134,6 +160,72 @@ public static class InputSender
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// 管理员模式下把一批事件下沉给普通权限的钩子宿主。
+    ///
+    /// 返回 false 表示"不归它发"：未提升、下沉通道没接上、或者目标窗口本身
+    /// 就是提升的（低 → 高，UIPI 必拦，只有提升的我们直接发才行）。
+    /// </summary>
+    private static bool TryForwardToRelay(INPUT[] inputs)
+    {
+        if (_fromHost) return false;
+        if (!ElevationState.Elevated) return false;
+
+        bool receiverElevated = ElevationState.ForegroundIsElevated();
+        var route = ElevationState.ResolveRoute(true, receiverElevated, InjectionBridge.IsLive);
+        if (route != InjectionRoute.HookHost) return false;
+
+        bool ok = InjectionBridge.TryForward(inputs);
+        if (ok)
+        {
+            LastInjectBarrier = InjectionBarrier.None;
+            /* 每个键都是一次 SendInput，一次完整手势可能几十次 ——
+             * 全量记日志会把 logs 撑爆，也拖慢热路径。头几次写清楚，之后每 200 次报一声。 */
+            if (RelayLogDue(InjectionBridge.ForwardedCount))
+            {
+                CoreLog.Info($"[注入] 已下沉给钩子宿主（累计 {InjectionBridge.ForwardedCount} 次）");
+            }
+        }
+        else if (RelayLogDue(InjectionBridge.ForwardFailedCount))
+        {
+            CoreLog.Warn("[注入] 下沉失败（钩子宿主不可用），退回本进程发送");
+        }
+        return ok;
+    }
+
+    /// <summary>日志节流：前 5 次每次记，之后每 200 次记一次（热路径不能狂写盘）。</summary>
+    private static bool RelayLogDue(int count) => count <= 5 || count % 200 == 0;
+
+    /// <summary>
+    /// 宿主侧回放入口：这些事件来自提升进程的主程序，由宿主代替它 SendInput。
+    ///
+    /// 宿主自己也是"普通权限进程"，所以它发的键在普通程序（浏览器、编辑器）
+    /// 眼里就是正常输入 —— 这正是下沉的意义。
+    /// </summary>
+    internal static bool SendFromHost(INPUT[] inputs)
+    {
+        bool previous = _fromHost;
+        _fromHost = true;
+        try { return Send(inputs); }
+        finally { _fromHost = previous; }
+    }
+
+    /// <summary>注入失败的统一记账：错误码 + 是否被完整性级别挡住（界面要用）。</summary>
+    private static void ReportInjectFailure(int total, uint sent, int error)
+    {
+        var barrier = ElevationState.BarrierFor(ElevationState.Elevated, ElevationState.ForegroundIsElevated());
+        LastInjectBarrier = barrier;
+        CoreLog.Warn($"[注入] SendInput 失败：写入 {sent}/{total}，错误 {error}");
+        if (barrier != InjectionBarrier.None)
+        {
+            CoreLog.Warn("[注入] 原因：" + ElevationState.BarrierText(barrier));
+        }
+        else if (error == 5)
+        {
+            CoreLog.Warn("[注入] 原因：目标窗口拒绝输入（UIPI 拦截，错误 5）");
+        }
     }
 
     /// <summary>宏播放前清掉上一次的注入错误，避免旧错误误伤本次。</summary>

@@ -65,7 +65,6 @@
     <Grid Margin="24,4,20,20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -91,498 +90,28 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 总开关挪到「录制新手势」左边：开关状态一眼看得见，不用先翻设置。 -->
+                    <TextBlock Text="{loc:T '启用手势'}" Style="{StaticResource Text.Secondary}"
+                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <CheckBox x:Name="EnabledBox" Style="{StaticResource ToggleSwitch}"
+                              VerticalAlignment="Center" Margin="0,0,14,0"
+                              Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"
+                              ToolTip="{loc:T '总开关：关掉之后所有鼠标手势都不生效。'}" />
                     <Button Content="{loc:T '录制新手势'}" Style="{StaticResource Button.Primary}"
                             Padding="14,7" Click="OnRecordNewClick" />
+                    <!-- 齿轮：外观 / 参数 / 开关快捷键都收进这颗按钮打开的「手势设置」窗。 -->
+                    <Button Style="{StaticResource Button.Icon}" Margin="8,0,0,0"
+                            Click="OnOpenGestureSettings" Content="&#xE713;"
+                            ToolTip="{loc:T '手势设置：外观、参数、开关快捷键'}"
+                            AutomationProperties.Name="{loc:T '手势设置'}" />
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- 总开关条：只留开关与状态。参数收进下面两块折叠面板，
-             外观一律以 WGestures 2 的偏好为准（同一个项只留一份），
-             WGestures 2 没有的（分键颜色、识别参数）才单独列出来。 -->
-        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="16,12" Margin="0,0,0,12">
-            <!-- 两块面板展开后比窗口还高。外面这层滚动条让它们在卡片内部滚，
-                 不然 Auto 行把下面三栏挤成 0 高，整页又没有滚动条，用户就卡住了。
-                 上限由 UpdateOptionsScrollLimit() 按窗口高度算。 -->
-            <ScrollViewer x:Name="OptionsScroll" VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
-                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <CheckBox x:Name="EnabledBox" Style="{StaticResource CheckBox.Text}"
-                              Content="{loc:T '启用手势'}" VerticalAlignment="Center"
-                              Checked="OnOptionsChanged" Unchecked="OnOptionsChanged" />
-                    <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="{loc:T '手势开关'}" Style="{StaticResource Text.Secondary}"
-                                   Margin="0,0,6,0" VerticalAlignment="Center" />
-                        <TextBox x:Name="ToggleHotkeyBox" Style="{StaticResource TextBox.Base}" Width="92"
-                                 MinHeight="30" Padding="8,2" IsReadOnly="True"
-                                 VerticalContentAlignment="Center"
-                                 ToolTip="{loc:T '鼠标手势总开关的快捷键（点右侧按钮录制）'}" />
-                        <Button Content="{loc:T '录制'}" Style="{StaticResource Button.Ghost}"
-                                Margin="4,0,0,0" Padding="8,3" Click="OnCaptureToggleHotkey" />
-                    </StackPanel>
-                    <TextBlock x:Name="SummaryText" Style="{StaticResource Text.Tertiary}" Margin="24,0,0,0"
-                               VerticalAlignment="Center" />
-                </WrapPanel>
+        <!-- 外观 / 参数 / 开关快捷键原来在这张卡下面，现在收进右上角齿轮打开的
+             「手势设置」窗（GestureSettingsWindow）；这一行整个让出来，下面三栏直接铺满。 -->
 
-
-                <!-- ① 外观：WGestures 2 的偏好（run\Resources\prefs.json）。
-                     轨迹、名称、超时三块的字段名和出厂值都跟它一致；
-                     同一个设置只在这里出现一次，开关条上不再重复。
-                     版式跟设置页一致：左边标题 + 一句说明，右边控件，行间一条分隔线。 -->
-                <Expander x:Name="AppearanceExpander" Margin="0,12,0,0" IsExpanded="False">
-                    <Expander.Header>
-                        <TextBlock Text="{loc:T '手势外观'}" Style="{StaticResource Text.Secondary}"
-                                   FontWeight="SemiBold" />
-                    </Expander.Header>
-                    <StackPanel Margin="0,2,0,0">
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '显示轨迹'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '画手势时在屏幕上跟着描出这一笔。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="PathBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="ShowPath" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '轨迹描边'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '轨迹两侧描一圈白边，深色背景上也看得清。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="PathBorderBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="ShowPathBorder" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '轨迹粗细'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '1 最细、4 最粗；WGestures 出厂值是 1.5。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Slider x:Name="PathWidthSlider" Width="130" Minimum="1" Maximum="4"
-                                        SmallChange="0.5" LargeChange="0.5" TickFrequency="0.5"
-                                        IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                                        ValueChanged="OnWg2SliderChanged" />
-                                <TextBlock x:Name="PathWidthText" Style="{StaticResource Text.Secondary}" Width="34"
-                                           Margin="8,0,0,0" VerticalAlignment="Center" Text="1.5" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '轨迹透明度'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '20% 淡淡一层，100% 完全不透明。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Slider x:Name="TrailOpacitySlider" Width="130" Minimum="0.2" Maximum="1"
-                                        SmallChange="0.05" LargeChange="0.1" TickFrequency="0.05"
-                                        IsSnapToTickEnabled="True" VerticalAlignment="Center"
-                                        ValueChanged="OnTrailOpacityChanged" />
-                                <TextBlock x:Name="TrailOpacityText" Style="{StaticResource Text.Secondary}" Width="44"
-                                           Margin="8,0,0,0" VerticalAlignment="Center" Text="100%" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '轨迹颜色'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '还没认出来时一种色，认出来之后换成另一种。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <WrapPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3"
-                                        Tag="pathNormal" Click="OnPickWg2Color"
-                                        ToolTip="{loc:T '还没认出、以及认不出来的轨迹颜色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="PathNormalSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '未识别'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0"
-                                        Tag="pathRecognized" Click="OnPickWg2Color"
-                                        ToolTip="{loc:T '认出手势之后，轨迹换成这个颜色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="PathRecognizedSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '已识别'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                            </WrapPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <!-- 分键颜色：WGestures 2 全程一种颜色，这一层是我们多出来的，
-                             留给「右键一个色、中键一个色」。不配就用上面的未识别色。 -->
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '分键颜色'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '每个鼠标键各配一色；不配就跟随上面的「未识别」。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                                <Button Content="{loc:T '全部回落到未识别色'}" Style="{StaticResource Button.Ghost}"
-                                        HorizontalAlignment="Left" Padding="0" Margin="0,3,0,0"
-                                        Foreground="{DynamicResource Brush.Accent}" Click="OnResetTrailColors"
-                                        ToolTip="{loc:T '清掉所有分键颜色，五个键都回落到上面的「未识别」色。'}" />
-                            </StackPanel>
-                            <WrapPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" MaxWidth="520">
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Tag="right" Click="OnPickTrailColor"
-                                        ToolTip="{loc:T '单独配色；不配就用上面的「未识别」色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="RightSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '右键'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0" Tag="middle"
-                                        Click="OnPickTrailColor"
-                                        ToolTip="{loc:T '单独配色；不配就用上面的「未识别」色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="MiddleSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '中键'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0" Tag="x1"
-                                        Click="OnPickTrailColor"
-                                        ToolTip="{loc:T '单独配色；不配就用上面的「未识别」色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="X1Swatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '侧键 1'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0" Tag="x2"
-                                        Click="OnPickTrailColor"
-                                        ToolTip="{loc:T '单独配色；不配就用上面的「未识别」色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="X2Swatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '侧键 2'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0" Tag="left"
-                                        Click="OnPickTrailColor"
-                                        ToolTip="{loc:T '单独配色；不配就用上面的「未识别」色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="LeftSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '左键'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                            </WrapPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '显示手势名称'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '画完（或认出来）在光标旁写出手势的名字。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="GestureNameBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="ShowGestureName" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '执行后淡出'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '勾上：执行完立刻消失；不勾：停一下再慢慢淡出。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="FadeOutBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="FadeOutExecuted" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '名称描边'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '名称框外面的那圈白边。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="LabelBorderBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="ShowLabelBorder" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '名称颜色'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '认出但还没执行、执行完成，两种状态各一色。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <WrapPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3"
-                                        Tag="labelNormal" Click="OnPickWg2Color"
-                                        ToolTip="{loc:T '认出但还没执行时的名称底色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="LabelNormalSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '已识别'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="6,0,0,0"
-                                        Tag="labelExecuted" Click="OnPickWg2Color"
-                                        ToolTip="{loc:T '手势执行完成后的名称底色。'}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="LabelExecutedSwatch" Width="16" Height="16" CornerRadius="4"
-                                                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
-                                        <TextBlock Text="{loc:T '已执行'}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                            </WrapPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '名称位置'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '名称贴在屏幕的哪个高度：越靠上越接近屏幕顶部。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="{loc:T '屏幕底部'}" Style="{StaticResource Text.Tertiary}"
-                                           VerticalAlignment="Center" />
-                                <Slider x:Name="NamePosSlider" Width="120" Minimum="0" Maximum="1"
-                                        SmallChange="0.05" LargeChange="0.1" TickFrequency="0.05"
-                                        IsSnapToTickEnabled="True" Margin="8,0" VerticalAlignment="Center"
-                                        ValueChanged="OnWg2SliderChanged" />
-                                <TextBlock Text="{loc:T '屏幕顶部'}" Style="{StaticResource Text.Tertiary}"
-                                           VerticalAlignment="Center" />
-                                <TextBlock x:Name="NamePosText" Style="{StaticResource Text.Secondary}" Width="44"
-                                           Margin="8,0,0,0" VerticalAlignment="Center" Text="25%" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '起始超时提示'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '按下鼠标后迟迟不画，就在指针处闪个红点，表示这一笔作废了。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="TimeoutIndicatorBox" Style="{StaticResource ToggleSwitch}"
-                                      VerticalAlignment="Center" Tag="ShowStartTimeoutIndicator" Click="OnWg2ToggleChanged" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '起始超时时长'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '按下鼠标后多久还没开始画，就判定这一笔不算手势。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="StartTimeoutBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                         MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                         TextChanged="OnOptionsTextChanged" />
-                                <TextBlock Text="{loc:T '毫秒'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Expander>
-
-                <!-- ② 识别与起手：WGestures 2 的界面上没有这些旋钮（它只写死在引擎里），
-                     所以单独一块；行版式和上面外观面板完全一致。 -->
-                <Expander x:Name="ParamExpander" Margin="0,10,0,0" IsExpanded="False">
-                    <Expander.Header>
-                        <TextBlock Text="{loc:T '手势参数'}" Style="{StaticResource Text.Secondary}"
-                                   FontWeight="SemiBold" />
-                    </Expander.Header>
-                    <StackPanel Margin="0,2,0,0">
-
-                        <!-- 作用目标：一笔画完，动作到底发给谁。
-                             两种模式的差别是「会不会把窗口切到前面」，属于行为而不是外观。 -->
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '作用目标'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '这一笔画完之后，动作发给哪个程序。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center">
-                                <RadioButton x:Name="TargetPointerRadio" GroupName="GestureTargetMode"
-                                             Content="{loc:T '指针下方的应用'}"
-                                             ToolTip="{loc:T '手势画在哪个程序上，动作就发给哪个程序；执行前会把它切到前面。'}"
-                                             Checked="OnTargetModeChanged" />
-                                <RadioButton x:Name="TargetActiveRadio" GroupName="GestureTargetMode" Margin="0,6,0,0"
-                                             Content="{loc:T '活动的应用窗口'}"
-                                             ToolTip="{loc:T '动作只发给当前的活动窗口，不切换窗口；画手势不会把别的程序顶到前面。'}"
-                                             Checked="OnTargetModeChanged" />
-                            </StackPanel>
-                            <TextBlock x:Name="TargetModeHint" Grid.Row="1" Grid.Column="1" Margin="0,0,0,8"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '最小识别距离'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '画得比它短就当没画，这次点击照常传给程序。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="MinMoveBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                         MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                         TextChanged="OnOptionsTextChanged" />
-                                <TextBlock Text="{loc:T '像素'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '匹配容差'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '笔画形状距离的上限，越小越严。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="ThresholdBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                         MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                         TextChanged="OnOptionsTextChanged" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '起手距离'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '先走完这段才真的开始画，手抖不会触发。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="ActivationBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                         MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                         TextChanged="OnOptionsTextChanged" />
-                                <TextBlock Text="{loc:T '像素'}" Style="{StaticResource Text.Tertiary}" Margin="6,0,0,0"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Border Style="{StaticResource Divider}" />
-
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                                <TextBlock Text="{loc:T '换向系数'}" Style="{StaticResource Text.Body}" />
-                                <TextBlock Text="{loc:T '0~1，越大越容易在拐角处断开成两笔。'}"
-                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBox x:Name="TurnBox" Style="{StaticResource TextBox.Base}" Width="70"
-                                         MinHeight="30" Padding="8,2" VerticalContentAlignment="Center"
-                                         TextChanged="OnOptionsTextChanged" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
-            </ScrollViewer>
-        </Border>
-
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="264" />
                 <ColumnDefinition Width="*" />
@@ -732,34 +261,54 @@
                                                                Margin="8,0,2,0" VerticalAlignment="Center" />
                                                 </Grid>
                                             </Button>
+                                            <!-- 行尾只留一颗竖三点：禁用/删除收进菜单。
+                                                 以前两个文字按钮常驻，一列里躺着几十个「禁用」「删除」，
+                                                 名字本来就窄的（msedge / cmd）还被挤掉一截；而且这两件事
+                                                 一行里用不了第二次，常驻纯占宽度。 -->
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Button Content="{Binding ToggleText}"
-                                                        Click="OnToggleTargetDisabled" Visibility="{Binding ToggleVisibility}"
-                                                        Padding="8,3" Margin="4,0,0,0"
-                                                        MinWidth="44" FontSize="11" VerticalAlignment="Center"
-                                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                                        Background="{DynamicResource Brush.Background}"
-                                                        ToolTip="{Binding ToggleTooltip}">
-                                                    <Button.Style>
-                                                        <Style TargetType="Button" BasedOn="{StaticResource Button.Ghost}">
-                                                            <Style.Triggers>
-                                                                <!-- 已禁用时这颗按钮是「恢复」这个动作，用强调色，别再和灰按钮混在一起。 -->
-                                                                <DataTrigger Binding="{Binding Disabled}" Value="True">
-                                                                    <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}" />
-                                                                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Button.Style>
+                                                <Button Style="{StaticResource Button.Icon}" Width="26" Height="26"
+                                                        FontSize="13" Content="&#xE712;" Margin="2,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        Visibility="{Binding MenuVisibility}"
+                                                        Click="OnTargetMenuClick" ContextMenuOpening="OnTargetMenuOpening"
+                                                        ToolTip="{loc:T '更多操作：禁用 / 删除'}"
+                                                        AutomationProperties.Name="{loc:T '更多操作'}">
+                                                    <Button.ContextMenu>
+                                                        <!-- 菜单本身是主题里的 ContextMenu（卡片底 + 圆角 + 悬停高亮）。
+                                                             图标塞在 Header 里而不是 MenuItem.Icon：那套模板只渲染 Header。 -->
+                                                        <ContextMenu Placement="Bottom">
+                                                            <!-- 禁用 / 恢复走原来那颗按钮的处理函数，它认 sender 的 DataContext 当行对象。 -->
+                                                            <MenuItem Click="OnToggleTargetDisabled"
+                                                                      Visibility="{Binding ToggleVisibility}"
+                                                                      ToolTip="{Binding ToggleTooltip}">
+                                                                <MenuItem.Header>
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Text="{Binding ToggleGlyph}"
+                                                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                                   FontSize="12" Margin="0,0,8,0"
+                                                                                   VerticalAlignment="Center"
+                                                                                   Foreground="{DynamicResource Brush.TextSecondary}" />
+                                                                        <TextBlock Text="{Binding ToggleText}" VerticalAlignment="Center" />
+                                                                    </StackPanel>
+                                                                </MenuItem.Header>
+                                                            </MenuItem>
+                                                            <!-- 应用的删除和分组的删除走同一个入口，由 OnDeleteTarget 分辨作用域。 -->
+                                                            <MenuItem Click="OnDeleteTarget" Visibility="{Binding DeleteVisibility}"
+                                                                      ToolTip="{Binding DeleteTooltip}">
+                                                                <MenuItem.Header>
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Text="&#xE74D;"
+                                                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                                                   FontSize="12" Margin="0,0,8,0"
+                                                                                   VerticalAlignment="Center"
+                                                                                   Foreground="{DynamicResource Brush.Danger}" />
+                                                                        <TextBlock Text="{loc:T '删除'}" VerticalAlignment="Center" />
+                                                                    </StackPanel>
+                                                                </MenuItem.Header>
+                                                            </MenuItem>
+                                                        </ContextMenu>
+                                                    </Button.ContextMenu>
                                                 </Button>
-                                                <!-- 应用的删除和分组的删除走同一个入口，由 OnDeleteTarget 分辨作用域。 -->
-                                                <Button Content="{loc:T '删除'}" Click="OnDeleteTarget"
-                                                        Visibility="{Binding DeleteVisibility}"
-                                                        Style="{StaticResource Button.Ghost}" Padding="8,3" Margin="4,0,0,0"
-                                                        MinWidth="44" FontSize="11" VerticalAlignment="Center"
-                                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                                        Background="{DynamicResource Brush.Background}"
-                                                        ToolTip="{Binding DeleteTooltip}" />
                                             </StackPanel>
                                         </Grid>
                                       </StackPanel>
@@ -769,9 +318,11 @@
 
                             <controls:AppPickButtons Margin="0,6,0,0" HorizontalAlignment="Stretch"
                                                      PickFile="OnPickTargetFile" PickWindow="OnPickTargetWindow" />
-                            <Button Content="{loc:T '新建分组…'}" Style="{StaticResource Button.Ghost}"
-                                    Margin="0,6,0,0" Padding="8,4" HorizontalAlignment="Left" Click="OnNewGroup"
-                                    ToolTip="{loc:T '把几个程序归成一组，共用一套触发方式。'}" />
+                            <Button Style="{StaticResource Button.Icon}" Width="26" Height="26"
+                                    FontSize="12" Content="&#xE710;" Margin="0,6,0,0"
+                                    HorizontalAlignment="Left" Click="OnNewGroup"
+                                    ToolTip="{loc:T '把几个程序归成一组，共用一套触发方式。'}"
+                                    AutomationProperties.Name="{loc:T '新建分组'}" />
                         </StackPanel>
                     </ScrollViewer>
 
@@ -788,6 +339,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -801,10 +353,12 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="TargetTitle" Grid.Column="0" Style="{StaticResource Text.H3}"
-                                   VerticalAlignment="Center" Margin="2,0,8,0"
-                                   TextTrimming="CharacterEllipsis"
-                                   Text="{loc:T '全局的手势'}" />
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,8,0">
+                            <!-- 标题只留名字：条数统计挪到标题行下面单独一行，否则一挤就被截成「这个目标 56…」。 -->
+                            <TextBlock x:Name="TargetTitle" Style="{StaticResource Text.H3}"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{loc:T '全局的手势'}" />
+                        </StackPanel>
 
                         <!-- 工具组：按键筛选 + 搜索。搜索展开时把前两个收起来、原地换成输入框，
                              这样中间这一栏的标题不会被挤没（卡片本来就窄）。 -->
@@ -813,15 +367,21 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="ButtonFilterBox" Grid.Column="0" Width="96" MinHeight="32"
+                            <!-- 宽度不写死：模板左右一共留 44px（12 + 32），写死 96 是按英文三四个字母算的，
+                                 中文界面下「全部按键」四个字正好差一口气，右边那半个字就被吃掉了。
+                                 这里只给下限，真正宽度在 FitFilterBoxWidth() 里按最长选项量出来。 -->
+                            <ComboBox x:Name="ButtonFilterBox" Grid.Column="0" MinWidth="96" MinHeight="32"
                                       Style="{StaticResource ComboBox.Base}"
                                       DisplayMemberPath="Text" SelectedValuePath="Value"
                                       SelectionChanged="OnButtonFilterChanged"
-                                      ToolTip="{loc:T '按鼠标按键筛选'}" />
+                                      ToolTip="{loc:T '按鼠标按键筛选'}"
+                                      AutomationProperties.Name="{loc:T '按鼠标按键筛选'}" />
                             <Button x:Name="SearchButton" Grid.Column="1" Style="{StaticResource Button.Icon}"
                                     Margin="6,0,0,0" Click="OnToggleSearch" Content="&#xE721;"
-                                    ToolTip="{loc:T '搜索手势'}" />
-                            <!-- 宽 134 = 96 + 6 + 32，正好盖住上面两件，不往标题上压。 -->
+                                    ToolTip="{loc:T '搜索手势'}"
+                                    AutomationProperties.Name="{loc:T '搜索手势'}" />
+                            <!-- 宽 = 筛选框 + 6 + 搜索键 32，正好盖住上面两件，不往标题上压。
+                                 筛选框宽度是算出来的，所以这里也由 FitFilterBoxWidth() 一起同步。 -->
                             <Grid x:Name="SearchPanel" Grid.ColumnSpan="2" Width="134"
                                   HorizontalAlignment="Right" Visibility="Collapsed">
                                 <TextBox x:Name="FilterBox" Style="{StaticResource TextBox.Base}" MinHeight="32"
@@ -854,7 +414,8 @@
                         <!-- 排序：按钮只有图标（不带文字），点开才是四档菜单，当前档打勾。 -->
                         <Button x:Name="SortButton" Grid.Column="2" Style="{StaticResource Button.Icon}"
                                 Margin="4,0,0,0" Content="&#xE8CB;" Click="OnSortButtonClick"
-                                ToolTip="{loc:T '手势列表的排序方式'}">
+                                ToolTip="{loc:T '手势列表的排序方式'}"
+                                AutomationProperties.Name="{loc:T '手势列表的排序方式'}">
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="SortMenu">
                                     <MenuItem Tag="custom" IsCheckable="True" Click="OnSortPick"
@@ -870,9 +431,14 @@
                         </Button>
                     </Grid>
 
+                    <!-- 这一行是列表的条数统计（「这个目标 N 条 · 全部 M 条」），
+                         原来挂在总开关条最右边，开关条拆掉后放回列表自己头上。 -->
+                    <TextBlock x:Name="SummaryText" Grid.Row="1" Style="{StaticResource Text.Tertiary}"
+                               Margin="2,-6,0,10" TextTrimming="CharacterEllipsis" />
+
                     <!-- 该目标「允许的触发方式」：照 WGestures 的 TriggerList 抄的，
                          61 条三态（启用 / 禁用 / 默认）。默认 = 跟随上一层：应用 → 分组 → 全局。 -->
-                    <Expander x:Name="TriggerExpander" Grid.Row="1" Margin="0,0,0,10" IsExpanded="False">
+                    <Expander x:Name="TriggerExpander" Grid.Row="2" Margin="0,0,0,10" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock x:Name="TriggerHeader" Text="{loc:T '全局 允许的触发方式'}"
@@ -923,13 +489,13 @@
                         </StackPanel>
                     </Expander>
 
-                    <ScrollViewer x:Name="ListScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="ListScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                        <!-- 拖动排序的收尾挂在列表上：按下手柄后鼠标被列表捕获，
+                        <!-- 拖动排序的收尾挂在列表上：长按满 2 秒后鼠标被列表捕获，
                              后续的移动/抬起都只有列表收得到（行里的 Button 收不到，自然也不会误触发"选中"） -->
                         <ItemsControl x:Name="GestureList" HorizontalAlignment="Stretch"
-                                      MouseMove="OnGripMove" MouseLeftButtonUp="OnGripUp"
-                                      LostMouseCapture="OnGripLostCapture">
+                                      MouseMove="OnDragMove" MouseLeftButtonUp="OnDragUp"
+                                      LostMouseCapture="OnDragLostCapture">
                             <ItemsControl.ItemContainerStyle>
                                 <Style TargetType="ContentPresenter">
                                     <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -937,30 +503,25 @@
                             </ItemsControl.ItemContainerStyle>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
+                                    <!-- 拖动排序没有手柄：按住这条 400ms，或者按住后直接往上/下拖（≥8px）就进拖动
+                                         （见 OnRowPressDown / OnRowPressMove）。四个预览事件都挂在行按钮上，
+                                         列表那边的 OnDragMove / OnDragUp / OnDragLostCapture 负责移动和落位。 -->
                                     <Button Style="{StaticResource Button.GestureRow}" HorizontalAlignment="Stretch"
                                             Padding="10,8" Margin="0,0,0,4" Click="OnPickGesture"
-                                            Opacity="{Binding RowOpacity}">
+                                            Opacity="{Binding RowOpacity}"
+                                            ToolTip="{Binding DragTooltip}"
+                                            PreviewMouseLeftButtonDown="OnRowPressDown"
+                                            PreviewMouseMove="OnRowPressMove"
+                                            PreviewMouseLeftButtonUp="OnRowPressUp"
+                                            LostMouseCapture="OnRowPressLostCapture">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
 
-                                            <!-- 拖动手柄：只在「自定义顺序」且没在筛选时露出来。
-                                                 其它三档是只读排序，给手柄反而会让人以为那样也能改。 -->
-                                            <Border Grid.Column="0" Width="14" Margin="0,0,2,0"
-                                                    Background="Transparent" Cursor="SizeNS"
-                                                    Visibility="{Binding GripVisibility}"
-                                                    ToolTip="{loc:T '按住上下拖动，调整这条手势的顺序'}"
-                                                    PreviewMouseLeftButtonDown="OnGripDown">
-                                                <TextBlock Text="&#xE76F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                           FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                           Foreground="{DynamicResource Brush.TextTertiary}" />
-                                            </Border>
-
-                                            <Border Grid.Column="1" Width="34" Height="34" CornerRadius="9"
+                                            <Border Grid.Column="0" Width="34" Height="34" CornerRadius="9"
                                                     Background="{DynamicResource Brush.AccentSoft}">
                                                 <Grid>
                                                     <TextBlock Text="{Binding Glyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets, Segoe UI Symbol"
@@ -986,14 +547,14 @@
                                                 </Grid>
                                             </Border>
 
-                                            <StackPanel Grid.Column="2" Margin="10,0,8,0" VerticalAlignment="Center">
+                                            <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding Title}" Style="{StaticResource Text.Body}"
                                                            FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Text.Tertiary}"
                                                            Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
                                             </StackPanel>
 
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <Border Background="{DynamicResource Brush.AccentSoft}"
                                                         CornerRadius="5" Padding="6,2" Margin="0,0,6,0"
                                                         Visibility="{Binding StateVisibility}">
@@ -1012,12 +573,12 @@
 
                     <!-- 插入位置提示线：和列表占同一格、画在它上面。
                          只做视觉提示，不吃鼠标（IsHitTestVisible=False），拖动时鼠标仍在列表手里。 -->
-                    <Canvas Grid.Row="2" x:Name="DropLayer" IsHitTestVisible="False" ClipToBounds="True">
+                    <Canvas Grid.Row="3" x:Name="DropLayer" IsHitTestVisible="False" ClipToBounds="True">
                         <Rectangle x:Name="DropLine" Height="2" Width="0" RadiusX="1" RadiusY="1"
                                    Fill="{DynamicResource Brush.Accent}" Visibility="Collapsed" />
                     </Canvas>
 
-                    <TextBlock Grid.Row="3" x:Name="EmptyHint" Margin="0,16,0,4"
+                    <TextBlock Grid.Row="4" x:Name="EmptyHint" Margin="0,16,0,4"
                                Text="{loc:T '还没有手势。点右上角「录制新手势」画一笔。'}"
                                Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Visibility="Collapsed" />
                 </Grid>
@@ -1098,6 +659,14 @@
                                         <Polyline x:Name="PreviewLine" Stroke="{DynamicResource Brush.Accent}"
                                                   StrokeThickness="3" StrokeLineJoin="Round"
                                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                        <!-- 回放画在这一层：底下的静态线压暗，上面一笔一笔走，
+                                             笔尖跟一个小圆点。整个动画都在这块框里，不糊屏幕。 -->
+                                        <Polyline x:Name="ReplayLine" Stroke="{DynamicResource Brush.Accent}"
+                                                  StrokeThickness="3.4" StrokeLineJoin="Round"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  Visibility="Collapsed" />
+                                        <Ellipse x:Name="ReplayHead" Width="9" Height="9"
+                                                 Fill="{DynamicResource Brush.Accent}" Visibility="Collapsed" />
                                     </Canvas>
                                     <!-- 笔画：存下来的轨迹画在框里，改的时候一眼能对上 -->
                                     <TextBlock x:Name="PatternBadge"
@@ -1108,15 +677,142 @@
                                                Foreground="{DynamicResource Brush.Accent}" />
                                 </Grid>
                             </Border>
-                            <Button Style="{StaticResource Button.Base}"
-                                    Padding="14,7" Margin="0,8,0,0" HorizontalAlignment="Left"
-                                    Click="OnRecordClick">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE7C9;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="{loc:T '按住鼠标键画一笔（重新录制）'}" VerticalAlignment="Center" />
+                            <!-- 录制和回放并排一行：回放只是"把这一笔重画一遍看看"，不该独占一行（v1.6.0）。 -->
+                            <WrapPanel Margin="0,8,0,0">
+                                <Button Style="{StaticResource Button.Base}"
+                                        Padding="14,7" Margin="0,0,8,0"
+                                        Click="OnRecordClick">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7C9;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{loc:T '重新录制'}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- 回放：只有播放图标 + 提示。放慢之后这一笔要两三秒，
+                                     旁边那颗是"重新录制"，两颗并排时"回放"两个字纯占宽度。
+                                     名字只留「重新录制」四个字（用户反馈：别把"按住鼠标键画一笔"和括号塞进按钮）。 -->
+                                <Button Style="{StaticResource Button.Icon}" Width="36" Height="32"
+                                        FontSize="13" Content="&#xE768;" Click="OnReplayClick"
+                                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                        Background="{DynamicResource Brush.SurfaceAlt}"
+                                        ToolTip="{loc:T '回放这一笔'}"
+                                        AutomationProperties.Name="{loc:T '回放这一笔'}" />
+                            </WrapPanel>
+
+                            <!-- 美化模板（任务四）：框里画的是「存下来之后的样子」。
+                                 右边两颗按钮只改编辑器里的副本，点保存才落盘。 -->
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="BeautyStatus" Grid.Column="0"
+                                           Style="{StaticResource Text.Tertiary}"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{loc:T '美化只改形状与显示，识别仍按同一套语义特征比对；整理后若会认成别的手势，就自动保留原始轨迹。'}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Button x:Name="RebuildBeautyButton" Style="{StaticResource Button.Base}"
+                                            Padding="12,6" Margin="8,0,0,0" Click="OnRebuildBeautyClick"
+                                            Content="{loc:T '重新美化'}"
+                                            ToolTip="{loc:T '按「手势设置」里的美化强度，把这一笔重新整理成标准图形'}" />
+                                    <Button x:Name="UseRawButton" Style="{StaticResource Button.Base}"
+                                            Padding="12,6" Margin="8,0,0,0" Click="OnUseRawClick"
+                                            Content="{loc:T '恢复原始轨迹'}"
+                                            ToolTip="{loc:T '丢掉美化模板，恢复录制时手画的那一笔'}" />
                                 </StackPanel>
-                            </Button>
+                            </Grid>
+                        </StackPanel>
+
+                        <!-- 多步手势：一步接一步，按住起始键一路做下来（v1.5.0） -->
+                        <StackPanel x:Name="StepsRow" Margin="0,0,0,12" Visibility="Collapsed">
+                            <Grid Margin="0,0,0,6">
+                                <TextBlock Text="{loc:T '步骤'}" Style="{StaticResource Text.Secondary}"
+                                           VerticalAlignment="Center" />
+                                <TextBlock x:Name="StepsHint" HorizontalAlignment="Right"
+                                           VerticalAlignment="Center" Style="{StaticResource Text.Tertiary}" />
+                            </Grid>
+
+                            <Border CornerRadius="10" Background="{DynamicResource Brush.SurfaceAlt}"
+                                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                    Padding="8,4" Margin="0,0,0,8">
+                                <ItemsControl x:Name="StepList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderThickness="0,0,0,1"
+                                                    BorderBrush="{DynamicResource Brush.Border}" Padding="2,5">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="26" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Index}" Style="{StaticResource Text.Tertiary}"
+                                                               VerticalAlignment="Center" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding Title}"
+                                                               Style="{StaticResource Text.Body}"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <!-- 每行一颗垃圾桶就够：这里一行只有一个动作，写「删除」会跟步骤标题抢宽度。 -->
+                                                    <Button Grid.Column="2" Content="&#xE74D;"
+                                                            Style="{StaticResource Button.Icon}" Width="24" Height="24"
+                                                            FontSize="11" Margin="4,0,0,0"
+                                                            Foreground="{DynamicResource Brush.Danger}"
+                                                            Tag="{Binding Step}" Click="OnRemoveStep"
+                                                            ToolTip="{loc:T '删掉这一步'}"
+                                                            AutomationProperties.Name="{loc:T '删掉这一步'}" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+
+                            <TextBlock x:Name="StepsEmpty" Text="{loc:T '还没有步骤 —— 下面挑一种往里加，停一下再做下一步。'}"
+                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                                       Margin="0,0,0,8" />
+
+                            <WrapPanel>
+                                <Button Content="{loc:T '画一笔'}" Style="{StaticResource Button.Pill}"
+                                        Margin="0,0,6,6" Click="OnAddStrokeStep" />
+                                <Button Content="{loc:T '按一组键'}" Style="{StaticResource Button.Pill}"
+                                        Margin="0,0,6,6" Click="OnAddKeyStep" />
+                                <Button Content="{loc:T '清空'}" Style="{StaticResource Button.Ghost}"
+                                        Margin="0,0,0,6" Click="OnClearSteps" />
+                            </WrapPanel>
+
+                            <Grid Margin="0,2,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                    <TextBlock Text="{loc:T '滚轮'}" Style="{StaticResource Text.Tertiary}"
+                                               Margin="0,0,0,3" />
+                                    <ComboBox x:Name="StepWheelBox" Style="{StaticResource ComboBox.Base}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,6,0">
+                                    <TextBlock Text="{loc:T '角落'}" Style="{StaticResource Text.Tertiary}"
+                                               Margin="0,0,0,3" />
+                                    <ComboBox x:Name="StepCornerBox" Style="{StaticResource ComboBox.Base}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="{loc:T '屏幕边缘'}" Style="{StaticResource Text.Tertiary}"
+                                               Margin="0,0,0,3" />
+                                    <ComboBox x:Name="StepEdgeBox" Style="{StaticResource ComboBox.Base}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <WrapPanel Margin="0,6,0,0">
+                                <Button Content="{loc:T '加滚轮'}" Style="{StaticResource Button.Pill}"
+                                        Margin="0,0,6,0" Click="OnAddWheelStep" />
+                                <Button Content="{loc:T '加角落'}" Style="{StaticResource Button.Pill}"
+                                        Margin="0,0,6,0" Click="OnAddCornerStep" />
+                                <Button Content="{loc:T '加贴边'}" Style="{StaticResource Button.Pill}"
+                                        Click="OnAddEdgeStep" />
+                            </WrapPanel>
                         </StackPanel>
 
                         <TextBlock Text="{loc:T '动作'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,4" />
@@ -1155,7 +851,8 @@
                                         Width="26" Height="26" Padding="0"
                                         HorizontalAlignment="Center" VerticalAlignment="Center"
                                         Visibility="Collapsed" Focusable="False"
-                                        ToolTip="{loc:T '清除搜索'}" Click="OnClearActionSearch">
+                                        ToolTip="{loc:T '清除搜索'}"
+                                        AutomationProperties.Name="{loc:T '清除搜索'}" Click="OnClearActionSearch">
                                     <TextBlock Text="&#xE711;" FontSize="11"
                                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
                                 </Button>
@@ -1247,13 +944,22 @@
                     <!-- 保存/新建/删除固定在底部：编辑器内容再长也不用滚到底找按钮 -->
                     <Border Grid.Row="1" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Brush.Border}"
                             Padding="0,12,0,0" Margin="0,4,0,0">
+                        <!-- 「保存」留文字（它是这一栏的主行动，也是四个字里唯一不该靠猜的）；
+                             旁边两颗各有明确图标，只留图标 + 提示，省下来的宽度让上面那几张下拉喘口气。 -->
                         <StackPanel Orientation="Horizontal">
                             <Button Content="{loc:T '保存'}" Style="{StaticResource Button.Primary}"
                                     Padding="18,7" Click="OnSaveClick" />
-                            <Button Content="{loc:T '新建'}" Style="{StaticResource Button.Ghost}"
-                                    Padding="12,7" Margin="8,0,0,0" Click="OnNewClick" />
-                            <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}"
-                                    Padding="12,7" Margin="8,0,0,0" Click="OnDeleteClick" />
+                            <Button Style="{StaticResource Button.Icon}" Width="34" Height="32"
+                                    FontSize="13" Content="&#xE710;" Margin="8,0,0,0" Click="OnNewClick"
+                                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                    ToolTip="{loc:T '新建一条手势'}"
+                                    AutomationProperties.Name="{loc:T '新建一条手势'}" />
+                            <Button Style="{StaticResource Button.Icon}" Width="34" Height="32"
+                                    FontSize="13" Content="&#xE74D;" Margin="8,0,0,0" Click="OnDeleteClick"
+                                    Foreground="{DynamicResource Brush.Danger}"
+                                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                    ToolTip="{loc:T '删掉当前这条手势'}"
+                                    AutomationProperties.Name="{loc:T '删掉当前这条手势'}" />
                         </StackPanel>
                     </Border>
                 </Grid>

@@ -26,6 +26,52 @@ public sealed partial class AppHost
     /// </summary>
     private bool _notifiedInCall;
 
+    /// <summary>
+    /// 上一次"注入被完整性级别挡掉"的提示时间（TickCount64 毫秒）。
+    /// 连按手势会连着失败几十次，20 秒内只提醒一次。
+    /// </summary>
+    private long _lastInjectBarrierAt;
+
+    /// <summary>
+    /// 「这次调用里的成功提示可以省略」的嵌套计数。
+    ///
+    /// 手势是个例外：松手的时候名字已经浮在屏幕上了（「关闭」），动作自己再补一条
+    /// 「已发送 Ctrl+W（未绑定应用，发给当前窗口）」就是把同一件事说第二遍 ——
+    /// 用户明确说过这种提示没必要。所以手势执行期间用 <see cref="QuietSuccess"/>
+    /// 圈一段，段内的**成功**提示全部省掉；失败（「✗ …」）照旧弹，那才是要看的东西。
+    /// </summary>
+    private int _quietSuccess;
+
+    /// <summary>
+    /// 进入「不弹成功提示」的作用域，Dispose 时退出。可嵌套。
+    /// </summary>
+    public IDisposable QuietSuccess()
+    {
+        System.Threading.Interlocked.Increment(ref _quietSuccess);
+        return new QuietScope(this);
+    }
+
+    private sealed class QuietScope : IDisposable
+    {
+        private AppHost? _host;
+        public QuietScope(AppHost host) => _host = host;
+        public void Dispose()
+        {
+            var host = _host;
+            _host = null;
+            if (host != null) System.Threading.Interlocked.Decrement(ref host._quietSuccess);
+        }
+    }
+
+    /// <summary>
+    /// 这条提示在静默期里要不要吞掉。
+    ///
+    /// 只吞成功提示：失败文案统一以「✗ 」开头（同 <c>UiText.FailLine</c>），
+    /// 那是唯一"用户非看不可"的一类，静默期也放行。
+    /// </summary>
+    internal static bool ShouldSuppressToast(int quietDepth, string message)
+        => quietDepth > 0 && !(message ?? "").TrimStart().StartsWith('✗');
+
     public bool InvokeAction(string action, string arg)
     {
         _notifiedInCall = false;
@@ -44,6 +90,10 @@ public sealed partial class AppHost
             return false;
         }
 
+        /* 动作跑完了，看一眼刚才那批注入有没有被 UIPI 挡掉。
+         * 放在这里而不是每个动作各自判断：手势、热键、按键绑定、Qbar 全都走这条出口。 */
+        ReportInjectBarrier();
+
         if (ok)
         {
             UsageStats.Record(action);
@@ -55,6 +105,29 @@ public sealed partial class AppHost
         CoreLog.Warn($"动作未执行：{action}（未注册，或执行了但没完成）");
         NotifyActionFailed(action, null);
         return false;
+    }
+
+    /// <summary>
+    /// 注入被完整性级别挡掉时给一条界面提示。
+    ///
+    /// 典型场景：InputPlus 以普通权限运行，用户对「以管理员身份运行」的窗口
+    /// 发键（手势 / 热键动作 / 宏 / Qbar 动作）—— SendInput 被 UIPI 拒绝
+    /// （错误 5）。以前只有日志里一行 Warn，用户看到的就是"按了没反应"。
+    /// 提示只在真的挡了的时候出现，20 秒内不重复。
+    /// </summary>
+    private void ReportInjectBarrier()
+    {
+        var barrier = InputSender.LastInjectBarrier;
+        if (barrier == Core.App.InjectionBarrier.None) return;
+
+        long now = Environment.TickCount64;
+        if (now - _lastInjectBarrierAt < 20_000) return;
+        _lastInjectBarrierAt = now;
+
+        string text = Core.App.ElevationState.BarrierText(barrier);
+        if (string.IsNullOrWhiteSpace(text)) return;
+        CoreLog.Warn("[注入] " + text);
+        NotifyTranslated("✗ " + text);
     }
 
     /// <summary>
@@ -91,6 +164,11 @@ public sealed partial class AppHost
     public void Notify(string message)
     {
         if (string.IsNullOrWhiteSpace(message) || !Settings.Global.ShowToast) return;
+        if (ShouldSuppressToast(_quietSuccess, message))
+        {
+            CoreLog.Info($"[提示] 手势已提示过名称，这条省略：{message}");
+            return;
+        }
         _notifiedInCall = true;
         /* 直接交给 ToastWindow：它内部会调度到界面线程，且只显示最新一条。
          * 连按音量键时，前一条还没画出来就被后一条顶掉，不会积压。 */
@@ -106,6 +184,11 @@ public sealed partial class AppHost
     private void NotifyTranslated(string message)
     {
         if (string.IsNullOrWhiteSpace(message) || !Settings.Global.ShowToast) return;
+        if (ShouldSuppressToast(_quietSuccess, message))
+        {
+            CoreLog.Info($"[提示] 手势已提示过名称，这条省略：{message}");
+            return;
+        }
         _notifiedInCall = true;
         ToastWindow.Show(message);
     }
@@ -122,9 +205,26 @@ public sealed partial class AppHost
         if (_hookHostReady)
             SendHookHostCommand(enabled ? "ENABLED 1" : "ENABLED 0");
 
+        /* 暂停 = **全部功能一起停**，不只是热键。
+         *
+         * 手势、平滑滚动、按住拖拽各自装着独立的钩子（手势一条鼠标钩子、
+         * 平滑滚动复用它、按住拖拽是一整套键盘+鼠标钩子）。只停引擎的话，
+         * 用户点了暂停，画手势 / 滚轮缓动 / 按住 Enter 拖窗口照样生效 ——
+         * 那就不叫暂停。这三面旗子都是"不改用户设置"的临时状态，
+         * 恢复时原样装回来。 */
+        try { Gestures.Suspended = !enabled; } catch (Exception ex) { CoreLog.Swallow(ex, "暂停鼠标手势"); }
+        try { Scroll.Suspended = !enabled; } catch (Exception ex) { CoreLog.Swallow(ex, "暂停平滑滚动"); }
+        try { HoldDrag.Suspended = !enabled; } catch (Exception ex) { CoreLog.Swallow(ex, "暂停按住拖拽"); }
+
         /* 暂停前把可能"按着没抬起来"的键补一次抬起：
          * 暂停后引擎不再管按键，粘住就没人修了。 */
-        if (!enabled) Core.Input.InputSafety.ReleaseAll();
+        if (!enabled)
+        {
+            Core.Input.InputSafety.ReleaseAll();
+
+            /* 正在播放的宏/手势回放也停掉：那是自动化按键，暂停之后继续打字更吓人。 */
+            try { Context.MacroPlayer.Cancel(); } catch (Exception ex) { CoreLog.Swallow(ex, "暂停宏播放"); }
+        }
 
         _tray?.SetEnabled(enabled);
         EnabledChanged?.Invoke(enabled);

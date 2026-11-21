@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 
 namespace InputPlus.Core.Qbar;
@@ -15,20 +15,15 @@ internal static class QbarProviders
 {
     internal sealed record AppItem(string Title, string Path);
 
-    internal sealed record FileItem(string Name, string Path, bool IsDirectory);
-
     internal sealed record SettingItem(string Title, string Uri, params string[] Aliases);
 
     private static readonly object Gate = new();
     private static List<AppItem>? _apps;
     private static DateTime _appsAt;
-    private static List<FileItem>? _files;
-    private static DateTime _filesAt;
-    private static Task? _fileBuild;
+    /// <summary>文件搜索不可用的提示只提一次，别让用户每个字符都看到同一条。</summary>
+    private static bool _fileHintShown;
     private static List<QbarResult>? _bookmarks;
     private static DateTime _bookmarksAt;
-    private static string? _esExe;
-    private static bool _esChecked;
 
     /// <summary>Windows 设置 / 控制面板的常用入口。别名同时收中英文，输入“显示”或“display”都能命中。</summary>
     private static readonly SettingItem[] Settings =
@@ -76,7 +71,10 @@ internal static class QbarProviders
     };
 
     /// <summary>把固定项、应用、书签、设置、文件全部并进 Qbar 候选。</summary>
-    public static IEnumerable<QbarResult> Search(AppSettings settings, string text, int limit)
+    /// <param name="fileOutcome">后台算好的文件结果（null = 就地同步算）。</param>
+    /// <param name="skipFiles">后台还在算时先不碰文件，避免 UI 线程被扫盘拖住。</param>
+    public static IEnumerable<QbarResult> Search(AppSettings settings, string text, int limit,
+        QbarSearchOutcome? fileOutcome = null, bool skipFiles = false)
     {
         if (string.IsNullOrWhiteSpace(text)) yield break;
         string q = text.Trim();
@@ -89,11 +87,11 @@ internal static class QbarProviders
 
         foreach (var r in other) yield return r;
 
-        /* 文件索引没建好时 MatchFiles 会返回一条“正在建立文件索引…”占位。
-         * 如果应用/书签/设置已经命中了，这条占位只会把列表撑乱——
-         * 用户看着“显示设置”下面挂一条“正在建立文件索引”，并不知道这是
+        /* 内核不可用时 MatchFiles 会带一条“文件搜索不可用”的提示（Payload 为空）。
+         * 如果应用/书签/设置已经命中了，这条提示只会把列表撑乱——
+         * 用户看着“显示设置”下面挂一条“找不到 Everything”，并不知道这是
          * 给文件搜索用的。只在完全没有其它结果时才展示它。 */
-        foreach (var r in MatchFiles(settings, q, limit))
+        foreach (var r in MatchFiles(settings, q, limit, fileOutcome, skipFiles))
         {
             if (r.Payload.Length == 0 && other.Count > 0) continue;
             yield return r;
@@ -175,47 +173,100 @@ internal static class QbarProviders
         }
     }
 
-    private static IEnumerable<QbarResult> MatchFiles(AppSettings settings, string text, int limit)
+    /// <summary>
+    /// <summary>
+    /// 文件搜索：Input Plus 自己的索引（见 <see cref="NativeSearchIndex"/>）。
+    ///
+    /// 以前这里挂的是 Everything（进程内 SDK 优先、es.exe 兜底）。实际用起来有两个问题：
+    /// 一是系统里本来就装着 Everything 的机器上，它会直接用那一份 —— 用户看到的
+    /// 就是"搜个文件把 Everything 叫出来了"；二是没装的机器上等于没有文件搜索。
+    /// 现在索引与查询都在本进程里，不启动任何外部程序。
+    /// </summary>
+    private static IEnumerable<QbarResult> MatchFiles(AppSettings settings, string text, int limit,
+        QbarSearchOutcome? prepared, bool skipFiles)
     {
+        if (skipFiles) yield break;
         if (text.Length < 2) yield break;
 
-        // Everything 的 es.exe 在装过 Everything 的机器上极快，优先用它；
-        // 没装则退回后台建立的家目录索引。
-        var fromEverything = SearchEverything(text, Math.Min(6, limit));
-        if (fromEverything.Count > 0)
+        /* 幂等：有缓存时这里只是一次字段检查，没有才在后台开始扫盘（绝不阻塞这次输入）。 */
+        NativeSearchIndex.Start();
+
+        /* prepared 来自界面层的后台线程；为 null 说明这次是自检/命令行工具，
+         * 就地同步跑一遍（那些场景没有 UI 线程可卡）。 */
+        QbarSearchOutcome outcome = prepared ??
+            QbarSearchEngine.Run(QbarSearchEngine.FromSettings(settings), text, Math.Min(6, limit));
+
+        List<QbarSearchHit> hits = outcome.Hits;
+        for (int i = 0; i < hits.Count; i++)
         {
-            foreach (var r in fromEverything) yield return r;
+            QbarSearchHit hit = hits[i];
+
+            /* Score 是"越小越靠前"，引擎那边是"越大越靠前"，所以这里按名次折算：
+             * 名次本身已经是排序结果，别再做一次映射，否则并列分会被打散。 */
+            yield return new QbarResult(QbarKind.File, hit.Name, hit.Path,
+                hit.IsDir ? "文件夹" : "文件", hit.Path)
+            {
+                Score = 21 + i,
+                Highlights = hit.Highlights,
+            };
+        }
+
+        if (hits.Count > 0) yield break;
+
+        /* Everything 没就绪：0 条不代表"没有这个文件"，而是"没人能回答"。
+         * 必须给一条能点的提示 —— 否则 Everything 没开着的时候，用户搜什么都是空的，
+         * 只会以为搜索坏了、或者以为文件被删了。 */
+        if (string.Equals(outcome.Backend, "off", StringComparison.Ordinal))
+        {
+            yield return new QbarResult(QbarKind.Command,
+                Loc.T("文件搜索的引擎还没启动"),
+                Loc.T("点这里启动内置 Everything（就在本软件里，不用另装）"), "文件", "everything")
+            {
+                Score = 27,
+                Action = "qbar:everything",
+            };
             yield break;
         }
 
-        EnsureFileIndex();
-        var snapshot = _files;
-        if (snapshot == null)
+        /* 拼音索引还没建好：说一句就够，别让用户对着 0 结果猜"是不是我打错了"。
+         * 索引自己在后台建，建完下一次输入就正常。 */
+        if (outcome.PinyinPending)
         {
-            /* 首次搜索时索引还在后台建。给一条可见的占位，别让用户以为
-             * “文件搜索根本没做”；几百毫秒后再输入就能看到结果。 */
-            yield return new QbarResult(QbarKind.Command, "正在建立文件索引…",
-                "首次搜索需要几秒，稍后再输入一次", "文件", "", null) { Score = 27 };
+            yield return new QbarResult(QbarKind.Command, Loc.T("拼音索引正在建立"),
+                Loc.T("建好之后 yh / yinhang 这类输入就能命中中文文件名"), "拼音", "pending")
+            { Score = 27 };
             yield break;
         }
 
-        int shown = 0;
-        foreach (var file in snapshot)
+        /* 被优先级规则挡掉的结果：数量要给出来，还要能点开看原因。
+         * 静默吞掉是这一层最容易招骂的行为 —— 用户会以为文件丢了。 */
+        if (outcome.HiddenCount > 0)
         {
-            if (!file.Name.Contains(text, StringComparison.OrdinalIgnoreCase)) continue;
-            yield return new QbarResult(QbarKind.File, file.Name,
-                file.IsDirectory ? "文件夹" : file.Path, file.IsDirectory ? "文件夹" : "文件", file.Path)
-            { Score = 25 };
-            if (++shown >= 6) yield break;
+            yield return new QbarResult(QbarKind.Command,
+                Loc.F("有 {0} 条结果被优先级规则隐藏", outcome.HiddenCount),
+                Loc.T("点开查看被隐藏的原因与样例"), "优先级", "hidden")
+            {
+                Score = 26,
+                Action = "qbar:hidden",
+            };
+            yield break;
         }
 
-        /* 刚创建的文件不可能出现在旧快照里。空结果且索引已老于 20 秒时
-         * 丢掉快照重扫；下一次输入就能看到，不用等 3 分钟 TTL。 */
-        if (shown == 0 && DateTime.UtcNow - _filesAt > TimeSpan.FromSeconds(20))
-        {
-            lock (Gate) _files = null;
-            EnsureFileIndex();
-        }
+        /* 一条都没有分两种：索引答了"真没有"，或者索引还没就绪。后者必须说一句，
+         * 否则用户会一直以为自己记错了文件名。每个进程只提一次，
+         * 别让每敲一个字符都冒一条同样的提示。 */
+        /* Everything 就绪时不需要这条提示：它自己维护索引，自建快照只是后备。
+         * 否则会出现"搜索明明有结果，底下却挂着一条索引没就绪"的自相矛盾。 */
+        bool everythingReady = EverythingApi.IsAvailable && EverythingApi.IsDbLoaded;
+        string problem = NativeSearchIndex.Problem;
+        bool notReady = !NativeSearchIndex.Ready || NativeSearchIndex.Building;
+        if (everythingReady && problem.Length == 0) yield break;
+        if (problem.Length == 0 && !notReady) yield break;
+        if (_fileHintShown) yield break;
+
+        _fileHintShown = true;
+        yield return new QbarResult(QbarKind.Command, "文件索引还没就绪",
+            problem.Length > 0 ? problem : NativeSearchIndex.Status, "文件", "", null) { Score = 27 };
     }
 
     private static List<AppItem> Apps()
@@ -264,178 +315,6 @@ internal static class QbarProviders
             _appsAt = DateTime.UtcNow;
         }
         return list;
-    }
-
-    private static readonly TimeSpan FileIndexTtl = TimeSpan.FromMinutes(3);
-
-    private static void EnsureFileIndex()
-    {
-        lock (Gate)
-        {
-            if (_files != null && DateTime.UtcNow - _filesAt < FileIndexTtl) return;
-            if (_fileBuild is { IsCompleted: false }) return;
-            _fileBuild = Task.Run(BuildFileIndex);
-        }
-    }
-
-    private static void BuildFileIndex()
-    {
-        var list = new List<FileItem>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        /* 家目录三件套 + 非系统盘根目录。
-         *
-         * Everything 的 es.exe 只在装过 Everything 的机器上存在；没装时总不能
-         * 只搜桌面 —— 用户把项目放在 D:\ 是常态。这里只扫固定磁盘，跳过
-         * Windows / Program Files / AppData 这类噪音目录；索引在后台建，
-         * Qbar 查询不会被它拖住。 */
-        var roots = new List<string>
-        {
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
-        };
-        /* shell 的桌面可能被重定向到非系统盘；SpecialFolder 不一定能反映。 */
-        try
-        {
-            if (Microsoft.Win32.Registry.GetValue(
-                    @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
-                    "Desktop", null) is string shellDesktop)
-            {
-                string expanded = Environment.ExpandEnvironmentVariables(shellDesktop);
-                if (Directory.Exists(expanded)) roots.Insert(0, expanded);
-            }
-        }
-        catch { }
-        foreach (var drive in DriveInfo.GetDrives())
-        {
-            try
-            {
-                if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
-                /* C: 只索引用户目录，整盘扫会掉进 Windows/WinSxS。 */
-                if (drive.Name.StartsWith("C:", StringComparison.OrdinalIgnoreCase)) continue;
-                roots.Add(drive.RootDirectory.FullName);
-
-                /* 桌面/文档可能被用户重定向到 D: 等非系统盘，
-                 * Environment.SpecialFolder 仍返回 C:\Users\...，这里补上
-                 * 各盘根下的同名目录，避免只靠整盘扫描才能找到桌面文件。 */
-                foreach (var name in new[] { "Desktop", "Documents", "Downloads" })
-                {
-                    string redirected = Path.Combine(drive.RootDirectory.FullName, name);
-                    if (Directory.Exists(redirected)) roots.Add(redirected);
-                }
-            }
-            catch { }
-        }
-
-        var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "Windows", "Program Files", "Program Files (x86)", "ProgramData",
-            "$Recycle.Bin", "System Volume Information", "AppData",
-            "node_modules", ".git", ".vs", "bin", "obj", "packages",
-        };
-
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = false,
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint,
-        };
-
-        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) continue;
-            var pending = new Stack<(DirectoryInfo Dir, int Depth)>();
-            pending.Push((new DirectoryInfo(root), 0));
-            while (pending.Count > 0 && list.Count < 60000)
-            {
-                var (dir, depth) = pending.Pop();
-                try
-                {
-                    foreach (var info in dir.EnumerateFileSystemInfos("*", options))
-                    {
-                        string name = info.Name;
-                        if (name.Length == 0 || skip.Contains(name)) continue;
-
-                        bool isDir = (info.Attributes & FileAttributes.Directory) != 0;
-                        if (seen.Add(info.FullName))
-                            list.Add(new FileItem(name, info.FullName, isDir));
-
-                        if (isDir && depth + 1 <= 4)
-                            pending.Push(((DirectoryInfo)info, depth + 1));
-                        if (list.Count >= 60000) break;
-                    }
-                }
-                catch (Exception ex) { CoreLog.Swallow(ex, "索引本地文件"); }
-            }
-            if (list.Count >= 60000) break;
-
-            /* 每扫完一个根就发布一次：桌面/文档往往几毫秒就好，用户不必等
-             * 整个 D: 盘扫完才看到第一条文件结果。 */
-            lock (Gate)
-            {
-                _files = list.ToList();
-                _filesAt = DateTime.UtcNow;
-            }
-        }
-    }
-
-    private static List<QbarResult> SearchEverything(string text, int limit)
-    {
-        var result = new List<QbarResult>();
-        string? es = EsExe();
-        if (es == null) return result;
-
-        try
-        {
-            var psi = new ProcessStartInfo(es)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            psi.ArgumentList.Add("-n");
-            psi.ArgumentList.Add(limit.ToString());
-            psi.ArgumentList.Add(text);
-
-            using var proc = Process.Start(psi);
-            if (proc == null) return result;
-            if (!proc.WaitForExit(220))
-            {
-                try { proc.Kill(true); } catch { }
-                return result;
-            }
-
-            string output = proc.StandardOutput.ReadToEnd();
-            foreach (var raw in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (!File.Exists(raw) && !Directory.Exists(raw)) continue;
-                bool dir = Directory.Exists(raw);
-                result.Add(new QbarResult(QbarKind.File, Path.GetFileName(raw), raw,
-                    dir ? "文件夹" : "文件", raw) { Score = 24 });
-                if (result.Count >= limit) break;
-            }
-        }
-        catch (Exception ex) { CoreLog.Swallow(ex, "Everything 搜索"); }
-        return result;
-    }
-
-    private static string? EsExe()
-    {
-        if (_esChecked) return _esExe;
-        _esChecked = true;
-        foreach (var dir in new[]
-                 {
-                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                 })
-        {
-            if (string.IsNullOrWhiteSpace(dir)) continue;
-            string candidate = Path.Combine(dir, "Everything", "es.exe");
-            if (File.Exists(candidate)) return _esExe = candidate;
-        }
-        return _esExe;
     }
 
     private static List<QbarResult> Bookmarks()

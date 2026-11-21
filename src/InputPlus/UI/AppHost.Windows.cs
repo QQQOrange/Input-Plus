@@ -118,16 +118,7 @@ public sealed partial class AppHost
          * 现在关掉就把字段清空，并且整段兜住异常：宁可重建一次，也不能什么都不弹。 */
         try
         {
-            if (_qbar == null)
-            {
-                _qbar = new QbarWindow(this);
-                _qbar.Closed += (_, _) =>
-                {
-                    CoreLog.Info("Qbar：窗口已关闭，下次重新创建");
-                    _qbar = null;
-                };
-            }
-            _qbar.Open(prefill);
+            EnsureQbar().Open(prefill);
         }
         catch (Exception ex)
         {
@@ -135,9 +126,7 @@ public sealed partial class AppHost
             _qbar = null;
             try
             {
-                _qbar = new QbarWindow(this);
-                _qbar.Closed += (_, _) => _qbar = null;
-                _qbar.Open(prefill);
+                EnsureQbar().Open(prefill);
             }
             catch (Exception ex2)
             {
@@ -145,6 +134,75 @@ public sealed partial class AppHost
                 Notify(Loc.T("Qbar 打不开，详情见日志"));
             }
         }
+    }
+
+    /// <summary>
+    /// 动作触发：打开 Qbar 并直接挂上文件搜索过滤器（「Qbar 搜索」分类的 qfilter:&lt;Id&gt;）。
+    ///
+    /// 不复用 ShowQbar 的字符串预填：过滤器要变成 chip 得走面板里的 ApplyFilter
+    /// （清输入框、亮 chip、重查），一条 "wd " 预填做不到 —— TryMakeChip 只认引擎表。
+    /// </summary>
+    public void ShowQbarFileSearch(string? filterId, string? query = null)
+    {
+        try
+        {
+            EnsureQbar().OpenFileSearch(filterId, query);
+        }
+        catch (Exception ex)
+        {
+            /* 与 ShowQbar 同样的兜底：窗口被关掉过一次就再也 Show() 不了，
+             * 宁可重建一次，也不能"按了键什么都不弹"。 */
+            CoreLog.Error("Qbar 带过滤器打开失败（将重建窗口再试一次）", ex);
+            _qbar = null;
+            try
+            {
+                EnsureQbar().OpenFileSearch(filterId, query);
+            }
+            catch (Exception ex2)
+            {
+                CoreLog.Error("Qbar 重建后仍然打不开", ex2);
+                Notify(Loc.T("Qbar 打不开，详情见日志"));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 动作触发：打开 Qbar 并直接查一个词（「Qbar 搜索」分类的 qdict.lookup）。
+    /// 与 <see cref="ShowQbarFileSearch"/> 同一套兜底：窗口被关掉过一次后要能重建。
+    /// </summary>
+    public void ShowQbarDictionary(string? word = null)
+    {
+        try
+        {
+            EnsureQbar().OpenDictionary(word);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("Qbar 带词查词打开失败（将重建窗口再试一次）", ex);
+            _qbar = null;
+            try
+            {
+                EnsureQbar().OpenDictionary(word);
+            }
+            catch (Exception ex2)
+            {
+                CoreLog.Error("Qbar 重建后仍然打不开", ex2);
+                Notify(Loc.T("Qbar 打不开，详情见日志"));
+            }
+        }
+    }
+
+    /// <summary>懒建 Qbar 窗口；关掉之后字段会被清空，下次自动重建。</summary>
+    private QbarWindow EnsureQbar()
+    {
+        if (_qbar != null) return _qbar;
+        _qbar = new QbarWindow(this);
+        _qbar.Closed += (_, _) =>
+        {
+            CoreLog.Info("Qbar：窗口已关闭，下次重新创建");
+            _qbar = null;
+        };
+        return _qbar;
     }
 
     /// <summary>
@@ -179,6 +237,56 @@ public sealed partial class AppHost
         }
         _math.Show();
         _math.Activate();
+    }
+
+    /// <summary>Lua 脚本管理（v1.5.0）：写脚本、试跑、看输出。</summary>
+    public void ShowLuaScripts()
+    {
+        if (_luaScripts == null)
+        {
+            _luaScripts = new LuaScriptsWindow(this);
+            _luaScripts.Closed += (_, _) => _luaScripts = null;
+        }
+        _luaScripts.Show();
+        _luaScripts.Activate();
+    }
+
+    /// <summary>手势菜单管理（v1.5.0）：一个菜单里放最多 12 条动作。</summary>
+    public void ShowGestureMenus()
+    {
+        if (_gestureMenus == null)
+        {
+            _gestureMenus = new GestureMenusWindow(this);
+            _gestureMenus.Closed += (_, _) => _gestureMenus = null;
+        }
+        _gestureMenus.Show();
+        _gestureMenus.Activate();
+    }
+
+    /// <summary>
+    /// 在鼠标旁边弹出手势菜单，选完就执行选中的那条动作。
+    ///
+    /// 菜单本身是 Core.Scripting.GestureMenuDef（跟设置一起存），
+    /// 这里只负责"弹窗 → 拿到条目 → 走正常的 InvokeAction"。
+    /// 所以菜单里的动作和绑键的动作是同一套、同一条执行路径。
+    /// </summary>
+    public void ShowGestureMenu(string menuId)
+    {
+        var menu = Settings.GestureMenus.FirstOrDefault(m => m.Id == menuId);
+        if (menu == null)
+        {
+            Notify(Loc.T("这个手势菜单已经不在了，去菜单管理里看一眼"));
+            return;
+        }
+        if (menu.Items.Count == 0)
+        {
+            Notify(Loc.T("这个手势菜单还是空的，先去菜单管理里加几条"));
+            return;
+        }
+
+        var picked = GestureMenuWindow.Pick(menu, Core.Actions.ActionCatalog.TitleOf);
+        if (picked == null) return;
+        InvokeAction(picked.Action, picked.Arg);
     }
 
     public void ShowClipboardHistory()

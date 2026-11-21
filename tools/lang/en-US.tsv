@@ -1397,8 +1397,6 @@ PowerShell（管理员）
 立即锁定当前会话	
 让计算机进入睡眠	
 Input Plus 设置窗口	Input Plus settings window
-窗口绑定管理	Window binding manager
-管理 10 个窗口槽位	manage 10 window slots
 最近复制的内容	recently copied items
 快捷键速查表	hotkey cheat sheet
 带历史记录的计算器	calculator with history
@@ -2940,14 +2938,12 @@ Esc 仍可用（轮询兜底），但会同时传到底下的程序	Esc still wo
   <<<< 残留备注（没有动作却还留着备注）	  <<<< stale note (note left without an action)
  和 	 and 
  这与是否管理员无关。）\n\n	 regardless of elevation.)\n\n
-10 个窗口槽位绑定的程序	programs bound to the 10 window slots
 15 分钟内已经自动重启过一次，这次不再重启（避免循环）	Already auto-restarted once in the last 15 minutes; not restarting again (avoid a loop)
 5 秒后复查	will retry in 5 seconds
 B 站	Bilibili
 Qbar：{0}	Qbar: {0}
 {0:HH:mm:ss}　{1}	{0:HH:mm:ss}  {1}
 {0} · {1}	{0} · {1}
-{0} 好像还没启动完成，再按一次槽位键试试	{0} does not seem to be ready yet — press the slot key again
 {0} 条	{0} items
 {0}　·　{1}	{0} · {1}
 {0}（1 个窗口）	{0} (1 window)
@@ -3090,13 +3086,6 @@ Qbar：{0}	Qbar: {0}
 替换内容默认打码为 ●●●●●●；备注在左侧图标上（悬停可见）。点右上角的眼睛按钮可临时显示原文。	Replacement text is masked as ●●●●●● by default; the note lives on the left icon (hover to read). Use the eye button at the top right to reveal the text temporarily.
 本次先用默认设置启动（原文件没有被删除，可以手工修复后换回去）。	Started with default settings this time (the original file was not deleted; repair it by hand and swap it back).
 检测到「基础改键」里有修饰键互换（例如 Ctrl ↔ Alt）：\n	A modifier swap is active under "Base remaps" (e.g. Ctrl ↔ Alt):\n
-槽位 {0} ← {1}	Slot {0} ← {1}
-槽位 {0} ← {1}（当前已开 {2} 个窗口）	Slot {0} ← {1} ({2} windows open)
-槽位 {0} ← {1}（还没运行，按 {2} 时会帮你打开）	Slot {0} ← {1} (not running — pressing {2} will start it)
-槽位 {0} 的窗口已经关闭	The window in slot {0} has closed
-槽位 {0} 还没绑定窗口（先按 Caps+LAlt+{1} 绑定）	Slot {0} has no windows yet (press Caps+LAlt+{1} to bind one first)
-槽位 {0}：已加入 {1}（共 {2} 个窗口）	Slot {0}: added {1} ({2} windows)
-槽位 {0}：已绑定 {1} 的全部窗口	Slot {0}: bound to all windows of {1}
 欢迎使用 CapsLock+	Welcome to Input Plus
 正在显示替换内容，点一下隐藏	Alias text is visible — click to hide
 正文只显示备注；没有备注的显示「（无备注）」。替换内容不会出现在列表里。	The list shows only notes; entries without one show "(no note)". Replacement text never appears in the list.

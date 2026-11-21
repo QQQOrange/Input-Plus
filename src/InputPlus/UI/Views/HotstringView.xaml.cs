@@ -428,8 +428,14 @@ public partial class HotstringView : UserControl
         int selected = EntryList.SelectedItems.Count;
         MoveButton.IsEnabled = selected > 0;
         DeleteButton.IsEnabled = selected > 0;
-        MoveButton.Content = selected > 1 ? Loc.F("移到分组 ({0})", selected) : Loc.T("移到分组");
-        DeleteButton.Content = selected > 1 ? Loc.F("删除 ({0})", selected) : Loc.T("删除");
+        // 底部工具条 v1.6.3 起是图标按钮（Content 是字体里的字形），不能再往里写文字 ——
+        // 写进去就变成「图标字体里没有的中文」= 一排空心方框。选中的条数改由提示与读屏名带出来。
+        string moveTip = selected > 1 ? Loc.F("把选中的 {0} 条别名移到某个分组里", selected) : Loc.T("把选中的别名放到某个分组里（也可以直接把别名拖到左侧分组上）");
+        string deleteTip = selected > 1 ? Loc.F("删除选中的 {0} 条别名", selected) : Loc.T("删除选中的别名");
+        MoveButton.ToolTip = moveTip;
+        DeleteButton.ToolTip = deleteTip;
+        System.Windows.Automation.AutomationProperties.SetName(MoveButton, moveTip);
+        System.Windows.Automation.AutomationProperties.SetName(DeleteButton, deleteTip);
 
         if (EntryList.SelectedItem is Row row)
         {

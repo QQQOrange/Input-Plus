@@ -17,15 +17,18 @@
                       CornerRadius="0" UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
-    <Grid>
+    <!-- 窗口底色 = 侧栏色。Win11 会按圆角把窗口四角裁掉，右侧卡片周围还留 8px 缝，
+         这两处都靠这一层底色衔接：整体只有"侧栏色 + 卡片"两种面，不会多出第三种白/黑。 -->
+    <Grid Background="{DynamicResource Brush.Sidebar}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="228" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- ============ 侧栏 ============ -->
-        <Border Grid.Column="0" Background="{DynamicResource Brush.Sidebar}"
-                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,1,0">
+        <!-- 不再画右边那条 1px 竖线：侧栏与右侧内容之间改成"卡片浮在底色上"，
+             由 ContentCard 的圆角和 8px 缝过渡，直来直去的分割线就没了。 -->
+        <Border Grid.Column="0" Background="{DynamicResource Brush.Sidebar}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -209,13 +212,20 @@
         </Border>
 
         <!-- ============ 右侧内容 ============ -->
-        <Grid Grid.Column="1">
+        <!-- 标题栏和页面同处一张圆角卡片里。以前标题栏是透明的、直接透出窗口渐变，
+             而左侧栏是纯色 #FBFCFE —— 一条 1px 竖线两边两套底，看着像两块 UI 拼起来的
+             （用户原话「顶部那一栏颜色和整体 UI 不一致，很割裂」）。
+             现在右侧整块（含标题栏）共用 WindowGradient，圆角与描边统一收在 ContentCard 上。 -->
+        <Border Grid.Column="1" x:Name="ContentCard" Margin="8" CornerRadius="16"
+                Background="{DynamicResource Brush.WindowGradient}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+        <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="56" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- 标题栏 -->
+            <!-- 标题栏（透明 = 透出卡片自己的渐变，与下方页面同一张底） -->
             <Grid Grid.Row="0" x:Name="TitleBar" Background="Transparent">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -231,19 +241,29 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center"
                             WindowChrome.IsHitTestVisibleInChrome="True">
-                    <Button x:Name="SearchButton" Style="{StaticResource Button.Ghost}" Click="OnSearchClick"
-                            Content="{loc:T '搜索'}" Margin="0,0,6,0"
+                    <!-- 标题栏只放图标：原先「搜索」「暂停」是两颗带字的灰按钮，和右边几颗图标按钮挤在一行，
+                         标题栏被撑得高低不齐，还占掉页面标题的位置。文字信息搬到 ToolTip 与
+                         AutomationProperties.Name（读屏照样念得出来）。 -->
+                    <Button x:Name="SearchButton" Style="{StaticResource Button.Icon}" Click="OnSearchClick"
+                            Content="&#xE721;" Margin="0,0,2,0"
                             AutomationProperties.Name="{loc:T '搜索'}"
-                            ToolTip="{loc:T '全局搜索（Ctrl+K）：页面、别名、触发键、按键绑定'}" />
+                            ToolTip="{loc:T '全局搜索（Ctrl+K）：页面、功能、动作、手势、别名、按键绑定'}" />
 
-                    <Button x:Name="PauseButton" Style="{StaticResource Button.Ghost}" Click="OnPauseClick"
-                            Content="{loc:T '暂停'}" ToolTip="{loc:T '临时暂停所有 Input Plus 热键'}" />
+                    <Button x:Name="PauseButton" Style="{StaticResource Button.Icon}" Click="OnPauseClick"
+                            Content="&#xE769;" Margin="2,0,0,0"
+                            AutomationProperties.Name="{loc:T '暂停'}"
+                            ToolTip="{loc:T '暂停 Input Plus 的全部功能：热键、鼠标手势、平滑滚动、按住拖拽'}" />
                     <Button Style="{StaticResource Button.Icon}" Click="OnThemeClick" Content="&#xE793;"
                             AutomationProperties.Name="{loc:T '切换深浅色'}"
                             ToolTip="{loc:T '切换深浅色'}" Margin="2,0,0,0" />
                     <Button Style="{StaticResource Button.Icon}" Click="OnMinimizeClick" Content="&#xE921;"
                             AutomationProperties.Name="{loc:T '最小化'}"
                             ToolTip="{loc:T '最小化'}" Margin="2,0,0,0" />
+                    <!-- 最大化/还原：原先标题栏只有最小化和关闭，窗口最大化之后就再也还原不回来
+                         （只能去双击标题栏）。字形随窗口状态在 OnStateChanged 里换（E922 / E923）。 -->
+                    <Button x:Name="MaxButton" Style="{StaticResource Button.Icon}" Click="OnMaximizeClick"
+                            Content="&#xE922;" AutomationProperties.Name="{loc:T '最大化'}"
+                            ToolTip="{loc:T '最大化'}" Margin="2,0,0,0" />
                     <Button Style="{StaticResource Button.Icon}" Click="OnCloseClick" Content="&#xE8BB;"
                             AutomationProperties.Name="{loc:T '关闭到托盘'}"
                             ToolTip="{loc:T '关闭到托盘'}" Margin="2,0,0,0" />
@@ -255,5 +275,6 @@
                 <ContentControl x:Name="PageHost" />
             </Grid>
         </Grid>
+        </Border>
     </Grid>
 </Window>

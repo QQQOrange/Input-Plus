@@ -120,29 +120,69 @@ public sealed partial class AppHost
     /// 为什么必须走 explorer：从提权进程直接 Process.Start 出来的子进程会**继承**提权令牌，
     /// 只有让已经在普通权限下的 explorer 去拉起，才是真正的降权。
     /// </summary>
-    public void RestartUnelevated()
+    public bool RestartUnelevated()
     {
+        bool previousRunAsAdmin = Settings.Global.RunAsAdmin;
+        string? exe = Environment.ProcessPath;
+
         try
         {
+            if (string.IsNullOrEmpty(exe))
+            {
+                Notify(Loc.T("重启失败：找不到当前程序路径"));
+                return false;
+            }
+
             Settings.Global.RunAsAdmin = false;   // 否则新实例又会自己提权回来
             SaveSettings();
 
-            string? exe = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exe)) return;
-
             try { SingleInstance.Release(); } catch { }
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{exe}\"")
-            {
-                UseShellExecute = true,
-            });
 
-            CoreLog.Warn("用户选择以普通权限重启");
+            /* 必须是"借 explorer 之手"：从提权进程直接 CreateProcess 出来的子进程
+             * 继承的是提升令牌，用户以为降权了、其实还是管理员（而且这次还关掉了
+             * RunAsAdmin，下次启动也会静静地把管理员身份带回来）。
+             * 所以这里**不**走带直接启动兜底的 TryStart，只认 medium IL 的两条路。 */
+            if (!Core.App.HookHostLauncher.TryStartMedium(exe, new[] { "--noelevate" }, out string detail))
+            {
+                CoreLog.Warn("以普通权限重启失败：" + detail);
+                ReviveAfterFailedRestart(previousRunAsAdmin);
+                Notify(Loc.T("以普通权限重启失败：") + detail);
+                return false;
+            }
+
+            /* 用户已经明确要离开管理员模式：下次再提权时重新提示一遍边界。 */
+            Core.App.ElevationNotice.ResetForTest();
+            CoreLog.Warn("用户选择以普通权限重启（" + detail + "）");
             _dispatcher.BeginInvoke(() => ExitApp());
+            return true;
         }
         catch (Exception ex)
         {
+            ReviveAfterFailedRestart(previousRunAsAdmin);
             Notify(Loc.T("重启失败：") + ex.Message);
+            return false;
         }
+    }
+
+    /// <summary>
+    /// 降权重启失败后的回退：把设置改回"以管理员身份运行"，并把单实例锁抢回来。
+    ///
+    /// 为什么要回滚：<see cref="RestartUnelevated"/> 一开始就把 RunAsAdmin 写成
+    /// false 并落了盘（否则新实例会自己提权回来）。拉不起来时如果不改回来，
+    /// 用户下次启动会**悄悄**变成普通权限 —— 与他点的按钮意图相反。
+    /// </summary>
+    private void ReviveAfterFailedRestart(bool previousRunAsAdmin)
+    {
+        try
+        {
+            Settings.Global.RunAsAdmin = previousRunAsAdmin;
+            SaveSettings();
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "回滚以管理员身份运行设置"); }
+
+        /* Release() 已经把互斥体放掉了；不抢回来，用户可以再开一个实例，
+         * 两个实例会互相抢钩子。抢不回来也不算错误（最坏是下次启动才发现）。 */
+        try { SingleInstance.TryAcquire(out _, 0); } catch { }
     }
 
     /// <summary>
@@ -298,7 +338,7 @@ public sealed partial class AppHost
     /// <summary>
     /// 这个绑定是不是"选了动作、但内容没填"的空壳。
     ///
-    /// 这一类动作（输入文本 / 窗口绑定 / 自定义按键 / 直达网址·文件夹·文件）有个共同点：
+    /// 这一类动作（输入文本 / 窗口绑定 / 自定义按键 / 直达网址·直达文件）有个共同点：
     /// 光选分类不填参数，按下去什么都不会发生。而编辑器在"选分类"的那一刻就把动作写进配置了，
     /// 于是重启后那个键还显示着「自定义按键」「输入文本」……用户看到的就是
     /// "我根本没设置成功，它怎么记住了"。

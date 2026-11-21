@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Text;
 using InputPlus.Core.Windows;
@@ -14,6 +15,10 @@ public enum QbarKind
     Run,
     Window,
     Math,
+
+    /// <summary>查词结果：回车把词条/释义复制走，跟算式结果一样是"取值"动作。</summary>
+    Dictionary,
+
     Clipboard,
     File,
 
@@ -38,6 +43,23 @@ public sealed record QbarResult(
     /// <summary>命中标签时，结果行上显示对应的标签图标。</summary>
     public QbarChip? Chip { get; init; }
 
+    /// <summary>
+    /// 覆盖结果行左侧的图标字形（Segoe Fluent Icons 码位）。
+    /// 一般按 <see cref="Kind"/> 自动选；Qbar 的文件菜单要一条一个图标，
+    /// 全是 Command 却各不相同，所以留了这个出口。
+    /// </summary>
+    public string? Glyph { get; init; }
+
+    /// <summary>
+    /// 语义层动作载荷（qcmd: / qfilter: / qbar: 前缀）。
+    /// 单独开一个字段而不是挤进 Payload：Command 类型的结果行会把 Payload
+    /// 当成徽标文字显示，动作载荷放进去会变成"qcmd:xxx"这种鬼东西。
+    /// </summary>
+    public string Action { get; init; } = "";
+
+    /// <summary>命中高亮区间（文件名内偏移）。只有文件结果会有，UI 负责上色。</summary>
+    internal IReadOnlyList<QbarHighlight> Highlights { get; init; } = Array.Empty<QbarHighlight>();
+
     public string KindLabel => Kind switch
     {
         QbarKind.Command => Loc.T("命令"),
@@ -46,6 +68,7 @@ public sealed record QbarResult(
         QbarKind.Run => Loc.T("程序"),
         QbarKind.Window => Loc.T("窗口"),
         QbarKind.Math => Loc.T("计算"),
+        QbarKind.Dictionary => Loc.T("复制"),
         QbarKind.Clipboard => Loc.T("剪贴板"),
         QbarKind.File => Loc.T("文件"),
         QbarKind.Action => Loc.T("动作"),
@@ -112,7 +135,6 @@ public sealed class QbarService
     public static readonly BuiltinCommand[] Commands =
     {
         new("/settings", "打开设置", "Input Plus 设置窗口", "openSettings"),
-        new("/bindings", "窗口绑定管理", "管理 10 个窗口槽位", "openBindings"),
         new("/clipboard", "剪贴板历史", "最近复制的内容", "openClipboard"),
         new("/help", "使用帮助", "快捷键速查表", "openHelp"),
         new("/math", "计算器", "带历史记录的计算器", "openMath"),
@@ -148,6 +170,17 @@ public sealed class QbarService
             !x.Key.Equals("default", StringComparison.OrdinalIgnoreCase) &&
             x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (search != null) return QbarChip.FromEntry(ChipKind.Search, search);
+
+        /* 自定义命令放最后查：ol / 词典 这类关键字没有别的东西抢，
+         * 但万一用户给命令起了 bd 这种名字，搜索/网址的老习惯不能被顶掉。
+         *
+         * 为什么命令也要变标签：命令的语义是「程序 + 参数模板」，
+         * 用户输入 ol 再按空格时，想的是"接下来打的是要查的词"，
+         * 而不是"再按回车去结果列表里挑一行"。变成标签后输入框直接就是参数位。 */
+        var command = QbarCommandStore.Effective(settings.Qbar.Commands)
+            .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Keyword)
+                                 && c.Keyword.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (command != null) return QbarChip.FromCommand(command, command.Keyword.Trim());
 
         return null;
     }
@@ -228,13 +261,69 @@ public sealed class QbarService
                ext.Equals(".py", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// 输入框里恰好是一个过滤器关键字（doc / pic / 自定义，带不带冒号都算）时返回它。
+    ///
+    /// 这是「关键字 + 空格」那条触发路径的唯一入口：qbar 面板按空格时问一次，
+    /// 命中就把关键字变成过滤器 chip。和 <see cref="TrySplitFilterKeyword"/> 的分工：
+    /// 那个看的是"整段文本的首词"，负责 doc: 报表 这种老写法；
+    /// 这个只看"整段就是一个词"，负责 doc + 空格 这种新写法。
+    /// 两个都留着 —— 老的肌肉记忆（冒号）不能因为多了一条路就失效。
+    /// </summary>
+    internal static QbarFilter? ResolveFilterTrigger(string text, QbarOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        string key = text.Trim();
+        if (key.IndexOf(' ') >= 0) return null;                       // 已经是"关键字 + 搜索词"，不是纯关键字
+        if (key.EndsWith(":", StringComparison.Ordinal))
+            key = key.Substring(0, key.Length - 1).Trim();
+        if (key.Length == 0) return null;
+        return QbarFilterCatalog.Create(options?.Filters).TryFind(key);
+    }
+
+    /// <summary>输入首词是不是"过滤器关键字 + 冒号"（doc: / pic: / 自定义）。</summary>
+    private static bool TrySplitFilterKeyword(string text, out string keyword)
+    {
+        keyword = "";
+        if (string.IsNullOrEmpty(text)) return false;
+
+        int space = text.IndexOf(' ');
+        string head = space < 0 ? text : text.Substring(0, space);
+        if (head.Length < 2 || head[head.Length - 1] != ':') return false;
+
+        keyword = head.Substring(0, head.Length - 1).Trim();
+        return keyword.Length > 0;
+    }
+
+    private static string DescribeFilter(QbarFilter filter)
+    {
+        if (filter.SearchForFolders && !filter.SearchForFiles) return Loc.T("只搜文件夹");
+        if (string.IsNullOrEmpty(filter.Extensions)) return Loc.T("自定义过滤器");
+        int count = filter.Extensions.Split(';', StringSplitOptions.RemoveEmptyEntries).Length;
+        return Loc.F("{0} 种扩展名", count);
+    }
+
     public List<QbarResult> Query(string raw, int limit = 12) => Query(raw, null, limit);
 
     /// <summary>
     /// 带标签的查询：chip 不为空时，输入框里只剩“要搜索的内容”，
     /// 直接按该标签对应的引擎/程序/网址执行。
     /// </summary>
+    /// <summary>
+    /// 带后台文件结果的重载：文件检索会在几十万条名字里扫，绝不能在 UI 线程跑；
+    /// 界面层用防抖 + request id 在后台算好，再从这里递进来。
+    /// fileOutcome 为 null 时就地同步算（自检、命令行工具、首帧）。
+    /// internal 是因为 QbarSearchOutcome 只在程序集内可见。
+    /// </summary>
+    internal List<QbarResult> QueryPrepared(string raw, QbarChip? chip, int limit,
+        QbarSearchOutcome? fileOutcome, bool skipFiles)
+        => QueryInternal(raw, chip, limit, fileOutcome, skipFiles);
+
     public List<QbarResult> Query(string raw, QbarChip? chip, int limit = 12)
+        => QueryInternal(raw, chip, limit, null, false);
+
+    private List<QbarResult> QueryInternal(string raw, QbarChip? chip, int limit,
+        QbarSearchOutcome? fileOutcome, bool skipFiles)
     {
         var settings = _settings();
         string tail = (raw ?? "").Trim();
@@ -296,6 +385,34 @@ public sealed class QbarService
                     });
                     break;
                 }
+                case ChipKind.Command:
+                {
+                    /* 标签模式下重新按 Id 取一次命令：设置页随时可以改参数，
+                     * 用 chip 里那份快照会导致"改了 -w 却还是旧参数"。
+                     * 参数模板由 QbarCommandStore 展开，{query} 就是后面输入的文字。 */
+                    QbarCommand? chipCommand = QbarCommandStore.Effective(settings.Qbar.Commands)
+                        .FirstOrDefault(c => string.Equals(c.Id, chip.CommandId, StringComparison.Ordinal));
+                    if (chipCommand != null)
+                    {
+                        string args = QbarCommandStore.Expand(chipCommand.Parameter, tail, null, null);
+                        string program = (chipCommand.Path ?? "").Trim();
+                        string subtitle = program.Length == 0
+                            ? (chipCommand.Id == QbarCommandStore.BuiltinDictId
+                                ? Loc.T("装了欧路词典就直接查，没装就打开网页词典")
+                                : Loc.T("命令没有配置程序"))
+                            : string.IsNullOrEmpty(args) ? program : program + " " + args;
+                        list.Add(new QbarResult(QbarKind.Command,
+                            tail.Length == 0 ? Loc.F("用 {0} 查询…", chip.Label) : tail,
+                            subtitle, chip.Key, "", Arguments: tail)
+                        {
+                            Score = -100,
+                            Chip = chip,
+                            Action = "qcmd:" + chipCommand.Id,
+                            Glyph = "\uE756",
+                        });
+                    }
+                    break;
+                }
             }
 
             // 标签模式下仍允许用 = 直接计算，避免“在百度里搜 =1+2”这种尴尬
@@ -308,10 +425,11 @@ public sealed class QbarService
             return list.Take(limit).ToList();
         }
 
-        return QueryCore(settings, tail, limit);
+        return QueryCore(settings, tail, limit, fileOutcome, skipFiles);
     }
 
-    private List<QbarResult> QueryCore(AppSettings settings, string text, int limit)
+    private List<QbarResult> QueryCore(AppSettings settings, string text, int limit,
+        QbarSearchOutcome? fileOutcome, bool skipFiles)
     {
         var results = new List<QbarResult>();
         if (text.Length == 0)
@@ -330,6 +448,59 @@ public sealed class QbarService
                 results.Add(ToResult(q));
         }
         if (FindQuickCommand(text) != null) return results.Take(limit).ToList();
+
+        /* 0.5) 过滤器关键字：doc: / pic: / video: / audio: / file: / folder
+         *
+         * 两种输入都认：
+         *   doc + 空格   —— 空格在输入框里负责"把关键字变成 chip"，走到这里时还没有搜索词
+         *   doc: 报表    —— 老写法，整段的首词带冒号
+         * 光看这一层（Query）时只处理后者；前者由面板在空格那一瞬间调用
+         * ResolveFilterTrigger 直接建 chip，之后 EffectiveInput 会把 "doc:" 重新拼回去。
+         * 这样无论用户从哪条路进来，翻译层看到的都是同一种规格。 */
+        if (TrySplitFilterKeyword(text, out string filterKeyword))
+        {
+            QbarFilter? filter = QbarFilterCatalog.Create(settings.Qbar.Filters).TryFind(filterKeyword);
+            if (filter != null)
+            {
+                results.Add(new QbarResult(QbarKind.Command,
+                    Loc.F("过滤器：{0}", string.IsNullOrEmpty(filter.Name) ? filter.Keyword : filter.Name),
+                    DescribeFilter(filter) + " · " + Loc.T("按空格直接应用"), Loc.T("过滤器"), "")
+                {
+                    Score = -60,
+                    Action = "qfilter:" + filter.Id,
+                    Glyph = "\uE71C",
+                });
+            }
+        }
+
+        /* 0.6) 命令：首词命中命令表时，命令行和普通搜索结果并列。
+         * 为什么不 return：用户可能只是想搜一个叫 ol 的文件，也可能想执行 ol。
+         * 两条都摆出来让他选，比替他猜要安全。
+         *
+         * 唯一的例外是"关键字本身就是快捷命令"（cmd / psh / hosts ...）：
+         * 那些词已经有自己的快捷结果，再叠一条同名命令行只会把列表搅乱。 */
+        List<QbarCommand> commandTable = QbarCommandStore.Effective(settings.Qbar.Commands);
+        QbarCommand? command = QbarCommandStore.Match(commandTable, text, out string commandTail);
+        if (command != null && (commandTail.Length > 0 || FindQuickCommand(command.Keyword) == null))
+        {
+            string program = (command.Path ?? "").Trim();
+            string args = QbarCommandStore.Expand(command.Parameter, commandTail, null, null);
+            /* ol 这类内置动作没有程序路径：文案要说人话（"没装就走网页词典"），
+               而不是让用户以为命令配坏了。 */
+            string subtitle = program.Length == 0
+                ? (command.Id == QbarCommandStore.BuiltinDictId
+                    ? Loc.T("装了欧路词典就直接查，没装就打开网页词典")
+                    : Loc.T("命令没有配置程序"))
+                : string.IsNullOrEmpty(args) ? program : program + " " + args;
+            results.Add(new QbarResult(QbarKind.Command,
+                string.IsNullOrEmpty(command.Title) ? command.Keyword : command.Title,
+                subtitle, command.Keyword, "", Arguments: commandTail)
+            {
+                Score = -55,
+                Action = "qcmd:" + command.Id,
+                Glyph = command.Id == QbarCommandStore.BuiltinDictId ? "\uE774" : "\uE756",
+            });
+        }
 
         // 1) 内置命令
         if (text.StartsWith('/'))
@@ -400,7 +571,14 @@ public sealed class QbarService
 
         var searchHit = settings.Search.FirstOrDefault(x =>
             x.Key.Equals(head, StringComparison.OrdinalIgnoreCase) && x.Key != "default");
-        if (searchHit != null && space > 0)
+        /* tail 为空时**不能**短路。
+         *
+         * 以前只判 space > 0：输入框里只要残留一个引擎关键字加空格（比如叉掉
+         * 「bd」标签时把关键字还回了输入框，用户接着打了空格），这一段就会
+         * return 一条「在 百度 中搜索…」，后面的文件 / 应用 / 动作全被吃掉 ——
+         * 表现是「不管输入什么都只有那条网页搜索」。空关键词本来也没得搜，
+         * 交给下面照常跑本地搜索。 */
+        if (searchHit != null && space > 0 && tail.Length > 0)
         {
             if (LooksLikeProgram(searchHit.Value))
             {
@@ -427,7 +605,7 @@ public sealed class QbarService
         /* 4.1) 本地内容源：固定项、开始菜单应用、浏览器书签、Windows 设置、文件。
          * 它们比“动作/剪贴板/窗口”更像是用户要找的目标，所以排在前面；
          * 具体分数由各 Provider 决定，默认搜索仍然兜底。 */
-        results.AddRange(QbarProviders.Search(settings, text, limit));
+        results.AddRange(QbarProviders.Search(settings, text, limit, fileOutcome, skipFiles));
 
         /* 4.5) 动作目录：把 124 个动作变成"可搜索、可执行"的能力。
          *
@@ -529,6 +707,27 @@ public sealed class QbarService
 
     private static IEnumerable<QbarResult> DefaultResults(AppSettings settings)
     {
+        /* 空面板最上面先放"最近打开的项目"：用户唤出 Qbar 十有八九是想接着干
+         * 刚才那件事（同一个文档、同一个网页、同一个文件夹）。
+         *
+         * 只有这里会出现 —— DefaultResults 只在 QueryCore 里、且 text 为空
+         * 且 chip 为空时才被调用；带搜索引擎或带关键字唤出时走的是另一条路，
+         * 不会看到这些条目。
+         *
+         * 数量由设置里的 RecentCount 决定（0 = 不显示）。
+         * 文件夹也用 QbarKind.File（打开方式与文件一致，靠 shell 处理）；
+         * 网址必须用 Web，否则会被当成路径去找。 */
+        int recentCount = Math.Clamp(settings.Qbar.RecentCount, 0, 20);
+        if (recentCount > 0)
+        {
+            foreach (var recent in RecentTargets.Top(recentCount))
+            {
+                var kind = recent.Kind == RecentTargetKind.Url ? QbarKind.Web : QbarKind.File;
+                yield return new QbarResult(kind, recent.Title, recent.Target, Loc.T("最近"), recent.Target)
+                { Score = 0 };
+            }
+        }
+
         yield return new QbarResult(QbarKind.Command,
             "输入关键字搜索，或直接回车用默认搜索引擎",
             "支持应用/文件/书签/设置；=算式 直接计算，ps 命令走 PowerShell，Ctrl+P 固定选中项",
@@ -699,6 +898,8 @@ public sealed class QbarService
                 // 和"直达文件夹"共用同一套逻辑：打开后把窗口带到前台，
                 // 否则面板一收起，用户看到的就是任务栏闪一下（窗口在后台）。
                 Core.Windows.WindowService.OpenFolderInForeground(path);
+                // 真的打开了才记"最近"——失败的不进列表，否则面板上全是打不开的东西
+                RecentTargets.Record(path);
                 return;
             }
         }
@@ -713,6 +914,7 @@ public sealed class QbarService
             if (File.Exists(path))
             {
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                RecentTargets.Record(path);
                 return;
             }
         }
@@ -728,6 +930,7 @@ public sealed class QbarService
         switch (result.Kind)
         {
             case QbarKind.Math:
+            case QbarKind.Dictionary:
                 cb.CopyToClipboard(result.Payload);
                 cb.Notify(Loc.F("已复制：{0}", result.Payload));
                 break;

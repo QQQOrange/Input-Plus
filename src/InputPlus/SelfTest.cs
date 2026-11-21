@@ -76,7 +76,18 @@ public static partial class SelfTest
         TestGestureEngine();
         TestWGesturesEngine();
         TestWg2Layer();
+        TestWg2Plus();
         TestGestureListOrder();
+
+        Section("笔画平滑");
+        TestSmoothing();
+        TestNativeFileIndex();
+
+        Section("轨迹校正");
+        TestGestureCanonical();
+
+        Section("手势美化");
+        TestGestureBeauty();
 
         Section("平滑滚动");
         TestSmoothScroll();
@@ -97,8 +108,16 @@ public static partial class SelfTest
         Section("Qbar 标签");
         TestChips();
 
+        Section("Qbar 语义层");
+        TestQbarSemantics();
+
+        Section("Qbar 展开窗口");
+        TestQbarExpandSort();
+        TestQbarTitleSegments();
+
         Section("设置存取");
         TestSettings();
+        TestNotificationStyle();
         TestDataLocationAndEncryptedExport();
 
         Section("开机自启");
@@ -230,6 +249,7 @@ public static partial class SelfTest
 
         Section("提权");
         TestElevation();
+        TestElevationRoute();
 
         Section("热路径缓存");
         TestHotPathCaching();
@@ -243,6 +263,8 @@ public static partial class SelfTest
         TestMacroBindableInKeysView();
         TestKeepKeyTapAction();
         TestQbarEngineActions();
+        TestFilterActions();
+        TestDictionaryActions();
         TestTriggerKeyPosition();
         TestKeyboardLayoutGeometry();
         TestEditorDensity();
@@ -260,6 +282,9 @@ public static partial class SelfTest
         TestWinBindCustomName();
         TestQbarThemeContrast();
         TestQbarChipTextContrast();
+        TestQbarTabContrast();
+        TestQbarNativeIndex();
+        TestQbarRecentTargets();
         TestQbarOutsideClick();
         TestComplexTriggerKey();
         TestTriggerBadgeFollowsLayer();
@@ -273,6 +298,7 @@ public static partial class SelfTest
         TestTriggerTapHoldSemantics();
         TestErrorFailClosedPolicy();
         TestDirectSearch();
+        TestCommandSearchAction();
         TestTypeTextAction();
         TestImeGuard();
         TestClipboardPaste();

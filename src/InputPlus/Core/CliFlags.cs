@@ -25,6 +25,8 @@ public static class CliFlags
         "--hwtest", "--webdav-test", "--svg2png", "--reveal", "--pick-test",
         "--help", "--hooktest", "--dump-triggers", "--dump-bindings",
         "--probe-key", "--selection-test", "--gesture-probe", "--gesture-import",
+        "--drag-e2e", "--drag-target", "--qbar-query", "--qbar-bench",
+        "--everything-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
     };
 
     /// <summary>
@@ -54,6 +56,9 @@ public static class CliFlags
         "  --hwtest                        硬件测试：真的调一次音量与亮度（会出声/变亮）\n" +
         "  --pick-test <结果文件>           验证「选中文字直接搜索」的取词链路，结果写进文件\n" +
         "  --selection-test <结果文件>      在本进程读一次当前选区（UIA/复制各通道），结果写进文件\n" +
+        "  --drag-e2e [结果文件] [--live]    端到端验证「按住拖拽」：真装钩子、真发左右键，看窗口动不动\n" +
+        "  --drag-target <句柄文件>        给 --drag-e2e 当靶子的窗口进程（由 e2e 自己拉起，不用手敲）\n" +
+        "  --holddrag-config               打印「按住拖拽」的运行期真实配置 + 九宫格选边演算（缩放只能单轴时用）\n" +
         "  --webdav-test <地址> [用户名] [密码]   实测一次 WebDAV 往返\n" +
         "  --svg2png <源目录> <目标目录>     把 SVG 图标批量转成 PNG（维护图标表时用）\n" +
         "\n" +
@@ -63,6 +68,12 @@ public static class CliFlags
         "  --osd [百分比]                   显示一次亮度横条（默认 50），配合 --osd-hold 控制停留\n" +
         "  --osd-hold <毫秒>               横条停留时长（默认 1900）\n" +
         "  --qbar                          直接打开 Qbar\n" +
+        "  --qbar-query \"doc: 报表\"          跑一次语义层查询，打印翻译各层与耗时（结果写 %TEMP%\\clp-qbar-query.txt）\n" +
+        "  --qbar-bench                    跑 20 条基准查询，输出耗时/命中/旧入口比对（写 %TEMP%\\clp-qbar-bench.txt）\n" +
+        "  --settings-dump                 只读打印当前读到的设置：过滤器/命令/规则/加密与解锁状态（写 %TEMP%\\clp-settings-dump.txt）\n" +
+        "  --qbar-command \"ol hello\"        只解析命令（关键字/路径/占位符展开），不执行（写 %TEMP%\\clp-qbar-command.txt）\n" +
+        "  --everything-status              检查 Everything SDK 是否可用、版本、索引与查询实测（写 %TEMP%\\clp-everything-status.txt）\n" +
+        "  --dict <词>                      只跑查词链路（欧路/网页词典接口 + 解析），打印释义与耗时（写 %TEMP%\\clp-qbar-dict.txt）\n" +
         "  --reveal <路径>                  用资源管理器打开并选中该路径\n" +
         "  --tray                          启动但不显示主窗口（只驻留托盘）\n" +
         "  --trace                         启动并记录每个按键（写进 logs/app.log）\n" +

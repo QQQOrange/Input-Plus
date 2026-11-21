@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+             xmlns:controls="clr-namespace:InputPlus.UI.Controls"
              FontFamily="{StaticResource Font.Ui}">
     <Grid Margin="24,4,20,20">
         <Grid.ColumnDefinitions>
@@ -38,7 +39,7 @@
         </Border>
 
         <!-- 左：条目管理 -->
-        <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,14,0" Padding="18,16">
+        <Border x:Name="EntriesCard" Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,14,0" Padding="18,16">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -60,10 +61,16 @@
                             <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
                             <Setter Property="FontSize" Value="13" />
                             <Setter Property="Cursor" Value="Hand" />
+                            <!-- 这排标签压在 Brush.Surface 卡片上，未选中态必须自己给前景色：
+                                 不给就会继承 WPF 默认黑字，夜间 Surface(#1A1E27) 上就是黑底黑字。
+                                 底/字全走主题画刷，日间夜间都过 4.5:1（自检 TestQbarTabContrast 守着）。 -->
+                            <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.TextSecondary}" />
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="TabItem">
+                                        <!-- 底边 2px 常驻，选中只换颜色，避免切换标签时高度跳动 -->
                                         <Border x:Name="Bd" Background="Transparent" CornerRadius="8"
+                                                BorderThickness="0,0,0,2" BorderBrush="Transparent"
                                                 Padding="12,6" Margin="0,0,4,0">
                                             <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
                                         </Border>
@@ -71,11 +78,18 @@
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="Bd" Property="Background"
                                                         Value="{DynamicResource Brush.Hover}" />
+                                                <Setter Property="TextElement.Foreground"
+                                                        Value="{DynamicResource Brush.TextPrimary}" />
                                             </Trigger>
+                                            <!-- 选中：AccentSoft 底 + TextPrimary 字。不用 Accent 字是因为
+                                                 日间 Accent(#2B6CF6)/AccentSoft(#E8F0FF) 只有约 4.0:1，压线。 -->
                                             <Trigger Property="IsSelected" Value="True">
                                                 <Setter TargetName="Bd" Property="Background"
                                                         Value="{DynamicResource Brush.AccentSoft}" />
-                                                <Setter Property="TextElement.Foreground" Value="{DynamicResource Brush.Accent}" />
+                                                <Setter TargetName="Bd" Property="BorderBrush"
+                                                        Value="{DynamicResource Brush.Accent}" />
+                                                <Setter Property="TextElement.Foreground"
+                                                        Value="{DynamicResource Brush.TextPrimary}" />
                                                 <Setter Property="FontWeight" Value="SemiBold" />
                                             </Trigger>
                                         </ControlTemplate.Triggers>
@@ -85,13 +99,16 @@
                         </Style>
                     </TabControl.Resources>
                     <TabItem Header="{loc:T '搜索指令'}" Tag="search" />
+                    <!-- 文件搜排在「搜索指令」和「启动程序」之间：它也是"输入关键字得出结果"，
+                         和搜索指令同类；而它是唯一需要逐条编辑过滤器/优先级的页面，放最后会被忽略。 -->
+                    <TabItem Header="{loc:T '文件搜索'}" Tag="files" />
                     <TabItem Header="{loc:T '启动程序'}" Tag="run" />
                     <TabItem Header="{loc:T '常用网址'}" Tag="web" />
                     <TabItem Header="{loc:T '固定项'}" Tag="pinned" />
                 </TabControl>
 
-                <!-- 过滤框：按关键字或备注模糊搜索当前标签下的条目 -->
-                <Grid Grid.Row="1" Margin="0,10,0,0">
+                <!-- 过滤框：按关键字或备注模糊搜索当前标签下的条目（「文件搜」标签下整块隐藏） -->
+                <Grid x:Name="EntriesFilter" Grid.Row="1" Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -155,18 +172,402 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
+                <StackPanel x:Name="EntriesActions" Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnAddClick" />
                     <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}" Margin="8,0,0,0"
                             Click="OnDeleteClick" />
                     <TextBlock x:Name="EntryHint" Style="{StaticResource Text.Tertiary}" VerticalAlignment="Center"
                                Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="380" />
                 </StackPanel>
+
+                <!-- 文件搜：Qbar 文件搜索的全部设置都在这一页。
+                     为什么单独一页：过滤器和优先级规则是「列表 + 逐条编辑」型数据，
+                     360px 的右栏连一张扩展名表都塞不下一行；而且它们改的是「搜什么、怎么排」，
+                     和左边的搜索指令/启动程序不是一类东西，混在一起只会让人找不着。 -->
+                <Grid x:Name="FileSearchPanel" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!--
+                        页内目录：这一页有索引、过滤器、优先级、命令、语法五张卡，
+                        连起来要滚三屏多。目录固定在顶上（不随内容滚走），点一下就跳到卡，
+                        滚动时反过来点亮当前卡 —— 不然看完优先级就分不清自己在第几屏。
+                    -->
+                    <Border Grid.Row="0" Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="9"
+                            Padding="6,5" Margin="0,0,0,10">
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                      Padding="0">
+                            <StackPanel x:Name="FileToc" Orientation="Horizontal" />
+                        </ScrollViewer>
+                    </Border>
+
+                    <ScrollViewer Grid.Row="1" x:Name="FileScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  ScrollChanged="OnFileScrollChanged">
+                        <StackPanel x:Name="FileScrollContent">
+
+                            <!-- 索引与后端 -->
+                            <Border x:Name="CardBackend" Style="{StaticResource Card}" Padding="18,16">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '索引与后端'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T '索引和检索全部交给 Everything，而且它是内置的：客户端与 SDK 都打在本软件里，第一次用到时释放到数据目录下的 everything 文件夹，按便携模式运行，不写注册表、不碰你自己装的那份。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <Border Background="{DynamicResource Brush.SurfaceAlt}"
+                                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                                            CornerRadius="9" Padding="11,9">
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse x:Name="IndexDot" Width="8" Height="8" VerticalAlignment="Center"
+                                                         Fill="{DynamicResource Brush.TextTertiary}" />
+                                                <TextBlock x:Name="IndexState" Style="{StaticResource Text.Secondary}"
+                                                           Margin="8,0,0,0" VerticalAlignment="Center"
+                                                           Text="{loc:T '正在检测…'}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <TextBlock x:Name="IndexInfo" Style="{StaticResource Text.Tertiary}"
+                                                       Margin="0,4,0,0" TextWrapping="Wrap" />
+                                            <TextBlock x:Name="IndexDetail" Style="{StaticResource Text.Tertiary}"
+                                                       Margin="0,3,0,0" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 只读状态行：后端固定为 Everything（用户要求"只用 Everything"）。
+                                         以前这里是个「优先用 Everything / 否则本地快照」的开关，留着只会让人以为还能
+                                         切回本地索引 —— 而本地快照只有自检和基准对照的路径会用到。 -->
+                                    <TextBlock x:Name="SemanticEverythingNote" Style="{StaticResource Text.Tertiary}" Margin="0,12,0,0"
+                                               TextWrapping="Wrap"
+                                               Text="{loc:T '检索后端：Everything（固定）。本地索引快照不参与文件搜索，只在自检与基准对照里使用。'}" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <Button Content="{loc:T '刷新状态'}" Style="{StaticResource Button.Ghost}"
+                                                Padding="10,5" Click="OnRefreshIndex" />
+                                        <Button x:Name="OpenEverythingButton" Content="{loc:T '启动 Everything'}" Style="{StaticResource Button.Ghost}"
+                                                Padding="10,5" Margin="8,0,0,0" Click="OnOpenEverything"
+                                                ToolTip="{loc:T '启动内置的 Everything 客户端（不弹窗口）。还没装过 Everything 的机器也能直接搜文件。'}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 过滤器 -->
+                            <Border x:Name="CardFilters" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '过滤器'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T '在搜索框里打「关键字 + 空格」就生效（例如 doc␣ 会立刻只剩 49 类文档，再接着打关键词就是在这类文件里搜）；老写法 doc: 也照样认。内置过滤器可以改扩展名、可以停用，但不能删除 —— 删掉 doc: 这种肌肉记忆，比不支持还难用。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <!-- 表格化：一行一个过滤器，开关就在行尾。选中行在下面改细节。 -->
+                                        <Border Grid.Column="0" Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8" Padding="0,2">
+                                            <ScrollViewer MaxHeight="264" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                <StackPanel>
+                                                    <Grid Margin="12,7,58,5">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="170" />
+                                                            <ColumnDefinition Width="86" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="112" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{loc:T '名称'}" Style="{StaticResource Text.Tertiary}" />
+                                                        <TextBlock Grid.Column="1" Text="{loc:T '关键字'}" Style="{StaticResource Text.Tertiary}" />
+                                                        <TextBlock Grid.Column="2" Text="{loc:T '文件类型'}" Style="{StaticResource Text.Tertiary}" />
+                                                        <TextBlock Grid.Column="3" Text="{loc:T '搜索范围'}" Style="{StaticResource Text.Tertiary}" />
+                                                    </Grid>
+                                                    <StackPanel x:Name="FilterRows" />
+                                                </StackPanel>
+                                            </ScrollViewer>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                            <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnFilterAdd" />
+                                            <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}" Margin="0,8,0,0" Click="OnFilterDelete" />
+                                            <Button Content="{loc:T '恢复内置'}" Style="{StaticResource Button.Ghost}" Margin="0,8,0,0" Padding="10,5" Click="OnFilterResetBuiltin"
+                                                    ToolTip="{loc:T '把内置过滤器的扩展名表和关键字改回出厂值；自定义过滤器不受影响。'}" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '名称'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="FilterNameBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnFilterFieldChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '关键字（输入 关键字: 生效）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="FilterKeywordBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnFilterFieldChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock Text="{loc:T '扩展名（分号或空格分隔，不带点；目录过滤器可以留空）'}"
+                                               Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                                    <TextBox x:Name="FilterExtBox" Style="{StaticResource TextBox.Base}" MinHeight="62"
+                                             TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                             TextChanged="OnFilterFieldChanged" />
+
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '自动追加的搜索词（可选）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="FilterExtraBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnFilterFieldChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '限定目录（可选，多个用分号分隔）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="FilterFolderBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnFilterFieldChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock Text="{loc:T '只看某个时间之后改过的（可选：today / week / 2026-07 / 2026-07-01..2026-07-31）'}"
+                                               Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                                    <TextBox x:Name="FilterDateBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                             VerticalContentAlignment="Center" TextChanged="OnFilterFieldChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <CheckBox x:Name="FilterEnabledBox" Content="{loc:T '启用'}"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnFilterFlagChanged" />
+                                        <CheckBox x:Name="FilterFilesBox" Content="{loc:T '包含文件'}" Margin="16,0,0,0"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnFilterFlagChanged" />
+                                        <CheckBox x:Name="FilterFoldersBox" Content="{loc:T '包含目录'}" Margin="16,0,0,0"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnFilterFlagChanged" />
+                                    </StackPanel>
+
+                                    <TextBlock x:Name="FilterHint" Style="{StaticResource Text.Tertiary}"
+                                               TextWrapping="Wrap" Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 优先级 -->
+                            <Border x:Name="CardPriority" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '优先级'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T 'Everything 没有优先级这个概念，所以规则只在查询结果上跑：改一条立刻生效，不重建索引、也不把文件从索引里弄丢。目录是子树（含子目录），正则是文件名正则，空正则表示整个目录。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <Button Content="{loc:T '+ 添加优先级'}" Style="{StaticResource Button.Primary}" Click="OnRuleAdd" />
+                                        <Button Content="{loc:T '排除文件夹'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Click="OnRuleExcludeFolder"
+                                                ToolTip="{loc:T '选一个目录，它会从搜索结果里彻底消失（当作没索引）。'}" />
+                                        <Button Content="{loc:T '规则清单'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Padding="10,5" Click="OnShowSemanticInfo"
+                                                ToolTip="{loc:T '把内置规则包和自定义规则一起列出来，用来确认到底哪条规则在起作用。'}" />
+                                        <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}" Margin="8,0,0,0" Click="OnRuleDelete" />
+                                    </StackPanel>
+                                    <!-- 分组照 Listary 那张表：高 / 正常 / 低 / 从搜索结果中排除，行尾都是开关。 -->
+                                    <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8" Padding="0,2">
+                                        <ScrollViewer MaxHeight="352" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                            <StackPanel x:Name="RuleRows" />
+                                        </ScrollViewer>
+                                    </Border>
+
+                                    <Grid Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '目录（可留空 = 任意目录）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <DockPanel>
+                                                <Button DockPanel.Dock="Right" Content="{loc:T '选…'}" Style="{StaticResource Button.Ghost}"
+                                                        Padding="9,4" Margin="6,0,0,0" Click="OnRulePickFolder" />
+                                                <TextBox x:Name="RuleFolderBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                         VerticalContentAlignment="Center" TextChanged="OnRuleFieldChanged" />
+                                            </DockPanel>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '文件名正则（可留空 = 目录内全部）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="RuleRegexBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnRuleFieldChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="210" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '档位'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <ComboBox x:Name="RuleLevelBox" Style="{StaticResource ComboBox.Base}" MinHeight="34"
+                                                      SelectionChanged="OnRuleLevelChanged">
+                                                <ComboBoxItem Content="{loc:T '最高优先（前置）'}" Tag="high" />
+                                                <ComboBoxItem Content="{loc:T '正常'}" Tag="normal" />
+                                                <ComboBoxItem Content="{loc:T '靠后'}" Tag="low" />
+                                                <ComboBoxItem Content="{loc:T '忽略（隐藏并提示条数）'}" Tag="ignored" />
+                                                <ComboBoxItem Content="{loc:T '完全不显示（当作未索引）'}" Tag="dontindex" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '备注（可选，用来记住为什么加这条）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="RuleNoteBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnRuleFieldChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <CheckBox x:Name="RuleEnabledBox" Content="{loc:T '启用这条规则'}"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnRuleFlagChanged" />
+                                    </StackPanel>
+
+                                    <TextBlock x:Name="RuleHint" Style="{StaticResource Text.Tertiary}"
+                                               TextWrapping="Wrap" Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 命令：输入「关键字 空格 参数」就执行。让 ol / cmd 这类关键字有地方改。 -->
+                            <Border x:Name="CardCommands" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '命令'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T '在输入框里打「关键字 空格 参数」就执行。参数里 {query} 代表关键字后面那段原文；带空格要自己加引号。内置命令（cmd / psh / ol / 新建文件 …）全都能改：程序、参数、工作目录、关键字，改完立刻生效，按「恢复默认」退回出厂值。新建文件 / 复制路径 / 上一级这类内部动作默认由软件自己完成，在「程序」里填了 exe 就改成启动它。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <Button Content="{loc:T '+ 新增命令'}" Style="{StaticResource Button.Primary}" Click="OnCommandAdd" />
+                                        <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}" Margin="8,0,0,0" Click="OnCommandDelete" />
+                                        <Button Content="{loc:T '命令清单'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Padding="10,5"
+                                                Click="OnShowSemanticInfo"
+                                                ToolTip="{loc:T '列出内置命令和自己的命令，用来确认关键字到底被谁占了。'}" />
+                                        <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Padding="10,5"
+                                                Click="OnCommandRevert"
+                                                ToolTip="{loc:T '把当前选中的内置命令退回出厂值；自己加的命令不受影响（直接删）。'}" />
+                                    </StackPanel>
+                                    <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8" Padding="0,2">
+                                        <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                            <StackPanel x:Name="CommandRows" />
+                                        </ScrollViewer>
+                                    </Border>
+
+                                    <Grid Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="150" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '关键字'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="CommandKeywordBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnCommandFieldChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '标题（列表里显示的名字）'}" Style="{StaticResource Text.Secondary}" Margin="0,0,0,6" />
+                                            <TextBox x:Name="CommandTitleBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center" TextChanged="OnCommandFieldChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock Text="{loc:T '程序（可以只写 notepad 这样的裸程序名，交给系统 PATH 解析）'}"
+                                               Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                                    <TextBox x:Name="CommandPathBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                             VerticalContentAlignment="Center" TextChanged="OnCommandFieldChanged" />
+                                    <!-- 和「按应用」「窗口绑定」用同一个控件：两个并列入口 ——
+                                         「选择程序…」挑 exe（程序没启动也能选），「点选窗口」直接在屏幕上点那扇窗，
+                                         由窗口反查 exe 路径。比一个「选…」按钮清楚，也不用为了填路径先去找文件。 -->
+                                    <controls:AppPickButtons x:Name="CommandPicker" Margin="0,8,0,0"
+                                                             PickFile="OnCommandPickPath"
+                                                             PickWindow="OnCommandPickWindow" />
+
+                                    <TextBlock Text="{loc:T '参数（可选）'}" Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                                    <TextBox x:Name="CommandArgsBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                             VerticalContentAlignment="Center" TextChanged="OnCommandFieldChanged"
+                                             ToolTip="{loc:T '例如欧路词典填 -w &quot;{query}&quot;；留空表示只启动程序。'}" />
+
+                                    <TextBlock Text="{loc:T '工作目录（可选）'}" Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                                    <TextBox x:Name="CommandWorkDirBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                             VerticalContentAlignment="Center" TextChanged="OnCommandFieldChanged"
+                                             ToolTip="{loc:T '程序启动时的「当前目录」，相当于快捷方式里的「起始位置」。写 {current_folder} 就是当前选中的文件夹；留空则用系统默认。'}" />
+                                    <TextBlock Text="{loc:T '工作目录 = 程序启动时所在的文件夹（快捷方式里的「起始位置」）。程序按相对路径找文件、或者要在某个仓库里跑脚本时才需要填；写 {current_folder} 表示当前选中的文件夹，留空用系统默认。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,0" TextWrapping="Wrap" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                        <CheckBox x:Name="CommandAdminBox" Content="{loc:T '以管理员身份运行'}"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnCommandFlagChanged" />
+                                        <CheckBox x:Name="CommandSilentBox" Content="{loc:T '静默运行（不闪窗口）'}" Margin="16,0,0,0"
+                                                  Style="{StaticResource CheckBox.Text}" Click="OnCommandFlagChanged" />
+                                    </StackPanel>
+
+                                    <TextBlock x:Name="CommandHint" Style="{StaticResource Text.Tertiary}"
+                                               TextWrapping="Wrap" Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 语义层其余开关 -->
+                            <Border x:Name="CardSyntax" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '语法与调试'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T '输入框里的 doc: / ext: / size: / date: / -词 这些写法由翻译层换成索引查询；关掉就退回最朴素的关键词搜索。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <CheckBox x:Name="SemanticRulesBox" Content="{loc:T '按优先级规则重排（系统目录、临时文件往后放）'}"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+                                    <CheckBox x:Name="SemanticBuiltinRulesBox" Content="{loc:T '使用内置规则包'}" Margin="0,8,0,0"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+                                    <CheckBox x:Name="SemanticPinyinBox" Content="{loc:T '拼音与模糊匹配（yinhang → 银行、rprt → report）'}" Margin="0,8,0,0"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+                                    <CheckBox x:Name="SemanticFacetsBox" Content="{loc:T '在底栏显示本页分面统计'}" Margin="0,8,0,0"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+                                    <CheckBox x:Name="SemanticHistoryBox" Content="{loc:T '记录使用历史（只在本机，用来做空面板建议）'}" Margin="0,8,0,0"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+                                    <CheckBox x:Name="SemanticDebugBox" Content="{loc:T '显示查询调试面板（在 Qbar 里也可以按 Ctrl+D 切换）'}" Margin="0,8,0,0"
+                                              Style="{StaticResource CheckBox.Text}"
+                                              Checked="OnSemanticOptionsChanged" Unchecked="OnSemanticOptionsChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
+                                        <TextBlock Text="{loc:T '候选窗口'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="SemanticWindowValue" Style="{StaticResource Text.Tertiary}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="SemanticWindowSlider" Minimum="200" Maximum="20000" TickFrequency="200"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnSemanticOptionsChanged" />
+                                    <TextBlock Text="{loc:T '从索引里取多少条候选到本地重排。窗口越大越不容易漏掉「看着不像、其实最该在前面」的结果，代价是每次查询多几毫秒。'}"
+                                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
+                                        <TextBlock Text="{loc:T '输入防抖'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="SemanticDebounceValue" Style="{StaticResource Text.Tertiary}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="SemanticDebounceSlider" Minimum="0" Maximum="200" TickFrequency="5"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnSemanticOptionsChanged" />
+                                    <TextBlock Text="{loc:T '输入法还在上屏（候选框没落定）时不查询，上屏后只查一次；这个值是打字的停顿阈值。'}"
+                                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                        <Button Content="{loc:T '刷新拼音索引'}" Style="{StaticResource Button.Ghost}"
+                                                Padding="10,5" Click="OnRefreshPinyin"
+                                                ToolTip="{loc:T '名字里的汉字改过之后用：重建那张只收汉字名字的拼音表（后台进行）。'}" />
+                                        <Button Content="{loc:T '规则与命令清单'}" Style="{StaticResource Button.Ghost}"
+                                                Padding="10,5" Margin="8,0,0,0" Click="OnShowSemanticInfo"
+                                                ToolTip="{loc:T '列出当前生效的过滤器、命令关键字和优先级规则。'}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </Border>
 
         <!-- 右：编辑 + 外观 -->
-        <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer x:Name="RightScroll" Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,0,0,14">
                     <StackPanel>
@@ -246,6 +647,18 @@
                         <Slider x:Name="ListCountSlider" Minimum="3" Maximum="12" TickFrequency="1"
                                 IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
 
+                        <!-- 空面板最上面的「最近打开」：只影响直接唤出 Qbar 时的样子 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
+                            <TextBlock Text="{loc:T '空面板先显示最近打开的项目'}" Style="{StaticResource Text.Secondary}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="RecentCountValue" Style="{StaticResource Text.Tertiary}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Slider x:Name="RecentCountSlider" Minimum="0" Maximum="20" TickFrequency="1"
+                                IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
+                        <TextBlock Text="{loc:T '0 = 不显示；只在直接唤出 Qbar 时出现，带搜索引擎/带关键字唤出时不显示'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
                         <TextBlock Text="{loc:T '输入框字号'}" Style="{StaticResource Text.Secondary}" Margin="0,10,0,6" />
                         <Slider x:Name="FontSizeSlider" Minimum="14" Maximum="30" TickFrequency="1"
                                 IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
@@ -275,6 +688,58 @@
                         </StackPanel>
                         <Button Content="{loc:T '恢复默认外观'}" Style="{StaticResource Button.Ghost}" HorizontalAlignment="Left"
                                 Margin="-10,10,0,0" Click="OnResetAppearance" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 搜索联想：Qbar 里「已选定搜索引擎 + 有关键词」时，在输入框下方列出候选词。
+                     这张卡只管联想请求本身；关掉它不影响任何搜索路径，回车照旧搜原文。
+                     联想只走一次 HTTP，失败/超时就静默不显示，所以这里不需要“重试”按钮。 -->
+                <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                    <StackPanel>
+                        <TextBlock Text="{loc:T '搜索联想'}" Style="{StaticResource Text.H3}" />
+                        <TextBlock Text="{loc:T '选定搜索引擎后，边打字边列出候选词；↑↓ 选择，Enter 用当前引擎搜索。'}"
+                                   Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                        <CheckBox x:Name="SuggestEnabledBox" Content="{loc:T '启用搜索联想'}"
+                                  Style="{StaticResource CheckBox.Text}" Click="OnSuggestOptionsChanged"
+                                  ToolTip="{loc:T '关掉后 Qbar 不再发联想请求；搜索、结果列表和快捷键都不受影响。'}" />
+
+                        <TextBlock Text="{loc:T '联想词来源'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                        <ComboBox x:Name="SuggestEngineBox" Style="{StaticResource ComboBox.Base}"
+                                  SelectionChanged="OnSuggestEngineChanged">
+                            <ComboBoxItem Content="{loc:T '跟随当前搜索引擎'}" Tag="auto" />
+                            <ComboBoxItem Content="{loc:T '百度'}" Tag="baidu" />
+                            <ComboBoxItem Content="{loc:T '谷歌'}" Tag="google" />
+                            <ComboBoxItem Content="{loc:T '必应'}" Tag="bing" />
+                        </ComboBox>
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
+                            <TextBlock Text="{loc:T '显示条数'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="SuggestMaxValue" Style="{StaticResource Text.Tertiary}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Slider x:Name="SuggestMaxSlider" Minimum="1" Maximum="10" TickFrequency="1"
+                                IsSnapToTickEnabled="True" ValueChanged="OnSuggestOptionsChanged" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
+                            <TextBlock Text="{loc:T '请求超时'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="SuggestTimeoutValue" Style="{StaticResource Text.Tertiary}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Slider x:Name="SuggestTimeoutSlider" Minimum="200" Maximum="5000" TickFrequency="100"
+                                IsSnapToTickEnabled="True" ValueChanged="OnSuggestOptionsChanged" />
+
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
+                            <TextBlock Text="{loc:T '缓存时间'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="SuggestCacheValue" Style="{StaticResource Text.Tertiary}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Slider x:Name="SuggestCacheSlider" Minimum="0" Maximum="1440" TickFrequency="5"
+                                IsSnapToTickEnabled="True" ValueChanged="OnSuggestOptionsChanged" />
+                        <TextBlock Text="{loc:T '缓存只放在内存里，关掉 Qbar 就清空；设成 0 表示每次都重新请求。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                        <TextBlock Text="{loc:T '跟随当前搜索引擎：用 bd 就取百度联想，用 gg 就取谷歌联想；认不出的引擎按必应处理。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
             </StackPanel>

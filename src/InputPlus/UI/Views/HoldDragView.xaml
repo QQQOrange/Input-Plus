@@ -65,9 +65,11 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button x:Name="TriggerKeyButton" Style="{StaticResource Button.Base}" Padding="14,6"
                                     MinWidth="150" Content="{loc:T 'Enter 回车'}" Click="OnPickTriggerKey" />
-                            <Button x:Name="TriggerResetButton" Style="{StaticResource Button.Ghost}" Padding="10,7"
-                                    Margin="8,0,0,0" Content="{loc:T '默认'}" Click="OnResetTriggerKey"
-                                    ToolTip="{loc:T '恢复成 Enter 回车'}" />
+                            <!-- 图标化（m01050）：只留一个撤销字形，文字进 ToolTip/读屏名，少占一行宽度 -->
+                            <Button x:Name="TriggerResetButton" Style="{StaticResource Button.Icon}"
+                                    Margin="8,0,0,0" Content="&#xE7A7;" Click="OnResetTriggerKey"
+                                    AutomationProperties.Name="{loc:T '默认'}"
+                                    ToolTip="{loc:T '默认：恢复成 Enter 回车'}" />
                         </StackPanel>
                     </Grid>
 
@@ -79,13 +81,92 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '吞掉触发键'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '打开后，按住触发键时别的程序收不到这个键（不会顺手打出一个回车）。'}"
+                            <TextBlock Text="{loc:T '长按多久才算数'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '按下触发键要按住这么久才开始接管鼠标；按一下就松开，那一下照旧送给窗口（触发键是 Enter 就还是回车）。0 = 按下即接管。'}"
                                        Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="SwallowBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Click="OnToggleChanged" Tag="SwallowTrigger" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBox x:Name="TriggerHoldBox" Style="{StaticResource TextBox.Base}" Width="72"
+                                     TextChanged="OnNumberChanged" Tag="TriggerHoldMs" />
+                            <TextBlock Text="{loc:T '毫秒'}" Style="{StaticResource Text.Tertiary}"
+                                       VerticalAlignment="Center" Margin="6,0,0,0" />
+                        </StackPanel>
                     </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <!-- v1.7.0「吞键」：打开后触发键的按下不再送到前台。
+                         用户场景：Enter 当触发键，按住它拖窗口，前台对话框不该先收到一串回车。 -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '吞掉触发键'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '打开后，触发键不再送到前台窗口：Enter 当触发键时，按住它拖窗口不会先在对话框里按出一串回车。按一下就松开（没拖）的那一下会在松手时补发给你，Enter 照常能打字。'}"
+                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        </StackPanel>
+                        <CheckBox x:Name="SwallowTriggerBox" Grid.Column="1" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="OnToggleChanged" Tag="SwallowTrigger"
+                                  ToolTip="{loc:T '打开后触发键不再送给前台窗口（短按会在松手时补发一次）'}" />
+                    </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '只认这几台键盘'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '勾上的键盘按的触发键才算数，可以勾多台。最上面的「所有键盘」勾上＝哪台都算，下面的都跟着打勾；取消它＝一台都不认。笔记本自带键盘和外接键盘可以各配各的。'}"
+                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                        </StackPanel>
+                        <Button Grid.Column="1" x:Name="DeviceButton" Style="{StaticResource Button.Base}"
+                                Padding="12,5" VerticalAlignment="Center" Click="OnDeviceButtonClick"
+                                ToolTip="{loc:T '选择哪些键盘的触发键才算数（可以勾多台）'}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="⌨" FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <TextBlock x:Name="DeviceText" Text="{loc:T '所有键盘'}" VerticalAlignment="Center"
+                                           MaxWidth="180" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="▾" Margin="6,0,0,0" VerticalAlignment="Center" Opacity="0.7" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <!-- 键盘清单：勾上哪几台，就只有它们的触发键算数（可多选）。
+                         样式照抄「按键映射」页的设备清单（胶囊 + 弹层 + 方框），两页看起来是同一套东西。 -->
+                    <Popup x:Name="DevicePopup" PlacementTarget="{Binding ElementName=DeviceButton}"
+                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade"
+                           HorizontalOffset="0" VerticalOffset="6">
+                        <Border Style="{StaticResource Card.Popup}" Padding="14,12" Width="400">
+                            <StackPanel>
+                                <TextBlock Text="{loc:T '哪些键盘的触发键才算数'}" Style="{StaticResource Text.Body}" />
+                                <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                           Text="{loc:T '打勾的键盘按的触发键才管用，可以勾多台。勾最上面的「所有键盘」＝下面全算；把它取消＝一台都不认。'}" />
+                                <ScrollViewer MaxHeight="300" Margin="0,10,0,0"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl x:Name="DeviceList" />
+                                </ScrollViewer>
+                                <Separator Margin="0,10" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="DeviceHint" Style="{StaticResource Text.Tertiary}"
+                                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Content="&#xE72C;" Style="{StaticResource Button.Icon}"
+                                            Click="OnRefreshDevicesClick"
+                                            AutomationProperties.Name="{loc:T '刷新'}"
+                                            ToolTip="{loc:T '刷新：重新枚举键盘和鼠标'}" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
 
                     <TextBlock Text="{loc:T '鼠标动作'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
                                Margin="0,10,0,2" />
@@ -295,30 +376,14 @@
                         </StackPanel>
                     </Grid>
 
-                    <TextBlock Text="{loc:T '程序例外'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold"
-                               Margin="0,10,0,2" />
-
-                    <TextBlock Text="{loc:T '这些程序里的窗口不接管（按进程名，一行一个）。AltDrag 的黑名单就是这一份。'}"
-                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,2,0,0" />
-                    <TextBox x:Name="ProcessBlacklistBox" Style="{StaticResource TextBox.Base}" Height="88"
-                             Margin="0,6,0,0" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
-                             TextChanged="OnTextChanged" Tag="ProcessBlacklist" />
-                    <controls:AppPickButtons Margin="0,6,0,0" HorizontalAlignment="Stretch"
-                                             PickFile="OnPickProcess" PickWindow="OnPickWindow" />
-
-                    <TextBlock Text="{loc:T '窗口例外（进程名|窗口类名，如 *|TaskSwitcherWnd）'}"
-                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,14,0,0" />
-                    <TextBox x:Name="WindowBlacklistBox" Style="{StaticResource TextBox.Base}" Height="88"
-                             Margin="0,6,0,12" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
-                             TextChanged="OnTextChanged" Tag="WindowBlacklist" />
 
                 </StackPanel>
             </ScrollViewer>
         </Border>
 
-        <!-- 右：状态 + 用法 -->
+        <!-- 右：状态 + 程序例外 + 窗口例外 + 用法
+             两类例外原来在左栏最底下，得自己往下翻才找得到；现在都挪进这张常驻卡，
+             版式照「平滑滚动」右栏：挑程序的按钮 + 一行一条的清单 + 一行一条的窗口规则。 -->
         <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource Card}" Padding="18,16">
             <Grid>
                 <Grid.RowDefinitions>
@@ -333,8 +398,69 @@
                                Margin="0,6,0,0" />
                 </StackPanel>
 
-                <ScrollViewer Grid.Row="1" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+                <ScrollViewer x:Name="RightScroll" Grid.Row="1" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="0,0,18,0">
+
+                        <Border Style="{StaticResource Divider}" Margin="0,0,0,10" />
+
+                        <TextBlock Text="{loc:T '程序例外'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="{loc:T '这些程序里的窗口不接管（按进程名，一行一个），* 通配，例如 game*.exe。'}" />
+                        <controls:AppPickButtons Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                 PickFile="OnPickProcess" PickWindow="OnPickWindow" />
+
+                        <ItemsControl x:Name="ProcessExceptionList" Margin="0,4,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                                            Padding="0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource Text.Tertiary}"
+                                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <!-- 图标化（m01050）：每行一个垃圾桶，比"删除"两个字窄得多，也不会把名字挤断 -->
+                                            <Button Grid.Column="1" Content="&#xE74D;" Tag="{Binding Value}"
+                                                    Click="OnRemoveProcess"
+                                                    Style="{StaticResource Button.Icon}"
+                                                    Foreground="{DynamicResource Brush.Danger}"
+                                                    Margin="8,0,0,0"
+                                                    AutomationProperties.Name="{loc:T '删除'}"
+                                                    ToolTip="{loc:T '从例外清单里删掉这一条'}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="ProcessExceptionEmpty" Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                                   Margin="0,8,0,0"
+                                   Text="{loc:T '还没有例外程序：所有程序都用左边的全局参数。'}" />
+
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,4"
+                                   Text="{loc:T '一行一个进程名，这些程序完全不接管。支持 * 通配（例如 game*.exe）。'}" />
+                        <TextBox x:Name="ProcessBlacklistBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
+                                 MaxHeight="64" Margin="0,0,0,0" AcceptsReturn="True" TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                 Padding="8,6" TextChanged="OnTextChanged" Tag="ProcessBlacklist" />
+
+                        <Border Style="{StaticResource Divider}" Margin="0,14,0,4" />
+
+                        <TextBlock Text="{loc:T '窗口例外'}" Style="{StaticResource Text.Secondary}" FontWeight="SemiBold" />
+                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="{loc:T '按窗口标题或窗口类名排除，一行一条，* 通配。比如不想让任务切换器被接管就写 TaskSwitcherWnd。'}" />
+                        <TextBox x:Name="WindowBlacklistBox" Style="{StaticResource TextBox.Base}" MinHeight="40"
+                                 MaxHeight="64" Margin="0,8,0,0" AcceptsReturn="True" TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                 Padding="8,6" TextChanged="OnTextChanged" Tag="WindowBlacklist" />
+
+                        <Border Style="{StaticResource Divider}" Margin="0,14,0,4" />
+
                         <TextBlock Text="{loc:T '怎么用'}" Style="{StaticResource Text.Body}" />
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
                                    Text="{loc:T '按住触发键不放，然后用鼠标左键拖窗口、右键改大小。拖的时候松不松触发键都行，松鼠标才算结束。'}" />
@@ -347,18 +473,15 @@
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,10,0,0"
                                    Text="{loc:T '拖动中按 Esc 立刻收手（窗口停在原地，不会继续跟着走）。'}" />
 
-                        <Border Style="{StaticResource Divider}" Margin="0,14,0,4" />
-
-                        <TextBlock Text="{loc:T '跟 AltDrag 的关系'}" Style="{StaticResource Text.Body}" />
-                        <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
-                                   Text="{loc:T '拖拽几何（贴边、Aero 半屏、缩放九宫格、双击、多显示器还原）逐行照搬 AltDrag 的 hooks.c：鼠标事件进来就同步算位置、同步写窗口，没有中间队列，所以手一停窗口就停。'}" />
                     </StackPanel>
                 </ScrollViewer>
 
                 <StackPanel Grid.Row="2" Margin="0,12,0,0">
                     <Border Style="{StaticResource Divider}" Margin="0,0,0,10" />
-                    <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Padding="14,7"
-                            HorizontalAlignment="Left" Click="OnResetDefaults" />
+                    <Button Content="&#xE7A7;" Style="{StaticResource Button.Icon}"
+                            HorizontalAlignment="Left" Click="OnResetDefaults"
+                            AutomationProperties.Name="{loc:T '恢复默认'}"
+                            ToolTip="{loc:T '恢复默认：这一页所有设置都回到出厂值'}" />
                 </StackPanel>
             </Grid>
         </Border>

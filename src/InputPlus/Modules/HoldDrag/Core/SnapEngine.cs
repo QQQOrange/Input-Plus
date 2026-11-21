@@ -16,6 +16,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -23,43 +24,50 @@ namespace InputPlus.Modules.HoldDrag;
 
 internal static class SnapEngine
 {
-	private static readonly List<Native.RECT> Monitors = new List<Native.RECT>(8);
+	/// <summary>
+	/// 一份吸附目标快照：每块显示器的完整矩形 + 任务栏 + 所有带标题栏的顶层窗口。
+	/// 整份替换、绝不就地改 —— 钩子线程读、后台线程建，靠这一条免锁。
+	/// </summary>
+	private sealed class Target
+	{
+		internal List<Native.RECT> Monitors = new List<Native.RECT>(8);
 
-	private static readonly List<Native.RECT> Windows = new List<Native.RECT>(256);
+		internal List<Native.RECT> Windows = new List<Native.RECT>(256);
+
+		internal nint Progman;
+
+		internal int Snap = -1;
+
+		internal nint Dragged;
+
+		internal long At;
+	}
+
+	private static volatile Target _target = new Target();
+
+	/// <summary>后台正在枚举（同一时刻只跑一份）。</summary>
+	private static int _refreshing;
+
+	/// <summary>后台线程正在填的那份快照（EnumWindows 的回调要用）。</summary>
+	[ThreadStatic]
+	private static Target _building;
 
 	private static readonly object Gate = new object();
 
 	/// <summary>EnumWindows 回调不能被 GC 掉，这里保持一个静态引用。</summary>
 	private static readonly Native.EnumWindowsProc EnumProc = OnEnumWindow;
 
-	private static nint _dragged;
+	/// <summary>
+	/// [Blacklist] Snaplist（hooks.c:251）：没有 WS_CAPTION 的窗口本来不参与吸附，列在这里的算例外。
+	/// 由 AltDragSink 每帧从配置同步过来；静态字段，后台枚举线程直接读。
+	/// </summary>
+	internal static volatile string SnapList = AppConfig.DefaultSnapList;
 
-	private static nint _progman;
-
-	private static int _ownPid;
-
-	// 吸附目标缓存：EnumWindows + 每窗 GetWindowRect 在窗口多的机器上一帧要 20~40ms，
-	// 而拖动时相邻两帧间隔只有几毫秒 —— 目标集合（屏幕/任务栏/其它窗口）不可能在这个
-	// 尺度上变化，所以同一档位、同一个被拖窗口时**每 50ms 才重新枚举一次**。
-	private const int CacheMs = 50;
-
-	private static long _collectedAt;
-
-	private static int _collectedSnap = -1;
-
-	private static nint _collectedDragged;
-
-	private static int OwnPid
-	{
-		get
-		{
-			if (_ownPid == 0)
-			{
-				_ownPid = Process.GetCurrentProcess().Id;
-			}
-			return _ownPid;
-		}
-	}
+	// 吸附目标是"活着"的，但窗口集合在一个拖动的几百毫秒里几乎不会变。而 EnumWindows +
+	// 每窗 GetWindowRect 一次要 20~40ms —— 这一段**绝不能跑在钩子线程上**，否则每刷一次
+	// 就顿一下（缩放时尤其明显：目标程序自己还在重排）。所以第一次同步取一份，之后只在
+	// 后台刷，钩子线程永远读上一份。
+	private const int CacheMs = 120;
 
 	/// <summary>
 	/// 移动吸附（hooks.c:387-479）。posx / posy 是"贴哪里"，wndwidth / wndheight 只读。
@@ -70,9 +78,9 @@ internal static class SnapEngine
 		{
 			return;
 		}
+		Target t = EnsureFresh(snap, dragged);
 		lock (Gate)
 		{
-			CollectIfStale(snap, dragged);
 			int thresholdx = threshold;
 			int thresholdy = threshold;
 			bool stuckx = false;
@@ -81,19 +89,19 @@ internal static class SnapEngine
 			int sticky = 0;
 			int i = 0;
 			int j = 0;
-			while (i < Monitors.Count || j < Windows.Count)
+			while (i < t.Monitors.Count || j < t.Windows.Count)
 			{
 				Native.RECT snapwnd;
 				bool snapinside;
-				if (i < Monitors.Count)
+				if (i < t.Monitors.Count)
 				{
-					snapwnd = Monitors[i];
+					snapwnd = t.Monitors[i];
 					snapinside = true;
 					i++;
 				}
 				else
 				{
-					snapwnd = Windows[j];
+					snapwnd = t.Windows[j];
 					// snap == 2 只吸窗口外侧；3 连内侧一起吸
 					snapinside = snap != 2;
 					j++;
@@ -178,9 +186,9 @@ internal static class SnapEngine
 		{
 			return;
 		}
+		Target t = EnsureFresh(snap, dragged);
 		lock (Gate)
 		{
-			CollectIfStale(snap, dragged);
 			int thresholdx = threshold;
 			int thresholdy = threshold;
 			bool stuckleft = false;
@@ -193,19 +201,19 @@ internal static class SnapEngine
 			int stickbottom = 0;
 			int i = 0;
 			int j = 0;
-			while (i < Monitors.Count || j < Windows.Count)
+			while (i < t.Monitors.Count || j < t.Windows.Count)
 			{
 				Native.RECT snapwnd;
 				bool snapinside;
-				if (i < Monitors.Count)
+				if (i < t.Monitors.Count)
 				{
-					snapwnd = Monitors[i];
+					snapwnd = t.Monitors[i];
 					snapinside = true;
 					i++;
 				}
 				else
 				{
-					snapwnd = Windows[j];
+					snapwnd = t.Windows[j];
 					snapinside = snap != 2;
 					j++;
 				}
@@ -288,75 +296,105 @@ internal static class SnapEngine
 	}
 
 	/// <summary>
-	/// 只在"档位换了 / 被拖窗口换了 / 距上次枚举超过 CacheMs 毫秒"时重新枚举。
-	/// 调用方必须已经持有 Gate。
+	/// 拿一份可用的吸附目标。第一次 / 换了被拖窗口 / 换了档位 → 当场枚举一次（每次拖动最多一次）；
+	/// 其余情况只在后台刷，钩子线程立刻拿到上一份 —— 那 20~40ms 永远不进钩子。
 	/// </summary>
-	private static void CollectIfStale(int snap, nint dragged)
+	private static Target EnsureFresh(int snap, nint dragged)
 	{
-		long now = Environment.TickCount64;
-		if (_collectedSnap == snap && _collectedDragged == dragged && now - _collectedAt < CacheMs)
+		Target cur = _target;
+		if (cur.At != 0L && cur.Snap == snap && cur.Dragged == dragged)
 		{
-			return;
+			if (Environment.TickCount64 - cur.At >= CacheMs && Interlocked.Exchange(ref _refreshing, 1) == 0)
+			{
+				QueueRefresh(snap, dragged);
+			}
+			return cur;
 		}
-		Collect(snap, dragged);
-		_collectedSnap = snap;
-		_collectedDragged = dragged;
-		_collectedAt = now;
+		Target built = Collect(snap, dragged);
+		_target = built;
+		return built;
+	}
+
+	private static void QueueRefresh(int snap, nint dragged)
+	{
+		ThreadPool.QueueUserWorkItem(delegate
+		{
+			try
+			{
+				_target = Collect(snap, dragged);
+			}
+			catch (Exception ex)
+			{
+				Log.Error(ex);
+			}
+			finally
+			{
+				Interlocked.Exchange(ref _refreshing, 0);
+			}
+		});
 	}
 
 	/// <summary>hooks.c:342-385 的 Enum()。</summary>
-	private static void Collect(int snap, nint dragged)
+	private static Target Collect(int snap, nint dragged)
 	{
-		Monitors.Clear();
-		Windows.Clear();
-		_dragged = dragged;
+		Target t = new Target();
+		t.Snap = snap;
+		t.Dragged = dragged;
+		_building = t;
 		try
 		{
-			Screen[] allScreens = Screen.AllScreens;
-			for (int i = 0; i < allScreens.Length; i++)
+			try
 			{
-				Rectangle bounds = allScreens[i].Bounds;
-				Monitors.Add(new Native.RECT(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom));
+				Screen[] allScreens = Screen.AllScreens;
+				for (int i = 0; i < allScreens.Length; i++)
+				{
+					Rectangle bounds = allScreens[i].Bounds;
+					t.Monitors.Add(new Native.RECT(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom));
+				}
+			}
+			catch (Exception ex)
+			{
+				Log.Error(ex);
+			}
+			try
+			{
+				// hooks.c:361-368：任务栏在门槛之前就加进来了 —— 它算"屏幕边缘"这一档，
+				// 所以 snap=1（只吸屏幕）时任务栏也该能吸上。加窗口（snap>=2）才在门槛之后。
+				nint toolbar = Native.FindWindowW("Shell_TrayWnd", null);
+				if (toolbar != IntPtr.Zero && Native.GetWindowRect(toolbar, out var tray))
+				{
+					t.Windows.Add(tray);
+				}
+				if (snap >= 2)
+				{
+					t.Progman = Native.FindWindowW("Progman", "Program Manager");
+					Native.EnumWindows(EnumProc, IntPtr.Zero);
+				}
+			}
+			catch (Exception ex2)
+			{
+				Log.Error(ex2);
 			}
 		}
-		catch (Exception ex)
+		finally
 		{
-			Log.Error(ex);
+			_building = null;
 		}
-		try
-		{
-			_progman = Native.FindWindowW("Progman", "Program Manager");
-			// hooks.c:361-368：任务栏在门槛之前就加进来了 —— 它算"屏幕边缘"这一档，
-			// 所以 snap=1（只吸屏幕）时任务栏也该能吸上。加窗口（snap>=2）才在门槛之后。
-			nint num = Native.FindWindowW("Shell_TrayWnd", null);
-			if (num != IntPtr.Zero && Native.GetWindowRect(num, out var lpRect))
-			{
-				Windows.Add(lpRect);
-			}
-			if (snap < 2)
-			{
-				return;
-			}
-			Native.EnumWindows(EnumProc, IntPtr.Zero);
-		}
-		catch (Exception ex2)
-		{
-			Log.Error(ex2);
-		}
+		t.At = Environment.TickCount64;
+		return t;
 	}
 
 	/// <summary>hooks.c:239-290 的 EnumWindowsProc 过滤条件。</summary>
 	private static bool OnEnumWindow(nint hWnd, nint lParam)
 	{
+		Target t = _building;
+		if (t == null)
+		{
+			return true;
+		}
 		try
 		{
-			if (hWnd == _dragged || hWnd == _progman)
-			{
-				return true;
-			}
-			// 自己的外框 / HUD 也是可见窗口，吸过去只会互相打架
-			Native.GetWindowThreadProcessId(hWnd, out var lpdwProcessId);
-			if ((int)lpdwProcessId == OwnPid)
+			if (hWnd == t.Dragged || hWnd == t.Progman)
 			{
 				return true;
 			}
@@ -364,8 +402,10 @@ internal static class SnapEngine
 			{
 				return true;
 			}
+			// hooks.c:251：没有 WS_CAPTION 的跳过 —— 除非它列在 Snaplist 里。
 			long windowLong = Native.GetWindowLong(hWnd, Native.GWL_STYLE);
-			if ((windowLong & Native.WS_CAPTION) != Native.WS_CAPTION)
+			if ((windowLong & Native.WS_CAPTION) != Native.WS_CAPTION
+				&& !AppRules.MatchesWindows(SnapList, AppRules.ProcessNameOf(hWnd), AppRules.TitleOf(hWnd), AppRules.ClassNameOf(hWnd)))
 			{
 				return true;
 			}
@@ -388,15 +428,15 @@ internal static class SnapEngine
 				}
 			}
 			// 被已收集的某个矩形完全包含 → 丢掉（重叠去重）
-			for (int i = 0; i < Windows.Count; i++)
+			for (int i = 0; i < t.Windows.Count; i++)
 			{
-				Native.RECT rECT = Windows[i];
+				Native.RECT rECT = t.Windows[i];
 				if (lpRect.Left >= rECT.Left && lpRect.Top >= rECT.Top && lpRect.Right <= rECT.Right && lpRect.Bottom <= rECT.Bottom)
 				{
 					return true;
 				}
 			}
-			Windows.Add(lpRect);
+			t.Windows.Add(lpRect);
 		}
 		catch (Exception ex)
 		{

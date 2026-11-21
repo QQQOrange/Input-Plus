@@ -20,6 +20,15 @@ public sealed partial class ActionContext
     public required Action<string> Notify { get; init; }
 
     public event Action<string?>? QbarRequested;
+    /* 带过滤器的 Qbar 打开请求：第一个参数是 QbarFilter.Id，第二个是要搜的词。
+     * 单独一条事件而不是复用 QbarRequested，是因为预填协议只有"引擎关键字 + 空格"，
+     * 过滤器要变成 chip 必须走面板里的 ApplyFilter（它还要清输入框、亮 chip），
+     * 靠字符串前缀硬凑会在"过滤器关键字和引擎同名"时打架。 */
+    public event Action<string?, string?>? QbarFileSearchRequested;
+    /* 带词的 Qbar 查词请求：参数是要查的词（可为 null = 只打开面板等用户打字）。
+     * 同样不能复用 QbarRequested —— 那边只认引擎关键字预填，
+     * 而"查词"要求把 ol 变成 chip（chip 才能把后面的输入当单词而不是文件名）。 */
+    public event Action<string?>? QbarDictionaryRequested;
     public event Action? MathBoardRequested;
     public event Action? SettingsRequested;
     public event Action? HelpRequested;
@@ -28,6 +37,9 @@ public sealed partial class ActionContext
     public event Action? ToggleEnabledRequested;
     public event Action? ScreenshotRequested;
     public event Action? MacrosRequested;
+    public event Action? LuaScriptsRequested;
+    public event Action? GestureMenusRequested;
+    public event Action<string>? GestureMenuRequested;
 
     /// <summary>
     /// 请求打开 Qbar。
@@ -36,10 +48,28 @@ public sealed partial class ActionContext
     /// 为空时用设置里的 default 引擎。绑定按键时可以指定，
     /// 实现"按 Caps+G 打开就是 Google 搜索"。</param>
     public void RequestQbar(string? engineKey = null) => QbarRequested?.Invoke(engineKey);
+
+    /// <summary>
+    /// 请求打开 Qbar 并直接挂上某个文件搜索过滤器（wd = 文档 / pic = 图片…）。
+    /// </summary>
+    /// <param name="filterId">QbarFilter.Id（内置是 builtin.doc 这种，用户项是 user.xxx）</param>
+    /// <param name="query">可选：顺手带进去的搜索词</param>
+    public void RequestQbarFileSearch(string? filterId, string? query = null)
+        => QbarFileSearchRequested?.Invoke(filterId, query);
+
+    /// <summary>
+    /// 请求打开 Qbar 并直接查一个词（ol 变成 chip，词已经填好）。
+    /// </summary>
+    /// <param name="word">要查的词；null = 只打开面板，等用户自己接着打</param>
+    public void RequestQbarDictionary(string? word = null)
+        => QbarDictionaryRequested?.Invoke(word);
     public void RequestMathBoard() => MathBoardRequested?.Invoke();
     public void RequestOpenSettings() => SettingsRequested?.Invoke();
     public void RequestHelp() => HelpRequested?.Invoke();
     public void RequestOpenMacros() => MacrosRequested?.Invoke();
+    public void RequestOpenLuaScripts() => LuaScriptsRequested?.Invoke();
+    public void RequestOpenGestureMenus() => GestureMenusRequested?.Invoke();
+    public void RequestGestureMenu(string menuId) => GestureMenuRequested?.Invoke(menuId);
     public void RequestOpenClipboardHistory() => ClipboardHistoryRequested?.Invoke();
     public void RequestReload() => ReloadRequested?.Invoke();
     public void RequestToggleEnabled() => ToggleEnabledRequested?.Invoke();
@@ -48,9 +78,9 @@ public sealed partial class ActionContext
     /// <summary>
     /// 动作参数没填时的统一出口：提示"缺什么"，并按**失败**返回。
     ///
-    /// 为什么单独做这一件事：直达网址 / 直达文件夹 / 直达文件 / 输入文本 / 运行程序
+    /// 为什么单独做这一件事：直达网址 / 直达文件 / 输入文本 / 运行命令
     /// 这些动作以前遇到空参数是 `if (empty) return;` —— 按下去**什么都不发生**，
-    /// 而 <c>AppHost.InvokeAction</c> 还会记一条"动作：openFolder"的成功日志。
+    /// 而 <c>AppHost.InvokeAction</c> 还会记一条"动作：直达文件"的成功日志。
     /// 用户只会认为"这个键坏了"，日志里也看不出原因。
     ///
     /// 现在：明确告诉用户缺哪一项、去哪儿填，并且返回 false，

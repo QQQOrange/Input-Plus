@@ -30,6 +30,8 @@ public sealed partial class AppHost : IDisposable
     private Core.Text.SelectionWatcher? _selectionWatcher;
     private MathBoardWindow? _math;
     private ClipboardHistoryWindow? _clipHistory;
+    private LuaScriptsWindow? _luaScripts;
+    private GestureMenusWindow? _gestureMenus;
     private bool _disposed;
 
     public AppSettings Settings { get; set; }
@@ -62,6 +64,12 @@ public sealed partial class AppHost : IDisposable
     {
         Settings = settings;
         _dispatcher = dispatcher;
+
+        /* 两套浮层外观各自连线：手势名称框（鼠标手势 → 手势设置）与右下角提示条
+         * （设置 → 外观 → 提示条）。挂的是取值器而不是那份对象 ——
+         * 「重新加载配置」会把 Settings 整体换掉（和下面 Bindings 那段是同一个理由）。 */
+        Core.Settings.GestureLabelStyles.Attach(() => Settings?.GestureLabel);
+        Core.Settings.ToastStyles.Attach(() => Settings?.Toasts);
 
         /* 设置序列化必须回到界面线程做（对象图只在这条线程被修改）。
          * Core 层不引用 WPF，所以由这里把 marshal 注入进去。 */
@@ -175,6 +183,9 @@ public sealed partial class AppHost : IDisposable
         if (_deviceTracker.Start())
         {
             Engine.DeviceResolver = (vk, down) => _deviceTracker?.ResolveDevice(vk, down);
+                /* 按住拖拽也按设备区分（v1.6.0）：最多等 60ms 就把这一问放过去，
+                 * 免得在键盘钩子里卡太久 —— 判不出来时内核按"所有键盘"处理。 */
+                HoldDrag.DeviceResolver = vk => _deviceTracker?.ResolveDevice(vk, true, 60);
 
             /* 宏录制的第二路来源：远程桌面 / 向日葵这类工具的按键可能进不了低级钩子，
              * 但 Raw Input 看得到。去重在录制器里做（同一个物理按键两路都会到）。 */
@@ -272,6 +283,14 @@ public sealed partial class AppHost : IDisposable
 
         Context.QbarRequested += engineKey =>
             _dispatcher.BeginInvoke(() => ShowQbar(EnginePrefill(engineKey)));
+        /* 带过滤器的打开请求（「Qbar 搜索」分类的 qfilter:<Id>）：
+         * 面板要挂 chip，不能靠 EnginePrefill 那条字符串协议。 */
+        Context.QbarFileSearchRequested += (filterId, query) =>
+            _dispatcher.BeginInvoke(() => ShowQbarFileSearch(filterId, query));
+        /* 带词的查词请求（「Qbar 搜索」分类的 qdict.lookup）：同样不走字符串预填 ——
+         * 面板要把 ol 变成 chip，后面的输入才会被当成"要查的词"而不是文件名。 */
+        Context.QbarDictionaryRequested += word =>
+            _dispatcher.BeginInvoke(() => ShowQbarDictionary(word));
         Context.MathBoardRequested += () => _dispatcher.BeginInvoke(() => ShowMathBoard());
         Context.SettingsRequested += () => _dispatcher.BeginInvoke(() => ShowMainWindow());
         Context.HelpRequested += () => _dispatcher.BeginInvoke(() => ShowMainWindow("help"));
@@ -280,6 +299,9 @@ public sealed partial class AppHost : IDisposable
         Context.ToggleEnabledRequested += () => _dispatcher.BeginInvoke(() => ToggleEnabled());
         Context.ScreenshotRequested += () => _dispatcher.BeginInvoke(() => Context.Screenshot());
         Context.MacrosRequested += () => _dispatcher.BeginInvoke(() => ShowMainWindow("macros"));
+        Context.LuaScriptsRequested += () => _dispatcher.BeginInvoke(() => ShowLuaScripts());
+        Context.GestureMenusRequested += () => _dispatcher.BeginInvoke(() => ShowGestureMenus());
+        Context.GestureMenuRequested += id => _dispatcher.BeginInvoke(() => ShowGestureMenu(id));
     }
 
     /// <summary>宏录制器（长驻 AppHost，页面重建也不会丢）。</summary>
@@ -418,6 +440,27 @@ public sealed partial class AppHost : IDisposable
             catch (Exception ex) { CoreLog.Swallow(ex, "启动善后"); }
         };
         if (!headless) healTimer.Start();
+
+        /* 管理员模式：把"走哪条注入路线"写进日志，并且**只提示一次**边界在哪里。
+         * 提示标记落在数据目录（elevation-hint.txt），所以要换回普通权限之前
+         * 只会看到这一次 —— 不能每次开机都唠叨一遍。 */
+        try
+        {
+            bool elevatedNow = Core.App.ElevationState.Elevated;
+            if (elevatedNow)
+            {
+                CoreLog.Warn("[权限] 以管理员身份运行；注入路线："
+                             + Core.App.ElevationState.RouteName(Core.App.ElevationState.Route)
+                             + (hookHostReady ? "（钩子委托给宿主进程）" : "（钩子在本进程）"));
+            }
+
+            if (!headless && Core.App.ElevationNotice.ConsumeOnce(elevatedNow))
+            {
+                CoreLog.Warn("[权限] " + Core.App.ElevationNotice.Text);
+                Notify(Core.App.ElevationNotice.Text);
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "管理员模式提示"); }
 
         /* 粘键巡检：20 秒没有任何按键、但系统仍认为修饰键/鼠标键按着 → 补发抬起。 */
         var stuckWatch = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };

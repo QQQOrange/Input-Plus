@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Media;
@@ -8,6 +9,7 @@ using InputPlus.Core.Icons;
 using InputPlus.Core.Input;
 using InputPlus.Core.Interop;
 using InputPlus.Core.Qbar;
+using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Text;
 using InputPlus.Core.Update;
@@ -285,6 +287,114 @@ public static partial class SelfTest
         Check("固定项可被搜到并排在前面",
             pinnedHit.Count > 0 && pinnedHit[0].Kind == QbarKind.File,
             pinnedHit.FirstOrDefault()?.Title);
+
+        TestShellIcons();
+    }
+
+    /// <summary>
+    /// Shell 图标解析（Core/Icons/ShellIcons.cs）。
+    ///
+    /// 关键回归：老 IconCache.FromFile 对 PDF/Office/未知扩展名一律当图片硬解码，
+    /// 抛异常返回 null，Qbar 结果行于是退化成字形图标。这里用「未知扩展名」和
+    /// 「无扩展名」临时文件钉住「Shell 必须给出图标」，再钉住像素档位
+    /// （28 DIP 在 100%/150%/200% 下分别是 32/48/64，不允许拿小图放大）。
+    /// </summary>
+    private static void TestShellIcons()
+    {
+        CheckEqual("28 DIP @100% 取 32 像素档", ShellIcons.PickPixels(28, 1.0), 32);
+        CheckEqual("28 DIP @125% 取 48 像素档", ShellIcons.PickPixels(28, 1.25), 48);
+        CheckEqual("28 DIP @150% 取 48 像素档", ShellIcons.PickPixels(28, 1.5), 48);
+        CheckEqual("28 DIP @200% 取 64 像素档", ShellIcons.PickPixels(28, 2.0), 64);
+        CheckEqual("16 DIP @100% 取 16 像素档", ShellIcons.PickPixels(16, 1.0), 16);
+        CheckEqual("档位上限 256", ShellIcons.PickPixels(300, 1.0), 256);
+
+        CheckEqual("null 路径规范化为空串", ShellIcons.NormalizePath(null), "");
+        CheckEqual("纯空白路径规范化为空串", ShellIcons.NormalizePath("   "), "");
+        CheckEqual("环境变量被展开",
+            ShellIcons.NormalizePath(@"%SystemRoot%\notepad.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "notepad.exe"));
+        Check("UNC 路径识别为网络路径", ShellIcons.IsNetworkPath(@"\\server\share\a.pdf"));
+        Check("本地路径不误判为网络路径", !ShellIcons.IsNetworkPath(@"C:\Windows"));
+
+        string notepad = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe");
+        if (File.Exists(notepad))
+        {
+            ImageSource? icon = ShellIcons.RequestSync(notepad, 32, 1.0, 3000);
+            Check("notepad.exe 拿到 Shell 图标", icon != null);
+            Check("notepad.exe 图标按请求档位取（>=32px）",
+                icon is System.Windows.Media.Imaging.BitmapSource bs32 && bs32.PixelWidth >= 32,
+                (icon as System.Windows.Media.Imaging.BitmapSource)?.PixelWidth.ToString() ?? "null");
+            Check("解析结果进缓存（下次同步命中，UI 线程不用等）",
+                ShellIcons.TryGetCached(notepad, 32, 1.0) != null);
+            Check("48 档是独立缓存 key，不会串到 32 档",
+                ShellIcons.TryGetCached(notepad, 48, 1.0) != ShellIcons.TryGetCached(notepad, 32, 1.0));
+            ShellIcons.Invalidate("selftest");
+            Check("Invalidate 之后缓存已清空", ShellIcons.TryGetCached(notepad, 32, 1.0) == null);
+        }
+
+        /* PDF / Office / 未知扩展名的退化回归：临时文件只要存在，Shell 就必须给图。 */
+        string tempDir = Path.GetTempPath();
+        string unknown = Path.Combine(tempDir, "inputplus-selftest-" + Guid.NewGuid().ToString("N") + ".zzzq");
+        string noExt = Path.Combine(tempDir, "inputplus-selftest-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            File.WriteAllText(unknown, "selftest");
+            File.WriteAllText(noExt, "selftest");
+
+            ImageSource? unknownIcon = ShellIcons.RequestSync(unknown, 32, 1.0, 3000);
+            Check("未知扩展名文件拿到 Shell 图标（PDF 字形退化根因回归）", unknownIcon != null);
+            Check("未知扩展名图标不是 16px 小图放大",
+                unknownIcon is System.Windows.Media.Imaging.BitmapSource ub && ub.PixelWidth >= 32,
+                (unknownIcon as System.Windows.Media.Imaging.BitmapSource)?.PixelWidth.ToString() ?? "null");
+            Check("IconCache.FromFile 对未知扩展名不再返回 null",
+                IconCache.FromFile(unknown) != null);
+            Check("无扩展名文件拿到 Shell 图标",
+                ShellIcons.RequestSync(noExt, 32, 1.0, 3000) != null);
+        }
+        catch (Exception ex)
+        {
+            Check("临时文件图标用例不抛异常", false, ex.Message);
+        }
+        finally
+        {
+            try { File.Delete(unknown); } catch { }
+            try { File.Delete(noExt); } catch { }
+        }
+
+        /* 真机采样：桌面上的 .lnk / .pdf。没有样本就跳过，不误报失败。
+         * （快捷方式的小箭头由 Shell 叠加，看的是"能拿到图"，箭头本身没法在这里断言。） */
+        try
+        {
+            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (Directory.Exists(desktop))
+            {
+                string? lnk = Directory.EnumerateFiles(desktop, "*.lnk").FirstOrDefault();
+                if (lnk != null)
+                {
+                    Check("桌面快捷方式拿到 Shell 图标", ShellIcons.RequestSync(lnk, 32, 1.0, 3000) != null, lnk);
+                }
+                string? pdf = Directory.EnumerateFiles(desktop, "*.pdf").FirstOrDefault();
+                if (pdf != null)
+                {
+                    Check("桌面 PDF 拿到关联程序图标", ShellIcons.RequestSync(pdf, 32, 1.0, 3000) != null, pdf);
+                    Check("IconCache.FromFile(PDF) 与 Shell 一致（都非 null）",
+                        IconCache.FromFile(pdf) != null, pdf);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "自检：桌面图标采样");
+        }
+
+        /* 不存在的文件 / 非法路径：返回 null，不能抛，也不能卡住调用方。 */
+        var watch = Stopwatch.StartNew();
+        ImageSource? missing = ShellIcons.RequestSync(@"C:\__inputplus_no_such_dir__\x.pdf", 32, 1.0, 800);
+        watch.Stop();
+        Check("不存在的文件返回 null 且不卡住", missing == null && watch.ElapsedMilliseconds < 2000,
+            watch.ElapsedMilliseconds + "ms");
+        Check("空字符串不解析", ShellIcons.RequestSync("", 32, 1.0, 200) == null);
     }
 
     /// <summary>Qbar 标签：输入 "bd " 之后 bd 变成标签、输入框只剩搜索词。</summary>
@@ -323,12 +433,61 @@ public static partial class SelfTest
         var calc = qbar.Query("=6*7", chip);
         Check("标签模式下仍可直接计算", calc[0].Kind == QbarKind.Math && calc[0].Payload == "42");
 
+        /* 引擎关键字残留在输入框里时**不能**短路。
+         *
+         * 回归「叉掉引擎标签后搜什么都只出网页搜索」：
+         * 叉标签那一下以前会把关键字写回输入框，用户接着打空格得到 "bd "，
+         * QueryCore 一看到「第一段是引擎关键字 + 有空格」就直接 return 一条
+         * 「在 百度 中搜索…」，文件 / 应用 / 动作全被吃掉。
+         * 这里用"默认搜索引擎兜底行"当探针：短路那条路永远不会产出它。 */
+        var leftover = qbar.Query("bd ", 12);
+        /* 短路那条路只会返回 1 条「bd：…」，本地搜索照常跑就会有一堆候选。
+         * 这里不挑具体的行（本机装了什么都能通），只钉住"不止一条"。 */
+        Check("引擎关键字后面没内容时不短路（本地候选照常出现）",
+            leftover.Count > 1,
+            $"{leftover.Count} 条：" + string.Join(" | ", leftover.Take(4).Select(r => r.Badge + ":" + r.Title)));
+
+        var engineOnly = qbar.Query("bd chrome", 12);
+        Check("引擎关键字后面带内容时只出一条网页搜索",
+            engineOnly.Count == 1 && engineOnly[0].Badge == "bd",
+            string.Join(" | ", engineOnly.Select(r => r.Badge + ":" + r.Title)));
+
         // 没有图标的条目应当给出首字与颜色
         var noIcon = new QEntry { Key = "xx", Value = "https://example.com/?q={q}", Comment = "示例" };
         settings.Search.Add(noIcon);
         var chip2 = qbar.ResolveChip("xx");
         Check("无图标条目可用首字兜底", chip2 != null && !chip2.HasIcon && chip2.Initial == "示");
         Check("首字颜色稳定", IconCache.ColorFor("示例") == IconCache.ColorFor("示例"));
+
+        /* 内置 ol：本机没装欧路词典也必须"有反应"（走网页词典），
+           所以这条命令的 Path 是空的、由运行期解析。这里守住两件事：
+           它确实出现在命令表里，且文案不是"命令没有配置程序"。 */
+        var builtinOlRows = qbar.Query("ol hello");
+        var builtinOl = builtinOlRows.FirstOrDefault(r => r.Action == "qcmd:" + QbarCommandStore.BuiltinDictId);
+        Check("内置 ol 出现在普通搜索结果里", builtinOl != null,
+            string.Join(",", builtinOlRows.Take(4).Select(r => r.Action)));
+        Check("内置 ol 的文案说明会走网页词典",
+            builtinOl != null && builtinOl.Subtitle.Contains("网页词典", StringComparison.Ordinal),
+            builtinOl?.Subtitle);
+        CheckEqual("内置 ol 保留用户输入作为参数", builtinOl?.Arguments, "hello");
+
+        /* 自定义命令也能变标签：输入 ol 按空格 → 变成「欧路词典查词」，
+           后面打的字直接当 {query} 交给命令。 */
+        settings.Qbar.Commands.Add(new QbarCommand
+        {
+            Id = "user.ol", Keyword = "ol", Title = "欧路词典查词",
+            Path = "eudic.exe", Parameter = "-w {query}", RunAsAdmin = true,
+        });
+        var cmdChip = qbar.ResolveChip("ol");
+        Check("命令关键字能变成标签", cmdChip?.Kind == ChipKind.Command, cmdChip?.Kind.ToString());
+        CheckEqual("命令标签显示命令名", cmdChip?.Label, "欧路词典查词");
+        var cmdRows = qbar.Query("hello", cmdChip);
+        Check("命令标签下给出待执行行", cmdRows.Count > 0, cmdRows.Count + " 行");
+        CheckEqual("待执行行指向这条命令", cmdRows.Count > 0 ? cmdRows[0].Action : null, "qcmd:user.ol");
+        CheckEqual("输入的文字原样进 {query}", cmdRows.Count > 0 ? cmdRows[0].Arguments : null, "hello");
+        Check("副标题展开参数模板",
+            cmdRows.Count > 0 && cmdRows[0].Subtitle.Contains("-w hello"),
+            cmdRows.Count > 0 ? cmdRows[0].Subtitle : "(无结果)");
 
         // 图标缓存
         Check("内置图标文件已生成", File.Exists(IconUrls.Baidu), IconUrls.Baidu);
@@ -462,19 +621,22 @@ public static partial class SelfTest
             CheckEqual("webPage 标题是「直达网址」", wp?.Title, "直达网址");
             Check("webPage 需要参数（网址）", wp?.NeedsArg == true);
 
+            /* openFolder 已经并进「直达文件」：不再出现在界面上，但**不能删** ——
+             * 老配置里绑过它的按键要照旧按得动，启动时由 LegacyActionMigration 换掉。 */
             var of = cat.Items.FirstOrDefault(i => i.Id == "openFolder");
-            Check("动作表有 openFolder", of != null);
+            Check("动作表有 openFolder（老 id 兼容）", of != null);
             CheckEqual("openFolder 在「直达链接」分类", of?.Category, "直达链接");
             CheckEqual("openFolder 标题是「直达文件夹」", of?.Title, "直达文件夹");
             Check("openFolder 需要参数（路径）", of?.NeedsArg == true);
+            Check("openFolder 已隐藏（入口只剩「直达文件」）", of?.Hidden == true);
 
             var ofi = cat.Items.FirstOrDefault(i => i.Id == "openFile");
             Check("动作表有 openFile", ofi != null);
             CheckEqual("openFile 在「直达链接」分类", ofi?.Category, "直达链接");
             CheckEqual("openFile 标题是「直达文件」", ofi?.Title, "直达文件");
             Check("openFile 需要参数（路径）", ofi?.NeedsArg == true);
-            Check("「直达链接」分类下只有这三个动作",
-                cat.Items.Count(i => i.Category == "直达链接") == 3,
+            Check("「直达链接」分类下只有两个可见动作",
+                cat.Items.Count(i => i.Category == "直达链接" && !i.Hidden) == 2,
                 string.Join(",", cat.Items.Where(i => i.Category == "直达链接").Select(i => i.Id)));
 
             // 2. 执行时把规范化后的网址传出去
@@ -634,13 +796,13 @@ public static partial class SelfTest
     }
 
     /// <summary>
-    /// 「直达链接」的智能识别（系统分类里那个）：选中什么就开什么。
+    /// 「直达链接」的智能识别（「智能直达」分类里那个）：选中什么就开什么。
     ///
     /// 这个功能的风险全在**误判**上：把一句话当网址塞进浏览器、
     /// 把 `reade.md` 当域名打开，比"什么都不做"更打扰人。
     /// 所以这里用可控的假文件系统，把各种边界情况逐条钉住：
     ///
-    ///   1. 动作必须归在「系统」，和打开网址 / 运行程序并列；
+    ///   1. 动作必须归在「智能直达」，和打开网址 / 运行命令并列；
     ///   2. 网址（带协议 / 裸域名 / 引号包裹 / 末尾句号）；
     ///   3. 文件夹与文件按**真实存在性**区分，不存在时给出准确的"不存在"类型；
     ///   4. 路径的各种写法：引号、正斜杠、环境变量、UNC、file:///、shell:；
@@ -675,6 +837,8 @@ public static partial class SelfTest
         var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             @"D:\文档\方案.docx", @"C:\Windows\notepad.exe",
+            /* 用来验证"没加引号的带空格路径 + 参数"：只有真在盘上的前缀才算命令。 */
+            @"C:\Program Files\App\app.exe",
         };
         var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -729,21 +893,58 @@ public static partial class SelfTest
             Core.Actions.SmartTargetDetector.Detect(new string('a', 3000),
                 _ => false, _ => false).Kind, Core.Actions.SmartKind.None);
 
+        // 2e-2. 命令行：程序 + 参数也算"目标"，但它归「运行命令」而不是直达链接
+        /* 以前这一串会被当成网址丢给浏览器（UrlUtil 认不出、shell 说"找不到文件"），
+         * 用户填了命令行却得不到任何提示。区分命令和普通句子的唯一依据是
+         * "第一个词像不像程序"，外加 shell 前缀（cmd / powershell / wt…）。 */
+        CheckEqual("程序 + 参数 → 命令",
+            Hit("notepad.exe D:\\笔记.txt").Kind, Core.Actions.SmartKind.Command);
+        CheckEqual("命令的目标保留整行（参数原样带过去）",
+            Hit("notepad.exe D:\\笔记.txt").Target, "notepad.exe D:\\笔记.txt");
+        CheckEqual("引号包住的程序路径 + 参数 → 命令",
+            Hit("\"C:\\Windows\\notepad.exe\" -x").Kind, Core.Actions.SmartKind.Command);
+        CheckEqual("没加引号的带空格路径 + 参数 → 命令",
+            Hit(@"C:\Program Files\App\app.exe -x").Kind, Core.Actions.SmartKind.Command);
+        CheckEqual("shell 前缀（cmd /c）→ 命令",
+            Hit("cmd /c dir").Kind, Core.Actions.SmartKind.Command);
+        CheckEqual("shell 前缀（powershell -File）→ 命令",
+            Hit("powershell -File build.ps1").Kind, Core.Actions.SmartKind.Command);
+        CheckEqual("两个普通单词不是命令", Hit("hello world").Kind, Core.Actions.SmartKind.None);
+        CheckEqual("中文 + 空格不是命令", Hit("今天 天气").Kind, Core.Actions.SmartKind.None);
+        CheckEqual("带空格的真实文件路径仍是文件",
+            Hit(@"C:\Program Files\App\app.exe").Kind, Core.Actions.SmartKind.File);
+
         // ---------- 2f. 识别结果 → 该绑哪个动作 ----------
         /* 「直达链接」面板不再让用户选类型：类型由识别结果决定。
          * 这张对照表错一行，用户就会"填了网址却被当文件夹打开"。 */
         CheckEqual("网址 → 直达网址",
             UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.Url), "webPage");
-        CheckEqual("文件夹 → 直达文件夹",
-            UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.Folder), "openFolder");
-        CheckEqual("不存在的文件夹也算文件夹",
-            UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.MissingFolder), "openFolder");
+        /* 文件夹也落到「直达文件」：OpenFile 自己会先看 Directory.Exists。
+         * 两个入口并存时用户得先判断自己填的是文件还是文件夹，选错就是"文件不存在"。 */
+        CheckEqual("文件夹 → 直达文件",
+            UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.Folder), "openFile");
+        CheckEqual("不存在的文件夹也算文件（按下去提示不存在）",
+            UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.MissingFolder), "openFile");
         CheckEqual("文件 → 直达文件",
             UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.File), "openFile");
         CheckEqual("不存在的文件也算文件",
             UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.MissingFile), "openFile");
         CheckEqual("认不出就不动原来的动作",
             UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.None), null);
+        CheckEqual("命令行 → 运行命令",
+            UI.Views.KeysView.LinkActionFor(Core.Actions.SmartKind.Command), "runProgram");
+
+        // ---------- 2f-2. 「直达链接」与「运行命令」共用一个目标框 ----------
+        /* 这两类动作的 Arg 都是"一整行目标文字"，切分类时不能互相清空 ——
+         * 否则点一下「直达链接」，绑好的命令行就被抹成空串。 */
+        Check("运行命令吃命令行参数",
+            UI.Views.KeysView.IsContentArgAction("runProgram"));
+        Check("直达链接与运行命令共用一个参数族",
+            UI.Views.KeysView.SameArgFamily("runProgram", "webPage"));
+        Check("反向也算同一族",
+            UI.Views.KeysView.SameArgFamily("openFile", "runProgram"));
+        Check("步进动作和命令行不是一族",
+            !UI.Views.KeysView.SameArgFamily("moveChar", "runProgram"));
 
         // ---------- 2g. 提示文案必须说清"按下去会发生什么" ----------
         string HintOf(string text) => UI.Views.KeysView.LinkHintFor(Hit(text), text);
@@ -765,6 +966,8 @@ public static partial class SelfTest
             HintOf(@"D:\文档\没有这个.docx").Contains("文件不存在"), HintOf(@"D:\文档\没有这个.docx"));
         Check("认不出时教用户怎么写",
             HintOf("今天天气不错").Contains("浏览"), HintOf("今天天气不错"));
+        Check("命令提示说清参数会原样传过去",
+            HintOf("notepad.exe D:\\笔记.txt").Contains("原样"), HintOf("notepad.exe D:\\笔记.txt"));
         Check("空输入是引导而不是报错",
             HintOf("").Contains("自动识别"), HintOf(""));
         Check("空输入时不该报「看不出」",
@@ -1008,6 +1211,112 @@ public static partial class SelfTest
     }
 
     /// <summary>
+    /// 设置页顶上那排页签（搜索指令 / 启动程序 / 常用网址 / 固定项）的字必须看得清。
+    ///
+    /// 用户报的是：夜间模式下这几个页签没选中时"背景是黑的、字也是黑的"。
+    /// 根因不在 chip 上 —— 页签模板只在 IsSelected 里给了文字前景色，
+    /// 未选中态没有任何前景色 setter，于是继承 WPF 默认黑色，
+    /// 压在夜间卡片底色 Surface(#1A1E27) 上正好黑底黑字。
+    ///
+    /// 现在普通 / 悬停 / 选中三态的字色都显式绑主题画刷，这里逐态算 WCAG 对比度
+    /// （≥ 4.5 是正文级可读的下限）。页签平时落在卡片底（Surface），换主题或换宿主
+    /// 也可能落在页面底（Background），两个底色都验，省得只对了一半。
+    /// </summary>
+    private static void TestQbarTabContrast()
+    {
+        var saved = UI.Theme.ThemeManager.Current;
+
+        try
+        {
+            var themes = new (string Name, UI.Theme.ThemeManager.Mode Mode)[]
+            {
+                ("日间", UI.Theme.ThemeManager.Mode.Light),
+                ("夜间", UI.Theme.ThemeManager.Mode.Dark),
+            };
+
+            foreach (var (name, mode) in themes)
+            {
+                UI.Theme.ThemeManager.Apply(mode);
+
+                Color Get(string key)
+                {
+                    string hex = BrushColor(key);
+                    Check($"{name}：主题里有 {key}", hex.Length > 0, hex);
+                    return hex.Length > 0 ? (Color)ColorConverter.ConvertFromString(hex) : Colors.Transparent;
+                }
+
+                Color surface = Get("Brush.Surface");
+                Color background = Get("Brush.Background");
+                Color hover = Get("Brush.Hover");
+                Color accentSoft = Get("Brush.AccentSoft");
+                Color primary = Get("Brush.TextPrimary");
+                Color secondary = Get("Brush.TextSecondary");
+
+                foreach (var (where, back) in new[] { ("卡片底色", surface), ("页面底色", background) })
+                {
+                    double idle = UI.Windows.QbarWindow.Contrast(secondary, back);
+                    Check($"{name}·{where}：页签未选中的字对比度 ≥ 4.5", idle >= 4.5, $"{idle:F2}:1");
+                }
+
+                double hovering = UI.Windows.QbarWindow.Contrast(primary, hover);
+                Check($"{name}：页签悬停态的字对比度 ≥ 4.5", hovering >= 4.5, $"{hovering:F2}:1");
+                Check($"{name}：悬停底色与卡片底色不同（反馈看得见）", hover != surface, $"{hover} vs {surface}");
+
+                double selected = UI.Windows.QbarWindow.Contrast(primary, accentSoft);
+                Check($"{name}：页签选中态的字对比度 ≥ 4.5", selected >= 4.5, $"{selected:F2}:1");
+                Check($"{name}：选中底色与未选中底色不同（状态分得开）", accentSoft != surface,
+                    $"{accentSoft} vs {surface}");
+
+                /* 回归指向：要是还把前景色留给默认值，夜间就是黑字压深底。
+                 * 这条断言逼着上面几条真的在管颜色，而不是两边都算成同一个值。 */
+                if (mode == UI.Theme.ThemeManager.Mode.Dark)
+                {
+                    double blackOnDark = UI.Windows.QbarWindow.Contrast(Colors.Black, surface);
+                    Check("夜间：黑字压在卡片底色上确实不足 4.5（旧问题的来源）", blackOnDark < 4.5,
+                        $"{blackOnDark:F2}:1");
+                }
+            }
+        }
+        finally
+        {
+            UI.Theme.ThemeManager.Apply(saved);
+        }
+    }
+
+    /// <summary>
+    /// 文件搜索只有一个内核：Input Plus 自己的索引（Core/Qbar/NativeSearchIndex.cs）。
+    ///
+    /// 这里验的是"接线对不对"，不是"索引全不全" —— 扫到哪一步取决于数据目录里
+    /// 已经落盘的快照，自检不该跟着它翻车，更不该顺手拉起一次扫盘。
+    /// </summary>
+    private static void TestQbarNativeIndex()
+    {
+        string dir = Core.Qbar.NativeSearchIndex.IndexDir ?? "";
+        Check("文件索引目录落在数据目录下",
+            dir.Length > 0 && dir.StartsWith(AppPaths.DataDir, StringComparison.OrdinalIgnoreCase), dir);
+
+        /* 一次不可能命中的查询：既验"不抛异常"，也验"没建索引时安静地返回空表"。
+         * 自检的数据目录是一次性的，所以这里必然走"还没有索引"那条路。 */
+        string probe = "zz-inputplus-selftest-" + Guid.NewGuid().ToString("N");
+        int count = -1;
+        try { count = Core.Qbar.NativeSearchIndex.Search(probe, 5, 300).Count; }
+        catch (Exception ex) { Check("文件索引查询不抛异常", false, ex.GetType().Name + ": " + ex.Message); }
+        if (count >= 0)
+        {
+            Check("文件索引查询不抛异常", true, probe);
+            Check("不相干的词搜不到东西", count == 0, count.ToString());
+        }
+
+        /* 用户报的旧行为：Qbar 会先自己扫桌面/文档，并给一条"稍后再输入一次"的占位。
+         * 那条路已经拆了，不许再回来。 */
+        var settings = DefaultSettings.Create();
+        var qbar = new QbarService(() => settings, () => new List<string>());
+        var results = qbar.Query("system32", 12);
+        Check("文件搜索不再出现“稍后再输入一次”的占位",
+            !results.Any(r => r.Subtitle != null && r.Subtitle.Contains("稍后再输入一次")), "");
+    }
+
+    /// <summary>
     /// Qbar 打开期间"点面板外面就收起"的判定。
     ///
     /// 用户要求：面板出来之后，点任何不是面板的地方都该消失。
@@ -1112,6 +1421,95 @@ public static partial class SelfTest
 
         TestDirectSearchEmptyArgRegression(ctx, cat);
         TestSelectionRobustness();
+    }
+
+    /// <summary>
+    /// 「直接搜索」里的自定义命令（qcmdsearch:）：把选中的文字交给 Qbar 命令。
+    ///
+    /// 这条链路支撑「选中单词按一下键直接查欧路词典」：
+    /// 命令表 → 动作项 → 读选区 → 套参数模板。真跑会开 exe，
+    /// 所以用拦截钩子看实际交出去的参数。
+    /// </summary>
+    private static void TestCommandSearchAction()
+    {
+        var settings = DefaultSettings.Create();
+        settings.Qbar.Commands.Add(new QbarCommand
+        {
+            Id = "user.ol", Keyword = "ol", Title = "欧路词典查词",
+            Path = "eudic.exe", Parameter = "-w {query}", RunAsAdmin = true,
+        });
+
+        var notes = new List<string>();
+        var ctx = new Core.Actions.ActionContext
+        {
+            Settings = () => settings,
+            Clipboard = new Core.Actions.ClipboardService(),
+            Windows = new Core.Actions.WindowActions(),
+            WindowBindings = new WindowBindingService(),
+            Mouse = new Core.Actions.MouseService(),
+            Notify = n => notes.Add(n),
+        };
+        var cat = Core.Actions.ActionCatalog.Create(ctx);
+
+        var item = cat.Items.FirstOrDefault(i => i.Id == "qcmdsearch:user.ol");
+        Check("动作表有自定义命令的直接搜索项", item != null,
+            string.Join(",", cat.Items.Where(i => i.Id.StartsWith("qcmdsearch:")).Select(i => i.Id)));
+        CheckEqual("归入「直接搜索」分类", item?.Category, "直接搜索");
+        Check("动作名带上命令名", item != null && item.Title.Contains("欧路词典查词"), item?.Title);
+        Check("内部命令（没有程序）不进直接搜索",
+            !cat.Items.Any(i => i.Id == "qcmdsearch:" + InputPlus.Core.Qbar.Search.QbarCommandStore.BuiltinNewFileId),
+            string.Join(",", cat.Items.Where(i => i.Id.StartsWith("qcmdsearch:")).Select(i => i.Id)));
+
+        QbarCommand? ran = null;
+        string? ranText = null;
+        Core.Actions.ActionContext.RunQbarCommandInterceptForTest = (c, t) => { ran = c; ranText = t; };
+        try
+        {
+            Check("按 Id 能执行命令", ctx.SearchSelectionWithCommand("user.ol", "hello"));
+            CheckEqual("交给命令的是选中的文字", ranText, "hello");
+            CheckEqual("解析到的是这条命令", ran?.Id, "user.ol");
+            Check("成功后给用户一句反馈",
+                notes.Any(n => n.Contains("欧路词典查词")), string.Join(" | ", notes));
+
+            Check("按关键字也能找到同一条命令",
+                ctx.SearchSelectionWithCommand("ol", "world") && ranText == "world", ranText);
+
+            // 换行/多词原样传：加不加引号是用户在模板里决定的
+            ctx.SearchSelectionWithCommand("user.ol", "  two words  ");
+            CheckEqual("文字只去首尾空白", ranText, "two words");
+        }
+        finally
+        {
+            Core.Actions.ActionContext.RunQbarCommandInterceptForTest = null;
+        }
+
+        ran = null;
+        notes.Clear();
+        Check("未知命令不抛异常", ctx.SearchSelectionWithCommand("no_such_cmd", "x"));
+        Check("未知命令有明确提示",
+            notes.Any(n => n.Contains("找不到这条命令")), string.Join(" | ", notes));
+        Check("未知命令不执行任何东西", ran == null);
+
+        // 没有选区：要提示「先选中」，而不是把空串交给 exe
+        ran = null;
+        ranText = null;
+        notes.Clear();
+        ctx.CaptureTextForTest = () => "   ";
+        ctx.ManualCopyWaitForTest = _ => "";
+        Core.Actions.ActionContext.RunQbarCommandInterceptForTest = (c, t) => { ran = c; ranText = t; };
+        try
+        {
+            // 返回 true = 这次按键已被处理（哪怕只是提示），执行与否看下面两条
+            Check("没有选中文字时按键仍算已处理", ctx.SearchSelectionWithCommand("user.ol"));
+            Check("没有选中文字有提示",
+                notes.Any(n => n.Contains("没有取到选中的文字")), string.Join(" | ", notes));
+            Check("没有选中文字时命令参数为空", ran == null && string.IsNullOrEmpty(ranText));
+        }
+        finally
+        {
+            Core.Actions.ActionContext.RunQbarCommandInterceptForTest = null;
+            ctx.CaptureTextForTest = null;
+        }
     }
 
     /// <summary>
@@ -1270,7 +1668,9 @@ public static partial class SelfTest
             !x.Key.Equals("default", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(x.Value));
 
-        int actionCount = cat.Items.Count(i => i.Category == "直接搜索");
+        // 「直接搜索」里还有自定义命令（qcmdsearch:），这一步只数引擎
+        int actionCount = cat.Items.Count(i =>
+            i.Category == "直接搜索" && i.Id.StartsWith("search:", StringComparison.Ordinal));
 
         Check("直接搜索动作数 = 全部引擎数",
             actionCount == engineCount, $"{actionCount} vs {engineCount}");
@@ -1280,6 +1680,182 @@ public static partial class SelfTest
         foreach (string key in new[] { "bd", "zh", "go" })
         {
             Check($"常用引擎 {key} 有动作", cat.Items.Any(i => i.Id == "search:" + key));
+        }
+    }
+
+    /// <summary>
+    /// 文件搜索过滤器要作为动作出现在「Qbar 搜索」和「直接搜索」两个分类里。
+    ///
+    /// 用户的原话是"把 qbar 本地搜索过滤器规则（wd 只搜索文档 等等功能）
+    /// 加入直接搜索和 qbar 搜索分类，作为功能" —— 也就是能绑到按键上。
+    /// </summary>
+    private static void TestFilterActions()
+    {
+        var settings = DefaultSettings.Create();
+        var notes = new List<string>();
+        var requests = new List<(string? Id, string? Query)>();
+
+        var ctx = new Core.Actions.ActionContext
+        {
+            Settings = () => settings,
+            Clipboard = new Core.Actions.ClipboardService(),
+            Windows = new Core.Actions.WindowActions(),
+            WindowBindings = new WindowBindingService(),
+            Mouse = new Core.Actions.MouseService(),
+            Notify = n => notes.Add(n),
+        };
+        ctx.QbarFileSearchRequested += (id, query) => requests.Add((id, query));
+
+        // 关掉的过滤器不该出现在绑定列表里
+        settings.Qbar.Filters.Add(new InputPlus.Core.Qbar.Search.QbarFilter
+        {
+            Id = "user.off", Name = "关掉的过滤器", Keyword = "zzoff", Enabled = false,
+        });
+
+        var cat = Core.Actions.ActionCatalog.Create(ctx);
+
+        var qbarItem = cat.Get("qfilter:builtin.doc");
+        Check("过滤器「文档」有「Qbar 搜索」动作", qbarItem != null);
+        Check("过滤器动作归在「Qbar 搜索」分类", qbarItem?.Category == "Qbar 搜索", qbarItem?.Category ?? "(null)");
+
+        var directItem = cat.Get("fsearch:builtin.doc");
+        Check("过滤器「文档」有「直接搜索」动作", directItem != null);
+        Check("过滤器动作归在「直接搜索」分类", directItem?.Category == "直接搜索", directItem?.Category ?? "(null)");
+
+        Check("关掉的过滤器不注册动作", cat.Get("qfilter:user.off") == null && cat.Get("fsearch:user.off") == null);
+
+        // ①Qbar 搜索：只带过滤器打开，不带词
+        requests.Clear();
+        bool ok = cat.Invoke("qfilter:builtin.doc", "");
+        Check("执行过滤器动作返回成功", ok);
+        Check("过滤器动作请求的是 builtin.doc",
+            requests.Count == 1 && requests[0].Id == "builtin.doc" && requests[0].Query == null,
+            string.Join(",", requests.Select(r => r.Id + "|" + (r.Query ?? "null"))));
+
+        // ②直接搜索：取到词之后带着词把面板打开（取词用自检钩子，不碰真实选区）
+        requests.Clear();
+        ctx.CaptureTextForTest = () => "  报表  ";
+        ok = cat.Invoke("fsearch:builtin.doc", "");
+        Check("直接搜索过滤器返回成功", ok);
+        Check("选区文字被 trim 后带进面板",
+            requests.Count == 1 && requests[0].Id == "builtin.doc" && requests[0].Query == "报表",
+            string.Join(",", requests.Select(r => r.Id + "|" + (r.Query ?? "null"))));
+
+        // ③过滤器被删掉之后，绑定里留着旧 Id 也要说清是哪条没了
+        notes.Clear();
+        ctx.CaptureTextForTest = () => "报表";
+        ok = cat.Invoke("fsearch:builtin.doc", "");
+        Check("过滤器还在时不再报错", notes.Count == 0, string.Join(" | ", notes));
+
+        bool handled = ctx.SearchSelectionAsFile("user.已经没了", "报表");
+        Check("找不到过滤器时仍然吞掉这次按键", handled);
+        Check("找不到过滤器时给明确提示",
+            notes.Any(n => n.Contains("找不到这个过滤器")), string.Join(" | ", notes));
+
+        ctx.CaptureTextForTest = null;
+    }
+
+    /// <summary>
+    /// 查词动作（dict.lookup / qdict.lookup）：欧路词典也要能绑键。
+    ///
+    /// 这条自检刻意**不启动任何进程**：真机上欧路装着的，
+    /// 跑测试弹出词典窗口抢焦点是最糟的副作用 —— 三个钩子全拦掉。
+    /// </summary>
+    private static void TestDictionaryActions()
+    {
+        var settings = DefaultSettings.Create();
+        var notes = new List<string>();
+        var words = new List<string?>();
+
+        var ctx = new Core.Actions.ActionContext
+        {
+            Settings = () => settings,
+            Clipboard = new Core.Actions.ClipboardService(),
+            Windows = new Core.Actions.WindowActions(),
+            WindowBindings = new WindowBindingService(),
+            Mouse = new Core.Actions.MouseService(),
+            Notify = n => notes.Add(n),
+        };
+        ctx.QbarDictionaryRequested += w => words.Add(w);
+
+        var cat = Core.Actions.ActionCatalog.Create(ctx);
+
+        var direct = cat.Get("dict.lookup");
+        Check("查词有「直接搜索」动作", direct != null);
+        Check("查词动作归在「直接搜索」分类", direct?.Category == "直接搜索", direct?.Category ?? "(null)");
+
+        var qbarItem = cat.Get("qdict.lookup");
+        Check("查词有「Qbar 搜索」动作", qbarItem != null);
+        Check("查词动作归在「Qbar 搜索」分类", qbarItem?.Category == "Qbar 搜索", qbarItem?.Category ?? "(null)");
+
+        // ① Qbar 搜索：取词 → 请求面板带词打开
+        ctx.CaptureTextForTest = () => "  银行  ";
+        words.Clear();
+        bool ok = cat.Invoke("qdict.lookup", "");
+        Check("查词动作返回成功", ok);
+        Check("查词的词被 trim 后交给面板",
+            words.Count == 1 && words[0] == "银行",
+            string.Join(",", words.Select(w => w ?? "null")));
+
+        try
+        {
+            // ② 没装欧路：走网页词典（钩子拦掉浏览器）
+            string? opened = null;
+            Core.Qbar.DictionaryLauncher.FindProgramForTest = () => null;
+            Core.Qbar.DictionaryLauncher.OpenWebForTest = url => opened = url;
+
+            notes.Clear();
+            ctx.CaptureTextForTest = () => "hello";
+            ok = cat.Invoke("dict.lookup", "");
+            Check("直接查词返回成功", ok);
+            Check("没装欧路时打开网页词典",
+                opened != null && opened.Contains("dict.eudic.net") && opened.EndsWith("/hello", StringComparison.Ordinal),
+                opened ?? "(null)");
+            Check("网页兜底会说明没装欧路", notes.Any(n => n.Contains("网页词典")), string.Join(" | ", notes));
+
+            // ③ 有欧路：交给命令执行，参数留空要补出厂 -w "{query}"
+            Core.Qbar.Search.QbarCommand? ran = null;
+            string ranTail = "";
+            Core.Qbar.DictionaryLauncher.FindProgramForTest = () => @"C:\tools\eudic.exe";
+            Core.Qbar.DictionaryLauncher.ExecuteForTest = (cmd, tail) => { ran = cmd; ranTail = tail; };
+
+            notes.Clear();
+            ok = cat.Invoke("dict.lookup", "hello");
+            Check("有欧路时交给命令执行", ok && ran != null);
+            Check("参数留空补出厂模板",
+                ran?.Parameter == Core.Qbar.Search.QbarCommandStore.DefaultDictParameter,
+                ran?.Parameter ?? "(null)");
+            Check("程序来自定位器", ran?.Path == @"C:\tools\eudic.exe", ran?.Path ?? "(null)");
+            Check("交给程序的词没有多余空白", ranTail == "hello", ranTail);
+            Check("成功时不再提示网页词典", notes.All(n => !n.Contains("网页词典")), string.Join(" | ", notes));
+
+            // ④ 用户指定的程序和参数优先于定位器（换别的词典也照走）
+            var custom = new Core.Qbar.Search.QbarCommand
+            {
+                Id = "user.ol", Keyword = "ol", Path = @"D:\dict\user.exe", Parameter = "--word {query}",
+            };
+            ran = null;
+            var r = Core.Qbar.DictionaryLauncher.Launch("hello", custom);
+            Check("用户指定的程序优先", r.Ok && ran?.Path == @"D:\dict\user.exe", ran?.Path ?? "(null)");
+            Check("用户参数模板原样保留", ran?.Parameter == "--word {query}", ran?.Parameter ?? "(null)");
+
+            // ⑤ 空词什么都不启动
+            ran = null;
+            var empty = Core.Qbar.DictionaryLauncher.Launch("   ", null);
+            Check("空词只给提示、不启动程序", !empty.Ok && empty.Message.Length > 0 && ran == null, empty.Message);
+
+            // ⑥ 网页地址要编码中文，否则浏览器会把词截断
+            string url = Core.Qbar.DictionaryLauncher.DictionaryUrl("银行");
+            Check("网页词典地址会编码中文",
+                url.StartsWith("https://dict.eudic.net/dicts/en/", StringComparison.Ordinal) && !url.Contains('行'),
+                url);
+        }
+        finally
+        {
+            Core.Qbar.DictionaryLauncher.FindProgramForTest = null;
+            Core.Qbar.DictionaryLauncher.ExecuteForTest = null;
+            Core.Qbar.DictionaryLauncher.OpenWebForTest = null;
+            ctx.CaptureTextForTest = null;
         }
     }
 
@@ -1352,5 +1928,126 @@ public static partial class SelfTest
 
         cat.Invoke("qbar:zh", "");
         CheckEqual("执行 qbar:zh 时传出引擎关键字", requested, "zh");
+    }
+
+    /// <summary>
+    /// 空面板最上面的「最近打开的项目」。
+    ///
+    /// 验四件事：
+    ///   · 分类（文件/文件夹/网址/程序）认得对，且坏输入不抛；
+    ///   · 同目标去重并前移、Top(n) 截断；
+    ///   · 落盘往返（写出去 → 重新读回来还在）与坏 JSON 容错；
+    ///   · 只在**空面板**出现：带关键字、带引擎标签、RecentCount=0 时都不许冒出来。
+    ///
+    /// 全程把存储指到临时文件（StorePathForTest），跑完恢复，
+    /// 不碰用户真正的 recent-targets.json。
+    /// </summary>
+    private static void TestQbarRecentTargets()
+    {
+        // ① 分类器：四种目标 + 空串
+        CheckEqual("最近项：网址归为 Url",
+            RecentTargets.Classify("https://github.com/input-plus"), RecentTargetKind.Url);
+        CheckEqual("最近项：文件夹归为 Folder",
+            RecentTargets.Classify(Path.GetTempPath().TrimEnd('\\')), RecentTargetKind.Folder);
+        CheckEqual("最近项：可执行程序归为 Program",
+            RecentTargets.Classify(@"C:\Windows\notepad.exe"), RecentTargetKind.Program);
+        CheckEqual("最近项：普通文件归为 File",
+            RecentTargets.Classify(@"C:\Windows\win.ini"), RecentTargetKind.File);
+        CheckEqual("最近项：空目标不抛异常", RecentTargets.Classify(""), RecentTargetKind.File);
+
+        string? savedStore = RecentTargets.StorePathForTest;
+        string dir = Path.Combine(Path.GetTempPath(), "ip-qbar-recent-" + Guid.NewGuid().ToString("N"));
+        string store = Path.Combine(dir, "recent-targets.json");
+
+        try
+        {
+            RecentTargets.StorePathForTest = store;
+            RecentTargets.Clear();
+
+            // ② 去重：同一目标（大小写不敏感）只留一条，前移并累加次数
+            RecentTargets.Record(@"D:\自检\甲.txt");
+            RecentTargets.Record(@"D:\自检\乙.txt");
+            RecentTargets.Record(@"D:\自检\甲.txt");
+
+            var top = RecentTargets.Top(10);
+            Check("最近项：重复打开只留一条", top.Count == 2, top.Count.ToString());
+            CheckEqual("最近项：重复打开后前移", top[0].Target, @"D:\自检\甲.txt");
+            Check("最近项：重复打开累加次数", top[0].Uses == 2, top[0].Uses.ToString());
+            CheckEqual("最近项：标题默认取文件名", top[0].Title, "甲.txt");
+
+            // ③ Top(n) 截断
+            for (int i = 0; i < 5; i++) RecentTargets.Record($@"D:\自检\第{i}.txt");
+            Check("最近项：Top(n) 按条数截断", RecentTargets.Top(3).Count == 3,
+                RecentTargets.Top(3).Count.ToString());
+
+            // ④ 落盘往返：写出去 → 丢掉内存 → 重新读，还在
+            RecentTargets.Flush();
+            RecentTargets.Reload();
+            var loaded = RecentTargets.Top(10);
+            Check("最近项：落盘之后重新读还在",
+                loaded.Any(x => x.Target == @"D:\自检\第4.txt"), loaded.Count.ToString());
+
+            // ⑤ 坏文件：当空列表继续，不抛
+            File.WriteAllText(store, "{ 这不是 JSON，是坏文件");
+            RecentTargets.Reload();
+            bool threw = false;
+            int brokenCount = -1;
+            try { brokenCount = RecentTargets.Count; }
+            catch { threw = true; }
+            Check("最近项：文件损坏不抛异常且按空列表继续",
+                !threw && brokenCount == 0, threw ? "抛了" : brokenCount.ToString());
+
+            // ⑥ 空面板：最近项排在最前面，徽标是「最近」
+            var settings = DefaultSettings.Create();
+            settings.Qbar.RecentCount = 5;
+            var qbar = new QbarService(() => settings, () => new List<string>());
+
+            RecentTargets.Record(@"D:\自检\空面板目标.txt", "空面板目标");
+            var empty = qbar.Query("", 20);
+            Check("最近项：空面板第一行就是它",
+                empty.Count > 0
+                && empty[0].Badge == Loc.T("最近")
+                && empty[0].Payload == @"D:\自检\空面板目标.txt",
+                empty.Count > 0 ? empty[0].Title : "空");
+            CheckEqual("最近项：空面板显示的是标题", empty[0].Title, "空面板目标");
+
+            // ⑦ 非空查询里看不到
+            var typed = qbar.Query("chrome", 20);
+            Check("最近项：带关键字唤出时不出现",
+                typed.All(x => x.Badge != Loc.T("最近")), typed.Count.ToString());
+
+            // ⑧ 带搜索引擎标签唤出（空输入）也看不到
+            var chip = new QbarChip
+            {
+                Kind = ChipKind.Search,
+                Key = "bd",
+                DisplayName = "百度",
+                Value = "https://www.baidu.com/s?wd={q}",
+            };
+            var chipped = qbar.Query("", chip, 20);
+            Check("最近项：带搜索引擎唤出时不出现",
+                chipped.All(x => x.Badge != Loc.T("最近")), chipped.Count.ToString());
+
+            // ⑨ RecentCount = 0 时整组消失
+            settings.Qbar.RecentCount = 0;
+            var off = qbar.Query("", 20);
+            Check("最近项：RecentCount=0 时空面板不显示",
+                off.All(x => x.Badge != Loc.T("最近")), off.Count.ToString());
+
+            // ⑩ 设置取值夹到 0..20
+            settings.Qbar.RecentCount = 99;
+            SettingsStore.Normalize(settings);
+            CheckEqual("最近项：设置上限夹到 20", settings.Qbar.RecentCount, 20);
+            settings.Qbar.RecentCount = -3;
+            SettingsStore.Normalize(settings);
+            CheckEqual("最近项：设置下限夹到 0", settings.Qbar.RecentCount, 0);
+        }
+        finally
+        {
+            RecentTargets.StorePathForTest = savedStore;
+            RecentTargets.Reload();
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+            catch { /* 自检清理失败无副作用 */ }
+        }
     }
 }

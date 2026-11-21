@@ -134,15 +134,18 @@ public partial class KeysView : UserControl
     private void RefreshWebPageFields()
     {
         var b = FindInCurrentLayer(CurrentCombo());
-        bool isLink = IsLinkAction(b?.Action);
+        /* 绑着「运行命令」时也要把 Arg 填回来：它和直达链接共用同一个
+         * 目标框，只是"怎么跑"不同。以前这里只认 link 动作，于是打开
+         * 「直达链接」面板看到的是空框，而键上其实跑着一条命令。 */
+        bool isTarget = IsTargetAction(b?.Action);
 
         _suppressEvents = true;
-        WebUrlBox.Text = isLink ? (b!.Arg ?? "") : "";
+        WebUrlBox.Text = isTarget ? (b!.Arg ?? "") : "";
         WebNoteBox.Text = b?.Note ?? "";
         _suppressEvents = false;
 
         /* persist = false：只是打开面板看一眼，不能顺手把动作或配置改了。 */
-        ApplyLinkDetection(isLink ? (b!.Arg ?? "") : "", persist: false);
+        ApplyLinkDetection(isTarget ? (b!.Arg ?? "") : "", persist: false);
     }
 
     /// <summary>目标框里最后一次识别出的类型（决定「浏览…」直开哪个对话框）。</summary>
@@ -199,7 +202,7 @@ public partial class KeysView : UserControl
         if (text.Length == 0)
         {
             var old = FindInCurrentLayer(CurrentCombo());
-            if (old != null && IsLinkAction(old.Action) && !string.IsNullOrEmpty(old.Arg))
+            if (old != null && IsTargetAction(old.Action) && !string.IsNullOrEmpty(old.Arg))
             {
                 old.Arg = "";
                 _host.SaveSettings();
@@ -221,8 +224,9 @@ public partial class KeysView : UserControl
                 ?? AddBinding(CurrentCombo());
 
         /* 原来绑的是别的功能（记事本、Qbar…）时，先把动作落到「直达网址」，
-         * 否则下面没地方存这段文字。识别出真实类型后会被立刻改掉。 */
-        if (!IsLinkAction(b.Action)) b.Action = LinkUrlAction;
+         * 否则下面没地方存这段文字。识别出真实类型后会被立刻改掉
+         * （命令会改成「运行命令」）。 */
+        if (!IsTargetAction(b.Action)) b.Action = LinkUrlAction;
 
         b.Arg = text;
         ApplyLinkDetection(text, persist: true);
@@ -237,7 +241,7 @@ public partial class KeysView : UserControl
     /// 「直达链接」的自动类型识别：把输入框里的内容判成网址 / 文件夹 / 文件。
     ///
     /// 只做两件事，**绝不改写输入框里的文字**：
-    ///   ① 决定这个键绑哪个动作（webPage / openFolder / openFile）—— 也就是"怎么打开"；
+    ///   ① 决定这个键绑哪个动作（webPage / openFile）—— 也就是"怎么打开"；
     ///   ② 把徽标、说明文字、浏览按钮刷成对的样子。
     ///
     /// 为什么不改写文字：用户每敲一个字符都会走到这里，一补协议
@@ -254,7 +258,7 @@ public partial class KeysView : UserControl
 
         // ① 动作跟着识别结果走
         string? wanted = LinkActionFor(hit.Kind);
-        if (wanted != null && b != null && IsLinkAction(b.Action) && b.Action != wanted)
+        if (wanted != null && b != null && IsTargetAction(b.Action) && b.Action != wanted)
         {
             b.Action = wanted;
             if (persist)
@@ -270,6 +274,7 @@ public partial class KeysView : UserControl
             SmartKind.Url => (Loc.T("网址"), "Brush.Accent"),
             SmartKind.Folder or SmartKind.MissingFolder => (Loc.T("文件夹"), "Brush.Success"),
             SmartKind.File or SmartKind.MissingFile => (Loc.T("文件"), "Brush.Warning"),
+            SmartKind.Command => (Loc.T("命令"), "Brush.Accent"),
             _ => (Loc.T("未识别"), "Brush.TextTertiary"),
         };
         LinkKindText.Text = name;
@@ -285,8 +290,10 @@ public partial class KeysView : UserControl
          * 以前这里是两个都叫「浏览…」的按钮并排显示，认不出类型时两个都在，
          * 看上去就是重复的按钮，也没人知道左边那个是挑文件夹。 */
         bool isUrl = hit.Kind == SmartKind.Url;
+        /* 命令也用不上「浏览…」：它是一整行命令行，不是磁盘上的某个目标。 */
+        bool noBrowse = isUrl || hit.Kind == SmartKind.Command;
         _linkKind = hit.Kind;
-        BrowseButton.Visibility = isUrl ? Visibility.Collapsed : Visibility.Visible;
+        BrowseButton.Visibility = noBrowse ? Visibility.Collapsed : Visibility.Visible;
         BrowseButton.Content = hit.Kind switch
         {
             SmartKind.Folder or SmartKind.MissingFolder => Loc.T("浏览文件夹…"),
@@ -306,8 +313,15 @@ public partial class KeysView : UserControl
     internal static string? LinkActionFor(SmartKind kind) => kind switch
     {
         SmartKind.Url => LinkUrlAction,
-        SmartKind.Folder or SmartKind.MissingFolder => LinkFolderAction,
+        /* 文件夹也落到「直达文件」：OpenFile 先看 Directory.Exists，是目录就交给
+         * 资源管理器。以前这里绑的是单独的「直达文件夹」，结果同一件事有两个入口，
+         * 用户还得先判断自己填的是文件还是文件夹。 */
+        SmartKind.Folder or SmartKind.MissingFolder => LinkFileAction,
         SmartKind.File or SmartKind.MissingFile => LinkFileAction,
+        /* 程序 + 参数：直达链接的目标框也能填，落到「运行命令」上执行。
+         * 这就是两个功能"不冲突"的关键 —— 同一行文字只有一个归属，
+         * 「运行命令」只跑命令、不兼职打开文件，打开文件找「直达文件」。 */
+        SmartKind.Command => RunProgramAction,
         _ => null,
     };
 
@@ -327,6 +341,8 @@ public partial class KeysView : UserControl
             SmartKind.File => Loc.T("识别为文件，文件存在 —— 按这个键用系统默认程序打开（和双击一样）"),
             SmartKind.MissingFolder => Loc.T("识别为文件夹，但路径现在不存在 —— 按下去会提示「文件夹不存在」"),
             SmartKind.MissingFile => Loc.T("识别为文件，但文件现在不存在 —— 按下去会提示「文件不存在」"),
+
+            SmartKind.Command => Loc.T("识别为命令 —— 按这个键就运行它，后面的参数原样传过去"),
 
             _ => Loc.T(@"看不出这是网址还是路径 —— 网址可以直接粘（github.com 也行）；") +
                  Loc.T(@"本地路径用 D:\ 开头，或点「浏览…」挑一个"),
@@ -692,7 +708,24 @@ public partial class KeysView : UserControl
         }
 
         var hit = SmartTargetDetector.Detect(text);
-        string action = LinkActionFor(hit.Kind) ?? LinkUrlAction;
+
+        /* 认不出类型时的两种处理：
+         *   · 单个词（github、baidu）→ 沿用老行为，补成 https:// 打开；
+         *   · 带空格的一整串（hello world、今天 天气）→ 拒绝，并说清怎么填。
+         *     以前这里一律强转成「直达网址」，于是 notepad.exe D:\笔记.txt
+         *     被当成网址丢给浏览器，报错还看不出原因。 */
+        string? action = LinkActionFor(hit.Kind);
+        if (action == null)
+        {
+            if (text.Any(char.IsWhiteSpace))
+            {
+                ShowBindStatus(Loc.T("认不出这是什么目标：带参数的命令要写成 notepad.exe D:\\笔记.txt 这样；网址、文件夹、文件直接粘路径就行。"), ok: false);
+                WebUrlBox.Focus();
+                return;
+            }
+
+            action = LinkUrlAction;
+        }
 
         var binding = FindInCurrentLayer(CurrentCombo()) ?? AddBinding(CurrentCombo());
         binding.Action = action;

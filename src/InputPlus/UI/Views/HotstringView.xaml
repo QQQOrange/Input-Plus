@@ -178,16 +178,24 @@
 
                     <!-- 底部操作条：选中分组后可直接改名 / 删除（和右侧列表的操作条同一套版式） -->
                     <!-- 底部操作条：三等分，宽度固定，避免最后一个按钮被卡片边缘裁掉。 -->
+                    <!-- 图标化（m01050）：分组条原来是「重命名 / 删除 / 导出」三个文字按钮，
+                         12px 字号下中文在窄列里要挤成两行，改成图标 + 读屏名 + 提示，横排三等分各放一颗。 -->
                     <UniformGrid Grid.Row="2" Columns="3" Margin="10,0,10,12">
-                        <Button x:Name="RenameGroupButton" Content="{loc:T '重命名'}"
-                                Style="{StaticResource Button.Base}" Padding="4,5" FontSize="12"
-                                Margin="0,0,4,0" IsEnabled="False" Click="OnRenameGroupClick" />
-                        <Button x:Name="DeleteGroupButton" Content="{loc:T '删除'}"
-                                Style="{StaticResource Button.Danger}" Padding="4,5" FontSize="12"
-                                Margin="2,0,2,0" IsEnabled="False" Click="OnDeleteGroupClick" />
-                        <Button x:Name="ExportGroupButton" Content="{loc:T '导出'}"
-                                Style="{StaticResource Button.Ghost}" Padding="4,5" FontSize="12"
-                                Margin="4,0,0,0" Click="OnExportGroupClick"
+                        <Button x:Name="RenameGroupButton" Content="&#xE8AC;"
+                                Style="{StaticResource Button.Icon}" HorizontalAlignment="Center"
+                                IsEnabled="False" Click="OnRenameGroupClick"
+                                AutomationProperties.Name="{loc:T '重命名分组'}"
+                                ToolTip="{loc:T '重命名分组'}" />
+                        <Button x:Name="DeleteGroupButton" Content="&#xE74D;"
+                                Style="{StaticResource Button.Icon}" HorizontalAlignment="Center"
+                                Foreground="{DynamicResource Brush.Danger}"
+                                IsEnabled="False" Click="OnDeleteGroupClick"
+                                AutomationProperties.Name="{loc:T '删除分组'}"
+                                ToolTip="{loc:T '删除分组（组里的别名不会删，会变成未分组）'}" />
+                        <Button x:Name="ExportGroupButton" Content="&#xE896;"
+                                Style="{StaticResource Button.Icon}" HorizontalAlignment="Center"
+                                Click="OnExportGroupClick"
+                                AutomationProperties.Name="{loc:T '导出分组'}"
                                 ToolTip="{loc:T '只导出当前分组的别名；选「全部」时导出全部'}" />
                     </UniformGrid>
                 </Grid>
@@ -307,24 +315,36 @@
                         </ListBox>
                     </Grid>
 
+                    <!-- 图标化（m01050）：这一排原来全是文字按钮，列表的底部空间被吃掉一截。 -->
                     <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="16,8,16,14">
-                        <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnAddClick" />
-                        <Button x:Name="DeleteButton" Content="{loc:T '删除'}" Style="{StaticResource Button.Danger}"
-                                Margin="8,0,0,0" Click="OnDeleteClick" />
-                        <Button x:Name="MoveButton" Content="{loc:T '移到分组'}" Style="{StaticResource Button.Ghost}"
-                                Margin="8,0,0,0" Click="OnMoveClick" IsEnabled="False"
+                        <Button Content="&#xE710;" Style="{StaticResource Button.Icon}" Click="OnAddClick"
+                                Background="{DynamicResource Brush.Accent}"
+                                BorderBrush="{DynamicResource Brush.Accent}" Foreground="White"
+                                AutomationProperties.Name="{loc:T '新增别名'}"
+                                ToolTip="{loc:T '新增别名'}" />
+                        <Button x:Name="DeleteButton" Content="&#xE74D;" Style="{StaticResource Button.Icon}"
+                                Margin="6,0,0,0" Foreground="{DynamicResource Brush.Danger}" Click="OnDeleteClick"
+                                AutomationProperties.Name="{loc:T '删除别名'}"
+                                ToolTip="{loc:T '删除选中的别名'}" />
+                        <Button x:Name="MoveButton" Content="&#xE8DE;" Style="{StaticResource Button.Icon}"
+                                Margin="6,0,0,0" Click="OnMoveClick" IsEnabled="False"
+                                AutomationProperties.Name="{loc:T '移到分组'}"
                                 ToolTip="{loc:T '把选中的别名放到某个分组里（也可以直接把别名拖到左侧分组上）'}" />
-                        <Button x:Name="ImportButton" Content="{loc:T '导入'}" Style="{StaticResource Button.Ghost}"
-                                Margin="8,0,0,0" Click="OnImportClick"
+                        <Button x:Name="ImportButton" Content="&#xE898;" Style="{StaticResource Button.Icon}"
+                                Margin="6,0,0,0" Click="OnImportClick"
+                                AutomationProperties.Name="{loc:T '导入别名'}"
                                 ToolTip="{loc:T '从 JSON 文件导入别名（合并，不会删掉已有的）'}" />
-                        <Button x:Name="CleanupButton" Content="{loc:T '清理未使用'}" Style="{StaticResource Button.Ghost}"
-                                Margin="8,0,0,0" Click="OnCleanupClick" Visibility="Collapsed"
+                        <Button x:Name="CleanupButton" Content="&#xE74D;" Style="{StaticResource Button.Icon}"
+                                Margin="6,0,0,0" Foreground="{DynamicResource Brush.Danger}"
+                                Click="OnCleanupClick" Visibility="Collapsed"
+                                AutomationProperties.Name="{loc:T '清理未使用'}"
                                 ToolTip="{loc:T '删除所有从未展开过的别名（会先确认）'}" />
-                        <Button x:Name="ExportButton" Content="{loc:T '导出'}" Style="{StaticResource Button.Ghost}"
+                        <Button x:Name="ExportButton" Content="&#xE896;" Style="{StaticResource Button.Icon}"
                                 Margin="6,0,0,0" Click="OnExportClick"
+                                AutomationProperties.Name="{loc:T '导出别名'}"
                                 ToolTip="{loc:T '把全部别名导出成 JSON，换机器时用得上'}" />
                         <TextBlock Style="{StaticResource Text.Tertiary}" VerticalAlignment="Center"
-                                   Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="330"
+                                   Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="360"
                                    Text="{loc:T '别名不显示前缀符号；保存时会自动补回去。右键条目可以复制或移到分组。'}" />
                     </StackPanel>
                 </Grid>

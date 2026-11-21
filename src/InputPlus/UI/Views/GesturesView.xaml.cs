@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 /* 只挑拖动要用的几个输入类型做别名：整条 using System.Windows.Input 会带进来
  * WPF 自己的 MouseGesture，和手势模型 MouseGesture 撞名（CS0104）。 */
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
@@ -28,8 +29,41 @@ namespace InputPlus.UI.Views;
 /// </summary>
 public partial class GesturesView
 {
+
+    /* 回放动画的状态（就在笔画框里画，见 OnReplayClick）。 */
+    private System.Windows.Threading.DispatcherTimer? _replayTimer;
+    private List<Point> _replayPoints = new();
+    private int _replayIndex;
+    private int _replaySession;
+    /* 放慢之后回放按"已经过了多少毫秒"推进，不再一帧一个点（见 OnReplayTick）。 */
+    private System.Diagnostics.Stopwatch? _replayClock;
+    private int _replayTotalMs = 1;
     private AppHost? _host;
     private readonly List<GestureRow> _rows = new();
+
+    /* 拖动排序的状态：按住一会儿、或者按住后直接往上/下拖，就进来（见 OnRowPressDown / StartDrag），松手落位。
+     * v1.6.4：原来必须一动不动按满 2 秒才算，手一抖就重新计时，实际用下来几乎拖不动；
+     * 现在 400ms 到点就拎起来，或者按住后纵向移动超过 8px 立刻开始拖（跟"拖"这个动作对齐）。 */
+    private System.Windows.Threading.DispatcherTimer? _pressTimer;
+    private Button? _pressButton;
+    private MouseGesture? _dragItem;
+    private GestureRow? _dragRow;
+    private Button? _dragButton;
+    private TranslateTransform? _dragShift;
+    private int _dragFrom = -1;
+    private int _dropIndex = -1;
+    private Point _dragStart;
+    private double _dragScrollStart;
+    private bool _dragging;
+
+    /// <summary>
+    /// 这次鼠标抬起是"放下"，不是"点选"。
+    ///
+    /// 拖起来之后按钮仍然（或可能）拿着鼠标捕获，松手时 ButtonBase 会照常发 Click ——
+    /// 那会把右侧编辑器切到这一条上（如果它刚好又是当前选中的，还会把编辑器里的
+    /// 未保存改动冲掉）。这里吞掉这一次点击，下一次按下时自动复位。
+    /// </summary>
+    private bool _suppressClick;
 
     /// <summary>
     /// 列表排序方式（<see cref="GestureListOrder"/> 的四档之一）。
@@ -50,29 +84,23 @@ public partial class GesturesView
     /// </summary>
     private bool _rebuilding;
 
+    /// <summary>编辑器里正在编的多步序列（保存时才写回手势）。</summary>
+    private readonly List<GestureStep> _steps = new();
+
     /// <summary>左侧“边缘手势”不是某个 exe；用一个不会和路径冲突的哨兵值区分。</summary>
     private const string EdgeTargetKey = "\u0001edge";
 
     private static bool IsEdgeGesture(MouseGesture g) =>
-        g.Kind is "hotcorner" or "edgewheel";
+        g.Kind is "hotcorner" or "edgewheel" or "edge";
 
     public GesturesView()
     {
         InitializeComponent();
         PreviewCanvas.SizeChanged += (_, _) => DrawPreview();
-        SizeChanged += (_, _) => UpdateOptionsScrollLimit();
-    }
 
-    /// <summary>
-    /// 给「手势外观 / 手势参数」那张卡片算一个高度上限：展开后超出的部分在卡片里滚，
-    /// 下面三栏（作用目标 / 手势列表 / 详情）就不会被 Auto 行挤成 0 高。
-    /// 这三栏至少留 260 DIP 左右，其余给卡片。
-    /// </summary>
-    private void UpdateOptionsScrollLimit()
-    {
-        double h = ActualHeight;
-        if (h <= 0) return;
-        OptionsScroll.MaxHeight = Math.Max(200, h - 380);
+        /* 筛选下拉的宽度是按内容量出来的（见 FitFilterBoxWidth）。字号/字体换了字宽也会变，
+         * 所以宽度一有变化就把搜索框跟着对上，免得收开搜索时右边露出一角。 */
+        ButtonFilterBox.SizeChanged += (_, _) => SyncSearchPanelWidth();
     }
 
     public void Initialize(AppHost host)
@@ -109,30 +137,16 @@ public partial class GesturesView
         try
         {
             var opts = _host.Settings.GestureOptions;
+            /* 页面上只剩总开关：外观、参数、开关快捷键都进了设置窗，那边自己灌值。 */
             EnabledBox.IsChecked = opts.Enabled;
-            string hotkey = opts.ToggleHotkey ?? "";
-            bool hotkeySet = !string.IsNullOrWhiteSpace(hotkey);
-            /* 没设过的时候框里留一行浅色的「未设置」：空框看起来像刚被人清掉了。 */
-            ToggleHotkeyBox.Text = hotkeySet ? hotkey : Loc.T("未设置");
-            if (TryFindResource(hotkeySet ? "Brush.TextPrimary" : "Brush.TextTertiary") is Brush hotkeyBrush)
-                ToggleHotkeyBox.Foreground = hotkeyBrush;
-            MinMoveBox.Text = opts.MinMove.ToString();
-            StartTimeoutBox.Text = opts.StartTimeoutMs.ToString();
-            ThresholdBox.Text = opts.WgThreshold.ToString("0.000");
-            ThresholdBox.ToolTip = Loc.T("笔画形状距离不超过它就认。默认 0.050，越小越严（0.005~0.3）。");
-            ActivationBox.Text = opts.ActivationDistance.ToString();
-            TurnBox.Text = opts.TurnTolerance.ToString("0.00");
-            TrailOpacitySlider.Value = Math.Clamp(opts.TrailOpacity, 0.2, 1.0);
-            TrailOpacityText.Text = $"{Math.Round(TrailOpacitySlider.Value * 100):0}%";
-            bool pointerTarget = opts.UsesPointerTarget;
-            TargetPointerRadio.IsChecked = pointerTarget;
-            TargetActiveRadio.IsChecked = !pointerTarget;
-            UpdateTargetModeHint(opts);
-            UpdateColorSwatches();
-            SyncWg2Controls(opts);
             _sortMode = GestureListOrder.Normalize(opts.ListSort);
             UpdateSortChecks();
             BuildTargets();
+            /* 存量手势的模板在这里补（「旧手势自动补算」那条文案承诺的就是这个时机）。
+               以前只有命中触发时才补，升级上来的手势在列表、预览、触发三处都看不到美化，
+               用户看到的就是「美化没生效」。已经算过的走 Skipped，不重复花时间。 */
+            var beauty = GestureBeauty.EnsureAll(_host.Settings.Gestures, opts, "手势列表补算");
+            if (beauty.Changed) _host.SaveSettings();
             LoadList(selectId: _current.Id);
         }
         finally { _loading = false; }
@@ -234,6 +248,8 @@ public partial class GesturesView
         Tooltip = tooltip,
         Selected = string.Equals(_scope, scope, StringComparison.OrdinalIgnoreCase),
         ToggleText = isGroup ? "" : disabled ? Loc.T("恢复") : Loc.T("禁用"),
+        // 菜单项前面那颗小图标：禁用是个"叉"，恢复是"往回走"，跟文字一起读才不歧义。
+        ToggleGlyph = disabled ? "\uE71A" : "\uE733",
         ToggleVisibility = toggle,
         ToggleTooltip = disabled
             ? Loc.T("再点一次恢复：这个程序里重新开始触发手势。")
@@ -244,6 +260,10 @@ public partial class GesturesView
             : Loc.T("删掉这个作用目标（它下面的手势一起删掉）。"),
         Disabled = disabled,
         DisabledVisibility = disabled ? Visibility.Visible : Visibility.Collapsed,
+        // 一个动作都没有的行（全局 / 任务栏 / 桌面）不出竖三点：点了只有空气。
+        MenuVisibility = toggle == Visibility.Visible || isGroup || deletable
+            ? Visibility.Visible
+            : Visibility.Collapsed,
     };
 
     /// <summary>分组标题行：只当分隔线，不可点。</summary>
@@ -360,6 +380,28 @@ public partial class GesturesView
         return na.Length > 0 && string.Equals(na, nb, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>行尾的竖三点：把「禁用 / 恢复」和「删除」摊在按钮下面。</summary>
+    private void OnTargetMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.ContextMenu is not { } menu) return;
+        // 保险：ContextMenu 平时靠 PlacementTarget 继承 DataContext，开之前先贴一次，
+        // 免得菜单项拿到 null 行对象后点「禁用」毫无反应。
+        menu.DataContext = button.DataContext;
+        menu.PlacementTarget = button;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 右键 / 键盘也能打开同一份菜单，开口处把这一行的对象贴到菜单上。
+    /// ContextMenu 不在可视树里，靠它自己顺着 PlacementTarget 继承 DataContext 太看时机，
+    /// 而两个菜单项都是拿 DataContext 认行对象的（和原来那两颗按钮一样）。
+    /// </summary>
+    private void OnTargetMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.ContextMenu is { } menu) menu.DataContext = fe.DataContext;
+    }
+
     private void OnToggleTargetDisabled(object sender, RoutedEventArgs e)
     {
         if (_host == null) return;
@@ -432,517 +474,685 @@ public partial class GesturesView
 
     // ───────────────────────── 列表 ─────────────────────────
 
-    private void LoadList(string selectId = "")
+    /* 这一页的「把当前范围的手势排成一张表」以及编辑器右侧那一摞联动，
+     * 都是从仓库里最后一次成功构建的那份程序集里恢复回来的 —— 语义与 1.5.1 一致。 */
+
+private void LoadList(string selectId = "")
+{
+    string text = FilterBox.Text.Trim();
+    var settings = _host!.Settings;
+    bool flag = string.Equals(_scope, "\u0001edge", StringComparison.Ordinal);
+    bool flag2 = IsSpecialScope(_scope);
+    string text2 = (flag ? "" : (SelectedValue(ButtonFilterBox) ?? ""));
+    ButtonFilterBox.IsEnabled = !flag;
+    var gestureTarget = GroupFor(_scope);
+    TextBlock targetTitle = TargetTitle;
+    string text3;
+    if (flag)
     {
-        string filter = FilterBox.Text.Trim();
-        var settings = _host!.Settings;
-        bool edgeScope = string.Equals(_scope, EdgeTargetKey, StringComparison.Ordinal);
-        bool specialScope = IsSpecialScope(_scope);
-        string buttonFilter = edgeScope ? "" : (SelectedValue(ButtonFilterBox) ?? "");
-        ButtonFilterBox.IsEnabled = !edgeScope;
-
-        var group = GroupFor(_scope);
-        TargetTitle.Text = edgeScope
-            ? Loc.T("边缘手势")
-            : _scope.Length == 0
-                ? Loc.T("全局的手势")
-                : group != null
-                    ? Loc.F("分组「{0}」的手势", group.Name)
-                    : Loc.F("{0} 的手势", ScopeTitle(_scope));
-        TriggerHeader.Text = Loc.F("{0} 允许的触发方式", ScopeTitle(_scope));
-
-        /* 先收集"这一档该显示哪些"，再套排序 —— 排序只影响显示顺序，
-         * settings.Gestures 本身按兵不动，切回「自定义顺序」还是用户拖出来的那个顺序。 */
-        var candidates = new List<MouseGesture>();
-        foreach (var g in settings.Gestures)
+        text3 = Loc.T("边缘手势");
+    }
+    else if (_scope.Length != 0)
+    {
+        text3 = ((gestureTarget != null) ? Loc.F("分组「{0}」的手势", gestureTarget.Name) : Loc.F("{0} 的手势", ScopeTitle(_scope)));
+    }
+    else
+    {
+        text3 = Loc.T("全局的手势");
+    }
+    targetTitle.Text = text3;
+    TriggerHeader.Text = Loc.F("{0} 允许的触发方式", ScopeTitle(_scope));
+    List<InputPlus.Core.Gestures.MouseGesture> list = new List<InputPlus.Core.Gestures.MouseGesture>();
+    foreach (InputPlus.Core.Gestures.MouseGesture gesture in settings.Gestures)
+    {
+        if (flag)
         {
-            if (edgeScope)
+            if (!IsEdgeGesture(gesture))
             {
-                if (!IsEdgeGesture(g)) continue;
-            }
-            else
-            {
-                if (IsEdgeGesture(g)) continue;   // 不让边缘手势混进全局/应用列表
-                string path = g.AppPath ?? "";
-                bool matches =
-                    _scope.Length == 0 ? path.Length == 0
-                    : group != null
-                        ? string.Equals(path, group.Id, StringComparison.OrdinalIgnoreCase)
-                          || (group.Members ?? new List<string>()).Any(m => SameTarget(m, path))
-                    : specialScope ? false
-                    : string.Equals(path, _scope, StringComparison.OrdinalIgnoreCase);
-                if (!matches) continue;
-            }
-            if (buttonFilter.Length > 0 &&
-                !string.Equals(g.Button ?? "", buttonFilter, StringComparison.OrdinalIgnoreCase))
                 continue;
-            candidates.Add(g);
+            }
         }
-
-        if (_sortMode != GestureListOrder.Custom)
-            candidates = GestureListOrder.Sort(candidates, _sortMode, SortTitle);
-
-        /* 手柄只在「自定义顺序 + 没在筛选」时露出来：其余三档拖了也不算数，
-         * 摆一根拖不动的把手比不摆更让人困惑。 */
-        bool canDrag = _sortMode == GestureListOrder.Custom && filter.Length == 0 && candidates.Count > 1;
-
-        _rows.Clear();
-        foreach (var g in candidates)
+        else
         {
-            string actionTitle = ActionCatalog.TitleOf(g.Action) ?? "";
-            string title = "", subtitle = "";
-            if (IsEdgeGesture(g))
+            if (IsEdgeGesture(gesture))
             {
-                /* 边缘手势列表只写生效位置，不把动作名混进标题；
-                 * 动作放在副标题里。四角/四边的范围图标由 EdgeIconFor 画。 */
-                if (g.Kind == "hotcorner")
+                continue;
+            }
+            string path = gesture.AppPath ?? "";
+            bool num;
+            if (_scope.Length != 0)
+            {
+                if (gestureTarget == null)
                 {
-                    title = CornerName(g.Corner);
-                    subtitle = actionTitle;
+                    if (flag2)
+                    {
+                        continue;
+                    }
+                    num = string.Equals(path, _scope, StringComparison.OrdinalIgnoreCase);
                 }
-                else if (g.Kind == "edgewheel")
+                else
                 {
-                    title = Loc.F("{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
-                    subtitle = actionTitle;
+                    if (string.Equals(path, gestureTarget.Id, StringComparison.OrdinalIgnoreCase))
+                    {
+                        goto IL_01fd;
+                    }
+                    num = (gestureTarget.Members ?? new List<string>()).Any((string m) => SameTarget(m, path));
                 }
             }
             else
             {
-                title = g.Title(actionTitle);
-                subtitle = Describe(g);
+                num = path.Length == 0;
             }
-            string hay = title + " " + subtitle + " " + g.AppPath + " " + g.Note;
-            if (filter.Length > 0 && hay.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
-            /* 以前这里显示「WG」——用户看不出那是"从 WGestures 导入"的标记，
-             反而会以为手势只能在 WGestures 里用。现在只在"限定了程序"时
-             显示一颗小标签，导入来源只在详情里用一句话说明。 */
-            string badge = string.IsNullOrWhiteSpace(g.AppPath) || edgeScope
-                ? ""
-                : Loc.T("仅此应用");
-            var icon = IconFor(g);
-            bool hasIcon = icon is { Count: > 1 };
-            var edgeIcon = IsEdgeGesture(g) ? EdgeIconFor(g) : null;
-            bool hasEdgeIcon = edgeIcon != null;
-            bool showStroke = hasIcon && !hasEdgeIcon;
-            bool disabled = !g.Enabled;
-            _rows.Add(new GestureRow(
-                g, title, subtitle, badge, IsEdgeGesture(g) ? EdgeGlyph(g) : GlyphFor(g), icon, edgeIcon,
-                hasIcon || hasEdgeIcon ? Visibility.Collapsed : Visibility.Visible,
-                showStroke ? Visibility.Visible : Visibility.Collapsed,
-                hasEdgeIcon ? Visibility.Visible : Visibility.Collapsed,
-                canDrag ? Visibility.Visible : Visibility.Collapsed,
-                disabled ? 0.48 : 1.0,
-                disabled ? Loc.T("已停用") : "",
-                disabled ? Visibility.Visible : Visibility.Collapsed));
+            if (!num)
+            {
+                continue;
+            }
         }
-
-        GestureList.ItemsSource = null;
-        GestureList.ItemsSource = _rows;
-        EmptyHint.Text = edgeScope
-            ? Loc.T("还没有边缘手势。点右上角「录制新手势」，把触发方式设成「悬停到角落」或「贴边滚轮」。")
-            : specialScope
-                ? Loc.T("特殊目标只决定「哪些触发方式允许起手势」，手势本身记在全局或应用程序下面。展开上面的面板调整。")
-                : group != null
-                    ? Loc.F("「{0}」里还没有手势。点右上角「录制新手势」，会记在这个分组下面。", group.Name)
-                    : _scope.Length == 0
-                        ? Loc.T("全局还没有手势。点右上角「录制新手势」，会记在「全局」下面。")
-                        : Loc.F("「{0}」还没有手势。点右上角「录制新手势」，会记在这个应用下面。", AppName(_scope));
-        EmptyHint.Visibility = _rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        SummaryText.Text = _rows.Count == 0
-            ? Loc.T("这个目标下还没有手势")
-            : Loc.F("这个目标 {0} 条 · 全部 {1} 条", _rows.Count, settings.Gestures.Count);
-        if (canDrag) SummaryText.Text += Loc.T(" · 按住左侧的手柄可以拖动排序");
-
-        var pick = _rows.FirstOrDefault(r => r.Gesture.Id == selectId) ?? _rows.FirstOrDefault();
-        if (pick != null)
+        goto IL_01fd;
+        IL_01fd:
+        if (text2.Length <= 0 || string.Equals(gesture.Button ?? "", text2, StringComparison.OrdinalIgnoreCase))
         {
-            _current = pick.Gesture.Clone();
+            list.Add(gesture);
+        }
+    }
+    if (_sortMode != "custom")
+    {
+        list = GestureListOrder.Sort(list, _sortMode, SortTitle);
+    }
+    /* v1.6.4：任何排序档都能按住拖。
+     * 以前只有「自定义顺序」档给拖动手感，别的档 Draggable=false，按住半天毫无反应 ——
+     * 用户不知道要先切排序档，只会觉得"拖动坏了"。现在按下就拖，
+     * 如果当前不是自定义顺序，StartDrag 会先帮你切过去（见 SwitchToCustomForDrag）。
+     * 仍保留一条限制：搜索框里有字时不拖 —— 这时候列表是子集，落位索引对不上整表。 */
+    bool flag3 = text.Length == 0 && list.Count > 1;
+    _rows.Clear();
+    foreach (InputPlus.Core.Gestures.MouseGesture item in list)
+    {
+        string text4 = ActionCatalog.TitleOf(item.Action) ?? "";
+        string text5 = "";
+        string text6 = "";
+        if (IsEdgeGesture(item))
+        {
+            if (item.Kind == "hotcorner")
+            {
+                text5 = CornerName(item.Corner);
+                text6 = text4;
+            }
+            else if (item.Kind == "edgewheel")
+            {
+                text5 = Loc.F("{0} · 滚轮{1}", EdgeName(item.Edge), WheelName(item.Wheel));
+                text6 = text4;
+            }
         }
         else
         {
-            // 一条都没有时也要把右侧填成"一条合法的默认手势"，
-            // 否则下拉框是空的，用户点「保存」才发现什么都没选。
-            _current = new MouseGesture
+            text5 = item.Title(text4);
+            text6 = Describe(item);
+        }
+        string text7 = text5 + " " + text6 + " " + item.AppPath + " " + item.Note;
+        if (text.Length <= 0 || text7.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            string badge = ((string.IsNullOrWhiteSpace(item.AppPath) | flag) ? "" : Loc.T("仅此应用"));
+            var pointCollection = IconFor(item);
+            bool flag4 = pointCollection != null && pointCollection.Count > 1;
+            var imageSource = IsEdgeGesture(item) ? EdgeIconFor(item) : null;
+            bool flag5 = imageSource != null;
+            bool flag6 = flag4 && !flag5;
+            bool flag7 = !item.Enabled;
+            _rows.Add(new GestureRow(item, text5, text6, badge, IsEdgeGesture(item) ? EdgeGlyph(item) : GlyphFor(item), pointCollection, imageSource, (flag4 | flag5) ? Visibility.Collapsed : Visibility.Visible, (!flag6) ? Visibility.Collapsed : Visibility.Visible, (!flag5) ? Visibility.Collapsed : Visibility.Visible, flag3, flag7 ? 0.48 : 1.0, flag7 ? Loc.T("已停用") : "", (!flag7) ? Visibility.Collapsed : Visibility.Visible));
+        }
+    }
+    GestureList.ItemsSource = null;
+    GestureList.ItemsSource = _rows;
+    TextBlock emptyHint = EmptyHint;
+    string text8;
+    if (flag)
+    {
+        text8 = Loc.T("还没有边缘手势。点右上角「录制新手势」，把触发方式设成「悬停到角落」或「贴边滚轮」。");
+    }
+    else if (flag2)
+    {
+        text8 = Loc.T("特殊目标只决定「哪些触发方式允许起手势」，手势本身记在全局或应用程序下面。展开上面的面板调整。");
+    }
+    else if (gestureTarget != null)
+    {
+        text8 = Loc.F("「{0}」里还没有手势。点右上角「录制新手势」，会记在这个分组下面。", gestureTarget.Name);
+    }
+    else
+    {
+        text8 = ((_scope.Length == 0) ? Loc.T("全局还没有手势。点右上角「录制新手势」，会记在「全局」下面。") : Loc.F("「{0}」还没有手势。点右上角「录制新手势」，会记在这个应用下面。", AppName(_scope)));
+    }
+    emptyHint.Text = text8;
+    EmptyHint.Visibility = ((_rows.Count != 0) ? Visibility.Collapsed : Visibility.Visible);
+    SummaryText.Text = ((_rows.Count == 0) ? Loc.T("这个目标下还没有手势") : Loc.F("这个目标 {0} 条 · 全部 {1} 条", _rows.Count, settings.Gestures.Count));
+    SummaryText.ToolTip = (flag3 ? Loc.T("按住某一条两秒再拖，可以调整顺序") : null);
+    var gestureRow = _rows.FirstOrDefault(r => r.Gesture.Id == selectId) ?? _rows.FirstOrDefault();
+    if (gestureRow != null)
+    {
+        _current = gestureRow.Gesture.Clone();
+    }
+    else
+    {
+        _current = new InputPlus.Core.Gestures.MouseGesture
+        {
+            Id = InputPlus.Core.Gestures.MouseGesture.NewId(),
+            Kind = (flag ? "hotcorner" : "stroke"),
+            Button = (flag ? "" : "right"),
+            Corner = (flag ? 1 : 0),
+            Action = (flag ? "switchNextApp" : ""),
+            AppPath = ((flag | flag2) ? "" : _scope)
+        };
+    }
+    LoadEditor();
+    ListScroll.ScrollToTop();
+    BuildTriggers();
+}
+
+private string SortTitle(InputPlus.Core.Gestures.MouseGesture g)
+{
+    if (g.Kind == "hotcorner")
+    {
+        return CornerName(g.Corner);
+    }
+    if (g.Kind == "edgewheel")
+    {
+        return Loc.F("{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
+    }
+    return g.Title(ActionCatalog.TitleOf(g.Action) ?? "");
+}
+
+private void LoadEditor()
+{
+    _loading = true;
+    try
+    {
+        ActionSearchBox.Text = "";
+        ActionSearchList.ItemsSource = null;
+        ActionSearchPanel.Visibility = Visibility.Collapsed;
+        ActionSearchHint.Visibility = Visibility.Visible;
+        ActionSearchClear.Visibility = Visibility.Collapsed;
+        NameBox.Text = _current.Name;
+        SelectTag(ButtonBox, _current.Button);
+        SelectTag(ChordBox, _current.Chord);
+        SelectTag(KindBox, _current.Kind);
+        SelectValue(WheelBox, _current.Wheel);
+        SelectValue(CornerBox, _current.Corner);
+        SelectValue(EdgeBox, _current.Edge);
+        _steps.Clear();
+        if (_current.HasSteps)
+        {
+            _steps.AddRange(_current.Steps.Select((GestureStep s) => s.Clone()));
+        }
+        RefreshSteps();
+        GestureEnabledBox.IsChecked = _current.Enabled;
+        ImmediateBox.IsChecked = _current.Immediate;
+        HideLabelBox.IsChecked = _current.HideLabel;
+        SelectAction(_current.Action);
+        ArgBox.Text = _current.Arg;
+        EditorNote.Text = _current.Note;
+        EditorNote.Visibility = (string.IsNullOrWhiteSpace(_current.Note) ? Visibility.Collapsed : Visibility.Visible);
+        UpdateKindRows();
+        UpdateArgVisibility();
+        DrawPreview();
+    }
+    finally
+    {
+        _loading = false;
+    }
+}
+
+private void UpdateKindRows()
+{
+    string text = SelectedTag(KindBox) ?? "stroke";
+    bool flag = text == "stroke";
+    bool flag2 = ((text == "corner" || text == "hotcorner") ? true : false);
+    bool flag3 = flag2;
+    flag2 = ((text == "wheel" || text == "edgewheel") ? true : false);
+    bool flag4 = flag2;
+    flag2 = ((text == "edgewheel" || text == "edge") ? true : false);
+    bool flag5 = flag2;
+    bool flag6 = text == "steps";
+    flag2 = ((text == "hotcorner" || text == "edgewheel") ? true : false);
+    bool flag7 = flag2;
+    StrokeRow.Visibility = ((!flag) ? Visibility.Collapsed : Visibility.Visible);
+    CornerRow.Visibility = ((!flag3) ? Visibility.Collapsed : Visibility.Visible);
+    WheelRow.Visibility = ((!flag4) ? Visibility.Collapsed : Visibility.Visible);
+    EdgeRow.Visibility = ((!flag5) ? Visibility.Collapsed : Visibility.Visible);
+    StepsRow.Visibility = ((!flag6) ? Visibility.Collapsed : Visibility.Visible);
+    EdgeLabel.Text = ((text == "edge") ? Loc.T("贴着哪条边") : Loc.T("屏幕边缘"));
+    ImmediateBox.IsEnabled = flag;
+    ButtonBox.IsEnabled = !flag7;
+    ChordBox.IsEnabled = !flag7;
+    if (flag7)
+    {
+        SelectTag(ButtonBox, "");
+        SelectTag(ChordBox, "");
+    }
+}
+
+private void UpdateArgVisibility()
+{
+    var actionInfo = _host?.Actions.Get(_current.Action);
+    bool flag = actionInfo?.NeedsArg ?? false;
+    bool flag2 = actionInfo?.Category == "窗口绑定";
+    bool flag3 = actionInfo?.Id == "customKey";
+    bool flag4 = flag3 || actionInfo?.Id == "sendKeys";
+    string text = (flag3 ? CustomKeySpec.FromArg(_current.Arg).Key : "");
+    if (flag3)
+    {
+        ArgBox.Tag = _current.Action;
+        if (!string.Equals(ArgBox.Text, text, StringComparison.Ordinal))
+        {
+            ArgBox.Text = text;
+        }
+    }
+    else if (flag && ArgBox.Tag as string != _current.Action)
+    {
+        ArgBox.Tag = _current.Action;
+        ArgBox.Text = _current.Arg;
+    }
+    ArgBox.Visibility = ((!((flag && !flag2 && !flag4) | flag3)) ? Visibility.Collapsed : Visibility.Visible);
+    ArgHint.Visibility = ((!flag3) ? Visibility.Collapsed : Visibility.Visible);
+    ArgCaptureButton.Visibility = ((!flag4) ? Visibility.Collapsed : Visibility.Visible);
+    ActionAppPicker.Visibility = ((!flag2) ? Visibility.Collapsed : Visibility.Visible);
+    ActionAppStatus.Visibility = ((!flag2) ? Visibility.Collapsed : Visibility.Visible);
+    ActionFunctionPanel.Visibility = (flag2 ? Visibility.Collapsed : Visibility.Visible);
+    if (flag4)
+    {
+        string text2 = (flag3 ? text : _current.Arg);
+        ArgCaptureButton.Content = (string.IsNullOrWhiteSpace(text2) ? Loc.T("录制按键") : CustomKeyRunner.ComboDisplay(text2));
+    }
+    if (flag2)
+    {
+        ActionAppStatus.Text = (string.IsNullOrWhiteSpace(_current.Arg) ? Loc.T("还没有选择程序") : _current.Arg);
+    }
+}
+
+private void SetActionArg(string arg)
+{
+    _current.Arg = arg;
+    var actionInfo = _host?.Actions.Get(_current.Action);
+    if (actionInfo?.Id == "customKey")
+    {
+        string key = CustomKeySpec.FromArg(arg).Key;
+        ArgBox.Text = key;
+        ArgCaptureButton.Content = (string.IsNullOrWhiteSpace(key) ? Loc.T("录制按键") : CustomKeyRunner.ComboDisplay(key));
+    }
+    else
+    {
+        ArgBox.Text = arg;
+        if (actionInfo?.Id == "sendKeys")
+        {
+            ArgCaptureButton.Content = (string.IsNullOrWhiteSpace(arg) ? Loc.T("录制按键") : arg);
+        }
+    }
+    if (actionInfo?.Category == "窗口绑定")
+    {
+        ActionAppStatus.Text = (string.IsNullOrWhiteSpace(arg) ? Loc.T("还没有选择程序") : arg);
+    }
+}
+
+private void OnCaptureArgKey(object sender, RoutedEventArgs e)
+{
+    if (_host == null)
+    {
+        return;
+    }
+    KeyCaptureWindow.Capture((KeyCaptureWindow.CaptureResult result) =>
+    {
+        if (!string.IsNullOrWhiteSpace(result.Combo))
+        {
+            if (_host.Actions.Get(_current.Action)?.Id == "customKey")
             {
-                Id = MouseGesture.NewId(),
-                Kind = edgeScope ? "hotcorner" : "stroke",
-                Button = edgeScope ? "" : GestureButtons.Right,
-                Corner = edgeScope ? 1 : 0,
-                Action = edgeScope ? "switchNextApp" : "",
-                AppPath = edgeScope || specialScope ? "" : _scope,
-            };
-        }
-        LoadEditor();
-
-        // 列表重建后 WPF 有时会保留上一次的滚动位置，导致第一行只露出半截。
-        // 列表是一次性重建的（没有虚拟化），直接回到顶部最稳。
-        ListScroll.ScrollToTop();
-
-        // 左边换了作用目标，「允许的触发方式」整栏跟着换一套三态。
-        BuildTriggers();
-    }
-
-    /// <summary>
-    /// 排序用的标题：和列表里那一行同一套说法（边缘手势的标题是「左上角」「上边缘 · 滚轮向上」，
-    /// 模型里没有这个字段），否则"按名称"排出来的顺序和肉眼看到的标题对不上。
-    /// </summary>
-    private string SortTitle(MouseGesture g)
-    {
-        if (g.Kind == "hotcorner") return CornerName(g.Corner);
-        if (g.Kind == "edgewheel") return Loc.F("{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
-        return g.Title(ActionCatalog.TitleOf(g.Action) ?? "");
-    }
-
-    private void LoadEditor()
-    {
-        _loading = true;
-        try
-        {
-            ActionSearchBox.Text = "";
-            ActionSearchList.ItemsSource = null;
-            ActionSearchPanel.Visibility = Visibility.Collapsed;
-            ActionSearchHint.Visibility = Visibility.Visible;
-            ActionSearchClear.Visibility = Visibility.Collapsed;
-            NameBox.Text = _current.Name;
-            SelectTag(ButtonBox, _current.Button);
-            SelectTag(ChordBox, _current.Chord);
-            SelectTag(KindBox, _current.Kind);
-            SelectValue(WheelBox, _current.Wheel);
-            SelectValue(CornerBox, _current.Corner);
-            SelectValue(EdgeBox, _current.Edge);
-            GestureEnabledBox.IsChecked = _current.Enabled;
-            ImmediateBox.IsChecked = _current.Immediate;
-            HideLabelBox.IsChecked = _current.HideLabel;
-            SelectAction(_current.Action);
-            ArgBox.Text = _current.Arg;
-            EditorNote.Text = _current.Note;
-            EditorNote.Visibility = string.IsNullOrWhiteSpace(_current.Note) ? Visibility.Collapsed : Visibility.Visible;
-            UpdateKindRows();
-            UpdateArgVisibility();
-            DrawPreview();
-        }
-        finally { _loading = false; }
-    }
-
-    private void UpdateKindRows()
-    {
-        string kind = SelectedTag(KindBox) ?? "stroke";
-        bool stroke = kind == "stroke";
-        bool corner = kind is "corner" or "hotcorner";
-        bool wheel = kind is "wheel" or "edgewheel";
-        bool edge = kind == "edgewheel";
-        bool buttonless = kind is "hotcorner" or "edgewheel";
-
-        StrokeRow.Visibility = stroke ? Visibility.Visible : Visibility.Collapsed;
-        CornerRow.Visibility = corner ? Visibility.Visible : Visibility.Collapsed;
-        WheelRow.Visibility = wheel ? Visibility.Visible : Visibility.Collapsed;
-        EdgeRow.Visibility = edge ? Visibility.Visible : Visibility.Collapsed;
-        EdgeLabel.Text = Loc.T("屏幕边缘");
-        ImmediateBox.IsEnabled = stroke;   // 只有画笔画才有「画到一半就执行」
-
-        // 热角和贴边滚轮不需要按任何键：把按键行收掉，免得存进一个没用的 Button。
-        ButtonBox.IsEnabled = !buttonless;
-        ChordBox.IsEnabled = !buttonless;
-        if (buttonless)
-        {
-            SelectTag(ButtonBox, "");
-            SelectTag(ChordBox, "");
-        }
-        // 不再自动把空键改回右键：「不按键」是用户明确选的，保存时再校验。
-    }
-
-    private void UpdateArgVisibility()
-    {
-        var info = _host?.Actions.Get(_current.Action);
-        bool needs = info?.NeedsArg == true;
-        bool windowBind = info?.Category == "窗口绑定";
-        bool customKey = info?.Id == "customKey";
-        bool keyArg = customKey || info?.Id is "sendKeys";
-
-        /* 自定义按键的参数是 JSON，但用户要看/要改的是「ctrl+c」这段文本：
-         * 文本框里放键文本，落盘时再包成 JSON（见 OnSaveClick / OnArgBoxCommit）。
-         * 这样录制、点列表、手打三条路都汇到同一个文本框里，看到的就是最终结果。 */
-        string keyText = customKey ? CustomKeySpec.FromArg(_current.Arg).Key : "";
-        if (customKey)
-        {
-            ArgBox.Tag = _current.Action;
-            if (!string.Equals(ArgBox.Text, keyText, StringComparison.Ordinal))
-                ArgBox.Text = keyText;
-        }
-        else if (needs && ArgBox.Tag as string != _current.Action)
-        {
-            ArgBox.Tag = _current.Action;
-            ArgBox.Text = _current.Arg;
-        }
-
-        // 一次只露一个参数控件：窗口绑定用选程序按钮，按键用文本框 + 录制按钮，
-        // 其它才用普通文本框。
-        ArgBox.Visibility = (needs && !windowBind && !keyArg) || customKey
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        ArgHint.Visibility = customKey ? Visibility.Visible : Visibility.Collapsed;
-        ArgCaptureButton.Visibility = keyArg ? Visibility.Visible : Visibility.Collapsed;
-        ActionAppPicker.Visibility = windowBind ? Visibility.Visible : Visibility.Collapsed;
-        ActionAppStatus.Visibility = windowBind ? Visibility.Visible : Visibility.Collapsed;
-        ActionFunctionPanel.Visibility = windowBind ? Visibility.Collapsed : Visibility.Visible;
-
-        if (keyArg)
-        {
-            string buttonText = customKey ? keyText : _current.Arg;
-            ArgCaptureButton.Content = string.IsNullOrWhiteSpace(buttonText)
-                ? Loc.T("录制按键")
-                : CustomKeyRunner.ComboDisplay(buttonText);
-        }
-        if (windowBind)
-            ActionAppStatus.Text = string.IsNullOrWhiteSpace(_current.Arg)
-                ? Loc.T("还没有选择程序")
-                : _current.Arg;
-    }
-
-    private void SetActionArg(string arg)
-    {
-        _current.Arg = arg;
-        var info = _host?.Actions.Get(_current.Action);
-        if (info?.Id == "customKey")
-        {
-            string key = CustomKeySpec.FromArg(arg).Key;
-            ArgBox.Text = key;
-            ArgCaptureButton.Content = string.IsNullOrWhiteSpace(key)
-                ? Loc.T("录制按键")
-                : CustomKeyRunner.ComboDisplay(key);
-        }
-        else
-        {
-            ArgBox.Text = arg;
-            if (info?.Id == "sendKeys")
-                ArgCaptureButton.Content = string.IsNullOrWhiteSpace(arg) ? Loc.T("录制按键") : arg;
-        }
-        if (info?.Category == "窗口绑定")
-            ActionAppStatus.Text = string.IsNullOrWhiteSpace(arg) ? Loc.T("还没有选择程序") : arg;
-    }
-
-    private void OnCaptureArgKey(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        UI.Windows.KeyCaptureWindow.Capture(result =>
-        {
-            if (string.IsNullOrWhiteSpace(result.Combo)) return;
-            var info = _host.Actions.Get(_current.Action);
-            if (info?.Id == "customKey")
-            {
-                var spec = CustomKeySpec.FromArg(_current.Arg);
-                spec.Key = CustomKeyRunner.Canonical(result.Combo);
-                SetActionArg(spec.ToArg());
-                return;
+                CustomKeySpec customKeySpec = CustomKeySpec.FromArg(_current.Arg);
+                customKeySpec.Key = CustomKeyRunner.Canonical(result.Combo);
+                SetActionArg(customKeySpec.ToArg());
             }
-            SetActionArg(result.Combo!);
-        }, title: Loc.T("录制按键"));
-    }
+            else
+            {
+                SetActionArg(result.Combo);
+            }
+        }
+    }, null, Loc.T("录制按键"));
+}
 
-    /// <summary>文本框失焦：把「ctrl+c」落成 JSON。</summary>
-    private void OnArgBoxCommit(object sender, RoutedEventArgs e) => CommitKeyText();
+private void OnArgBoxCommit(object sender, RoutedEventArgs e)
+{
+    CommitKeyText();
+}
 
-    /// <summary>文本框里按回车：和失焦一样提交（手打完不用再点别处）。</summary>
-    private void OnArgBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+private void OnArgBoxKeyDown(object sender, KeyEventArgs e)
+{
+    //IL_0001: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0007: Invalid comparison between Unknown and I4
+    if ((int)e.Key == 6)
     {
-        if (e.Key != System.Windows.Input.Key.Enter) return;
         CommitKeyText();
         e.Handled = true;
     }
+}
 
-    /// <summary>
-    /// 把文本框里的按键文本写回动作参数。
-    ///
-    /// 只在失焦 / 回车时做，不在 TextChanged 里做：用户打到一半是「ctrl+」，
-    /// 每敲一个字符就规范化一次会把还没写完的内容判成非法、光标也会跳。
-    /// 认不出来的输入不覆盖原配置，退回上一个能用的值并提示 ——
-    /// 否则用户以为改成功了，按下去却什么都不发。
-    /// </summary>
-    private void CommitKeyText()
+private void CommitKeyText()
+{
+    if (_host == null)
     {
-        if (_host == null) return;
-        var info = _host.Actions.Get(_current.Action);
-        if (info?.Id != "customKey")
-        {
-            _current.Arg = ArgBox.Text;
-            return;
-        }
-
-        string typed = (ArgBox.Text ?? "").Trim();
-        var spec = CustomKeySpec.FromArg(_current.Arg);
-
-        if (typed.Length == 0)
-        {
-            spec.Key = "";
-            SetActionArg(spec.ToArg());
-            return;
-        }
-
-        if (!CustomKeyRunner.TryNormalize(typed, out string canonical, out string bad))
-        {
-            _host.Notify(Loc.F("认不出「{0}」这个键，照着 ctrl+c 或 ctrl+v enter 这样写", bad));
-            ArgBox.Text = spec.Key;
-            return;
-        }
-
-        spec.Key = canonical;
-        SetActionArg(spec.ToArg());
+        return;
+    }
+    if (_host.Actions.Get(_current.Action)?.Id != "customKey")
+    {
+        _current.Arg = ArgBox.Text;
+        return;
+    }
+    string text = (ArgBox.Text ?? "").Trim();
+    CustomKeySpec customKeySpec = CustomKeySpec.FromArg(_current.Arg);
+    string canonical;
+    string bad;
+    if (text.Length == 0)
+    {
+        customKeySpec.Key = "";
+        SetActionArg(customKeySpec.ToArg());
+    }
+    else if (!CustomKeyRunner.TryNormalize(text, out canonical, out bad))
+    {
+        _host.Notify(Loc.F("认不出「{0}」这个键，照着 ctrl+c 或 ctrl+v enter 这样写", bad));
+        ArgBox.Text = customKeySpec.Key;
+    }
+    else
+    {
+        customKeySpec.Key = canonical;
+        SetActionArg(customKeySpec.ToArg());
         ArgCaptureButton.Content = CustomKeyRunner.ComboDisplay(canonical);
     }
+}
 
-    private void OnPickActionAppFile(object sender, RoutedEventArgs e)
+private void OnPickActionAppFile(object sender, RoutedEventArgs e)
+{
+    if (_host != null)
     {
-        if (_host == null) return;
-        var dlg = new Microsoft.Win32.OpenFileDialog
+        var openFileDialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = Loc.T("窗口绑定用哪个程序"),
             Filter = Loc.T("程序 (*.exe)|*.exe|所有文件 (*.*)|*.*"),
-            CheckFileExists = true,
+            CheckFileExists = true
         };
-        if (dlg.ShowDialog() == true) SetActionArg(dlg.FileName);
+        if (openFileDialog.ShowDialog() == true)
+        {
+            SetActionArg(openFileDialog.FileName);
+        }
     }
+}
 
-    private void OnPickActionAppWindow(object sender, RoutedEventArgs e)
+private void OnPickActionAppWindow(object sender, RoutedEventArgs e)
+{
+    if (_host == null)
     {
-        if (_host == null) return;
-        var picker = new UI.Windows.WindowPickerWindow();
-        if (Window.GetWindow(this) is { } owner) picker.Owner = owner;
-        picker.ShowDialog();
-
-        var h = picker.PickedWindow;
-        if (h == IntPtr.Zero) return;
-        var info = Core.Windows.WindowService.Describe(h);
-        if (info == null || string.IsNullOrEmpty(info.ExePath))
+        return;
+    }
+    WindowPickerWindow windowPickerWindow = new WindowPickerWindow();
+    Window window = Window.GetWindow((DependencyObject)(object)this);
+    if (window != null)
+    {
+        windowPickerWindow.Owner = window;
+    }
+    windowPickerWindow.ShowDialog();
+    nint pickedWindow = windowPickerWindow.PickedWindow;
+    if (pickedWindow != IntPtr.Zero)
+    {
+        var windowInfo = Core.Windows.WindowService.Describe(pickedWindow);
+        if (windowInfo == null || string.IsNullOrEmpty(windowInfo.ExePath))
         {
             _host.Notify(Loc.T("取不到这个窗口的程序，改用「选择程序…」挑 exe"));
-            return;
         }
-        SetActionArg(info.ExePath);
-    }
-
-    private static string Describe(MouseGesture g)
-    {
-        if (g.Kind == "hotcorner")
-            return Loc.F("屏幕{0} · 悬停触发", CornerName(g.Corner));
-        if (g.Kind == "edgewheel")
-            return Loc.F("屏幕{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
-
-        string button = Loc.T(GestureButtons.Display(g.Button));
-        if (!string.IsNullOrWhiteSpace(g.Chord))
-            button = Loc.F("{0} + {1}", button, Loc.T(GestureButtons.Display(g.Chord)));
-        if (g.Kind == "stroke") g.EnsurePattern();
-        /* 5.13 起列表里不再画方向串箭头：一根笔画的样子就是列表左边那张缩略图，
-         * 有轨迹就写按键名；没轨迹的老数据在启动迁移时已经合成出轨迹了，
-         * 这里只剩「按键名」一条口径，不再出现 ↑→ 那种字符。 */
-        return g.Kind switch
+        else
         {
-            "corner" => Loc.F("{0} · 屏幕{1}", button, CornerName(g.Corner)),
-            "wheel" => Loc.F("{0} · 滚轮{1}", button, WheelName(g.Wheel)),
-            _ => button
-        };
-    }
-
-    private static string CornerName(int corner) => corner switch
-    {
-        1 => Loc.T("左上角"),
-        2 => Loc.T("右上角"),
-        3 => Loc.T("左下角"),
-        4 => Loc.T("右下角"),
-        _ => Loc.T("任意角落")
-    };
-
-    private static string EdgeName(int edge) => edge switch
-    {
-        1 => Loc.T("上边缘"),
-        2 => Loc.T("右边缘"),
-        3 => Loc.T("下边缘"),
-        4 => Loc.T("左边缘"),
-        _ => Loc.T("任意边缘")
-    };
-
-    private static string WheelName(int wheel) => wheel switch
-    {
-        -1 => Loc.T("向上"),
-        1 => Loc.T("向下"),
-        -2 => Loc.T("向左"),
-        2 => Loc.T("向右"),
-        _ => Loc.T("向上")
-    };
-
-    private static string GlyphFor(MouseGesture g) => g.Kind switch
-    {
-        "corner" or "hotcorner" => "\uE7FC",   // Corner
-        "wheel" or "edgewheel" => "\uE962",
-        _ => "\uE962"           // Mouse
-    };
-
-    /// <summary>四角/四边各用一个方向符号，列表左侧一眼能分清位置。</summary>
-    private static string EdgeGlyph(MouseGesture g) => g.Kind switch
-    {
-        "hotcorner" => g.Corner switch { 1 => "◤", 2 => "◥", 3 => "◣", 4 => "◢", _ => "◇" },
-        "edgewheel" => g.Edge switch { 1 => "▀", 2 => "▐", 3 => "▄", 4 => "▌", _ => "▭" },
-        _ => "\uE7FC"
-    };
-
-    /// <summary>
-    /// 画一个屏幕范围示意：灰框代表屏幕，红点/红线表示这个手势的生效角落或边缘。
-    /// 比统一鼠标图标直观，也不用依赖图标字体里是否真的有对应字形。
-    /// </summary>
-    private static ImageSource EdgeIconFor(MouseGesture g)
-    {
-        var group = new DrawingGroup();
-        var outlinePen = new Pen(new SolidColorBrush(Color.FromRgb(0x94, 0xA3, 0xB8)), 1.2);
-        group.Children.Add(new GeometryDrawing(
-            null, outlinePen, new RectangleGeometry(new Rect(3, 3, 18, 14), 2, 2)));
-
-        var red = new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44));
-        if (g.Kind == "hotcorner" && g.Corner is >= 1 and <= 4)
-        {
-            double x = g.Corner is 2 or 4 ? 18 : 6;
-            double y = g.Corner is 3 or 4 ? 14 : 6;
-            group.Children.Add(new GeometryDrawing(
-                red, null, new EllipseGeometry(new Point(x, y), 2.2, 2.2)));
+            SetActionArg(windowInfo.ExePath);
         }
-        else if (g.Kind == "edgewheel")
+    }
+}
+
+private static string Describe(InputPlus.Core.Gestures.MouseGesture g)
+{
+    if (g.Kind == "hotcorner")
+    {
+        return Loc.F("屏幕{0} · 悬停触发", CornerName(g.Corner));
+    }
+    if (g.Kind == "edgewheel")
+    {
+        return Loc.F("屏幕{0} · 滚轮{1}", EdgeName(g.Edge), WheelName(g.Wheel));
+    }
+    string text = Loc.T(GestureButtons.Display(g.Button));
+    if (!string.IsNullOrWhiteSpace(g.Chord))
+    {
+        text = Loc.F("{0} + {1}", text, Loc.T(GestureButtons.Display(g.Chord)));
+    }
+    if (g.Kind == "stroke")
+    {
+        g.EnsurePattern();
+    }
+    string kind = g.Kind;
+    if (!(kind == "corner"))
+    {
+        if (kind == "wheel")
         {
-            Rect band = g.Edge switch
+            return Loc.F("{0} · 滚轮{1}", text, WheelName(g.Wheel));
+        }
+        return text;
+    }
+    return Loc.F("{0} · 屏幕{1}", text, CornerName(g.Corner));
+}
+
+private static string CornerName(int corner)
+{
+    return corner switch
+    {
+        1 => Loc.T("左上角"), 
+        2 => Loc.T("右上角"), 
+        3 => Loc.T("左下角"), 
+        4 => Loc.T("右下角"), 
+        _ => Loc.T("任意角落"), 
+    };
+}
+
+private static string EdgeName(int edge)
+{
+    return edge switch
+    {
+        1 => Loc.T("上边缘"), 
+        2 => Loc.T("右边缘"), 
+        3 => Loc.T("下边缘"), 
+        4 => Loc.T("左边缘"), 
+        _ => Loc.T("任意边缘"), 
+    };
+}
+
+private static string WheelName(int wheel)
+{
+    return wheel switch
+    {
+        -1 => Loc.T("向上"), 
+        1 => Loc.T("向下"), 
+        -2 => Loc.T("向左"), 
+        2 => Loc.T("向右"), 
+        _ => Loc.T("向上"), 
+    };
+}
+
+private static string GlyphFor(InputPlus.Core.Gestures.MouseGesture g)
+{
+    switch (g.Kind)
+    {
+    case "corner":
+    case "hotcorner":
+        return "\ue7fc";
+    case "wheel":
+    case "edgewheel":
+        return "\ue962";
+    default:
+        return "\ue962";
+    }
+}
+
+private static string EdgeGlyph(InputPlus.Core.Gestures.MouseGesture g)
+{
+    string kind = g.Kind;
+    if (!(kind == "hotcorner"))
+    {
+        if (kind == "edgewheel")
+        {
+            return g.Edge switch
             {
-                1 => new Rect(3, 2.4, 18, 2.6),
-                2 => new Rect(18.4, 3, 2.6, 14),
-                3 => new Rect(3, 15, 18, 2.6),
-                4 => new Rect(2.4, 3, 2.6, 14),
-                _ => Rect.Empty
+                1 => "▀", 
+                2 => "▐", 
+                3 => "▄", 
+                4 => "▌", 
+                _ => "▭", 
             };
-            if (!band.IsEmpty)
-                group.Children.Add(new GeometryDrawing(red, null, new RectangleGeometry(band, 1.2, 1.2)));
         }
-
-        group.Freeze();
-        return new DrawingImage(group);
+        return "\ue7fc";
     }
-
-    /// <summary>把这条路手势缩成 22×22 的迷你折线，列表左侧直接显示笔画。</summary>
-    private static PointCollection? IconFor(MouseGesture g)
+    return g.Corner switch
     {
-        if (g.Kind != "stroke" || !g.HasPath) return null;
+        1 => "◤", 
+        2 => "◥", 
+        3 => "◣", 
+        4 => "◢", 
+        _ => "◇", 
+    };
+}
 
-        var pts = GestureMath.Resample(GestureMath.Normalize(g.Points()), 24);
-        if (pts.Count < 2) return null;
-
-        double minX = pts.Min(p => p.X), maxX = pts.Max(p => p.X);
-        double minY = pts.Min(p => p.Y), maxY = pts.Max(p => p.Y);
-        double spanX = Math.Max(1, maxX - minX), spanY = Math.Max(1, maxY - minY);
-        const double box = 22, pad = 1.5;
-        double scale = Math.Min((box - pad * 2) / spanX, (box - pad * 2) / spanY);
-        double offX = (box - spanX * scale) / 2, offY = (box - spanY * scale) / 2;
-
-        var icon = new PointCollection(pts.Count);
-        foreach (var p in pts)
-            icon.Add(new Point(offX + (p.X - minX) * scale, offY + (p.Y - minY) * scale));
-        return icon;
+private static ImageSource EdgeIconFor(InputPlus.Core.Gestures.MouseGesture g)
+{
+    //IL_005a: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0190: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0195: Unknown result type (might be due to invalid IL or missing references)
+    //IL_01c0: Unknown result type (might be due to invalid IL or missing references)
+    //IL_01c5: Unknown result type (might be due to invalid IL or missing references)
+    //IL_01ed: Unknown result type (might be due to invalid IL or missing references)
+    //IL_01f2: Unknown result type (might be due to invalid IL or missing references)
+    //IL_021a: Unknown result type (might be due to invalid IL or missing references)
+    //IL_021f: Unknown result type (might be due to invalid IL or missing references)
+    //IL_022a: Unknown result type (might be due to invalid IL or missing references)
+    //IL_022c: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0223: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0228: Unknown result type (might be due to invalid IL or missing references)
+    //IL_023f: Unknown result type (might be due to invalid IL or missing references)
+    //IL_0108: Unknown result type (might be due to invalid IL or missing references)
+    DrawingGroup drawingGroup = new DrawingGroup();
+    Pen pen = new Pen(new SolidColorBrush(Color.FromRgb(148, 163, 184)), 1.2);
+    drawingGroup.Children.Add(new GeometryDrawing(null, pen, new RectangleGeometry(new Rect(3.0, 3.0, 18.0, 14.0), 2.0, 2.0)));
+    SolidColorBrush brush = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    if (g.Kind == "hotcorner")
+    {
+        int corner = g.Corner;
+        if (corner >= 1 && corner <= 4)
+        {
+            corner = g.Corner;
+            bool flag = ((corner == 2 || corner == 4) ? true : false);
+            double num = (flag ? 18 : 6);
+            corner = g.Corner;
+            flag = (uint)(corner - 3) <= 1u;
+            double num2 = (flag ? 14 : 6);
+            drawingGroup.Children.Add(new GeometryDrawing(brush, null, new EllipseGeometry(new Point(num, num2), 2.2, 2.2)));
+            goto IL_0262;
+        }
     }
+    if (g.Kind == "edgewheel")
+    {
+        Rect rect = g.Edge switch
+        {
+            1 => new Rect(3.0, 2.4, 18.0, 2.6), 
+            2 => new Rect(18.4, 3.0, 2.6, 14.0), 
+            3 => new Rect(3.0, 15.0, 18.0, 2.6), 
+            4 => new Rect(2.4, 3.0, 2.6, 14.0), 
+            _ => Rect.Empty, 
+        };
+        if (!rect.IsEmpty)
+        {
+            drawingGroup.Children.Add(new GeometryDrawing(brush, null, new RectangleGeometry(rect, 1.2, 1.2)));
+        }
+    }
+    goto IL_0262;
+    IL_0262:
+    ((Freezable)drawingGroup).Freeze();
+    return new DrawingImage(drawingGroup);
+}
+
+private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
+{
+    //IL_018f: Unknown result type (might be due to invalid IL or missing references)
+    if (g.Kind != "stroke" || !g.HasPath)
+    {
+        return null;
+    }
+    /* 缩略图优先画美化模板（任务四）：列表里看到的形状 = 触发时替换上去的那个形状。
+     * 没有模板（关闭美化 / 美化没过语义校验）才退回校正后的原始轨迹 —— 和以前一样。 */
+    List<GestureMath.Pt> list = g.HasBeauty
+        ? GestureMath.Resample(GestureMath.Normalize(g.BeautyPoints()), 24)
+        : GestureMath.Resample(
+            GestureMath.Normalize(InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(g.Points())), 24);
+    if (list.Count < 2)
+    {
+        return null;
+    }
+    double num = list.Min((GestureMath.Pt p) => p.X);
+    double num2 = list.Max((GestureMath.Pt p) => p.X);
+    double num3 = list.Min((GestureMath.Pt p) => p.Y);
+    double num4 = list.Max((GestureMath.Pt p) => p.Y);
+    double num5 = Math.Max(1.0, num2 - num);
+    double num6 = Math.Max(1.0, num4 - num3);
+    double num7 = Math.Min(19.0 / num5, 19.0 / num6);
+    double num8 = (22.0 - num5 * num7) / 2.0;
+    double num9 = (22.0 - num6 * num7) / 2.0;
+    PointCollection pointCollection = new PointCollection(list.Count);
+    foreach (GestureMath.Pt item in list)
+    {
+        pointCollection.Add(new Point(num8 + (item.X - num) * num7, num9 + (item.Y - num3) * num7));
+    }
+    return pointCollection;
+}
 
     // ───────────────────────── 选项 ─────────────────────────
+
+    /// <summary>ComboBox.Base 模板里给内容让出的横向空间：ContentPresenter 的 12 + 32（箭头），外加边框 2。</summary>
+    private const double ComboChromeWidth = 44 + 2;
+
+    /// <summary>搜索按钮的宽（Button.Icon 默认 32）与它和下拉之间的间距，搜索面板要盖住这两样。</summary>
+    private const double SearchButtonSlot = 6 + 32;
+
+    /// <summary>
+    /// 按内容给「全部按键」那颗筛选下拉定宽。
+    ///
+    /// 以前写死 96：中文「全部按键」四个字在模板里被左右让出 46px 之后正好差一点，
+    /// 任何一项都会被裁掉半个字；换英文/德文更糟。这里把每个选项量一遍取最宽，
+    /// 加模板占位再留 6px 余量，下限仍是 96 —— 只为「全部按键」这种短词撑住基本观感。
+    /// </summary>
+    private void FitFilterBoxWidth()
+    {
+        var typeface = new Typeface(ButtonFilterBox.FontFamily, ButtonFilterBox.FontStyle,
+            ButtonFilterBox.FontWeight, ButtonFilterBox.FontStretch);
+        double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
+        double widest = 0;
+        foreach (var item in ButtonFilterBox.Items.OfType<Choice>())
+        {
+            var ft = new FormattedText(item.Text ?? "", System.Globalization.CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight, typeface, ButtonFilterBox.FontSize,
+                System.Windows.Media.Brushes.Black, pixelsPerDip);
+            widest = Math.Max(widest, ft.WidthIncludingTrailingWhitespace);
+        }
+
+        /* 只给 MinWidth、不给 Width：ComboBox 自己会按最宽项量出 DesiredSize，
+           写死 Width 等于又把"够不够"这件事钉死了。 */
+        ButtonFilterBox.MinWidth = Math.Max(96, Math.Ceiling(widest) + ComboChromeWidth + 6);
+        SyncSearchPanelWidth();
+    }
+
+    /// <summary>搜索面板正好盖住「筛选下拉 + 搜索按钮」，宽度跟着下拉走。</summary>
+    private void SyncSearchPanelWidth()
+    {
+        double width = ButtonFilterBox.ActualWidth > 0 ? ButtonFilterBox.ActualWidth : ButtonFilterBox.MinWidth;
+        SearchPanel.Width = width + SearchButtonSlot;
+    }
 
     private void BuildChoices()
     {
@@ -959,6 +1169,7 @@ public partial class GesturesView
         ButtonFilterBox.DisplayMemberPath = "Text";
         ButtonFilterBox.SelectedValuePath = "Value";
         SelectTag(ButtonFilterBox, "");
+        FitFilterBoxWidth();
 
         ChordBox.ItemsSource = new List<Choice> { new("", Loc.T("不组合")) }
             .Concat(GestureButtons.All.Select(b => new Choice(b, Loc.T(GestureButtons.Display(b)))))
@@ -972,7 +1183,9 @@ public partial class GesturesView
             new("corner", Loc.T("甩到角落单击")),
             new("wheel", Loc.T("按住 + 滚轮")),
             new("hotcorner", Loc.T("悬停到角落")),
-            new("edgewheel", Loc.T("贴边滚轮"))
+            new("edgewheel", Loc.T("贴边滚轮")),
+            new("edge", Loc.T("沿边移动")),
+            new("steps", Loc.T("多步手势"))
         };
         KindBox.DisplayMemberPath = "Text";
         KindBox.SelectedValuePath = "Value";
@@ -1008,6 +1221,40 @@ public partial class GesturesView
         };
         EdgeBox.DisplayMemberPath = "Text";
         EdgeBox.SelectedValuePath = "Value";
+
+        /* 多步序列的三种下拉：滚轮 / 角落 / 边缘，选项与上面三行完全一致。 */
+        StepWheelBox.ItemsSource = new List<Choice>
+        {
+            new("-1", Loc.T("向上")),
+            new("1", Loc.T("向下")),
+            new("-2", Loc.T("向左")),
+            new("2", Loc.T("向右"))
+        };
+        StepWheelBox.DisplayMemberPath = "Text";
+        StepWheelBox.SelectedValuePath = "Value";
+        StepWheelBox.SelectedIndex = 1;
+
+        StepCornerBox.ItemsSource = new List<Choice>
+        {
+            new("1", Loc.T("左上角")),
+            new("2", Loc.T("右上角")),
+            new("3", Loc.T("左下角")),
+            new("4", Loc.T("右下角"))
+        };
+        StepCornerBox.DisplayMemberPath = "Text";
+        StepCornerBox.SelectedValuePath = "Value";
+        StepCornerBox.SelectedIndex = 0;
+
+        StepEdgeBox.ItemsSource = new List<Choice>
+        {
+            new("1", Loc.T("上边缘")),
+            new("2", Loc.T("右边缘")),
+            new("3", Loc.T("下边缘")),
+            new("4", Loc.T("左边缘"))
+        };
+        StepEdgeBox.DisplayMemberPath = "Text";
+        StepEdgeBox.SelectedValuePath = "Value";
+        StepEdgeBox.SelectedIndex = 1;
 
         var categories = _host!.Actions.Items
             .Where(i => !i.Hidden && i.Id != "doNothing")
@@ -1206,33 +1453,206 @@ public partial class GesturesView
 
     /* ─────────────────── 拖动排序（只在「自定义顺序」下） ───────────────────
      *
-     * 手柄在每行最左边，按下之后鼠标交给 GestureList 捕获：
+     * 没有手柄了：按住一条手势超过 2 秒才进拖动，短按仍然是"选中这一条"。
+     * 计时到点之后鼠标交给 GestureList 捕获：
      * 行的 Button 就收不到抬起事件，拖动过程不会顺手把那一行"选中"（右侧编辑器不跳）。
      *
      * 落点是"插到第几条之前"——每一行的上半/下半分界当插入位，
      * 松手时交给 GestureListOrder.MoveWithin 只重排看得见的这几条，
      * 别的应用/分组的手势在整表里的位置一点不动。 */
 
-    private MouseGesture? _dragItem;
-    private int _dragFrom = -1;
-    private int _dropIndex = -1;
-    private Point _dragStart;
+    /// <summary>
+    /// 按住多久才认定"要拖"，不是"要看"。
+    ///
+    /// 2 秒是 v1.6.3 的取值，实际用下来大多数人按到一半就放弃了，还以为是功能坏了。
+    /// 400ms 与"长按"的直觉接近，又比双击间隔（500ms）短一点，不会和"点选"打架 ——
+    /// 真正的误触保护交给下面那条 8px 的位移阈值。
+    /// </summary>
+    private static readonly TimeSpan DragHoldDelay = TimeSpan.FromMilliseconds(400);
 
-    private void OnGripDown(object sender, MouseButtonEventArgs e)
+    /// <summary>按住之后纵向挪动超过这么多像素，立刻开始拖（不必等计时器）。</summary>
+    private const double DragStartMove = 8.0;
+
+    private void OnRowPressDown(object sender, MouseButtonEventArgs e)
     {
-        if (_loading || !GestureListOrder.IsCustom(_sortMode)) return;
-        if ((sender as FrameworkElement)?.DataContext is not GestureRow row) return;
-        int from = _rows.IndexOf(row);
-        if (from < 0) return;
-        _dragItem = row.Gesture;
-        _dragFrom = from;
-        _dropIndex = -1;
+        // 刻意不标 e.Handled：这一次按下也可能只是一次普通点击，行按钮得照常走完点击流程。
+        if (_loading) return;
+        if (sender is not Button button || button.DataContext is not GestureRow row || !row.Draggable) return;
+
+        CancelPress();   // 连点两行时，上一棵计时还没收官
+        _suppressClick = false;   // 新的一次按下：这一下该有的点击照常给
+        _pressButton = button;
         _dragStart = e.GetPosition(ListScroll);
-        GestureList.CaptureMouse();
-        e.Handled = true;
+
+        _pressTimer = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Input)
+        {
+            Interval = DragHoldDelay,
+        };
+        _pressTimer.Tick += OnPressHold;
+        _pressTimer.Start();
     }
 
-    private void OnGripMove(object sender, MouseEventArgs e)
+    /// <summary>按住到点：进拖动。中途松手 / 行丢了捕获都会把表停掉（见 OnRowPressUp）。</summary>
+    private void OnPressHold(object? sender, EventArgs e)
+    {
+        var button = _pressButton;
+        CancelPress();
+        // 这 400ms 里鼠标可能已经在别处松开了（比如切换窗口时抬起事件丢了），这里再确认一次。
+        if (button == null || System.Windows.Input.Mouse.LeftButton != MouseButtonState.Pressed) return;
+        if (button.DataContext is not GestureRow row) return;
+        StartDrag(button, row);
+    }
+
+    /// <summary>
+    /// 按住的同时已经在往上/下挪：直接开始拖，不用等计时器。
+    ///
+    /// 长按 400ms 已经不长，但"我想拖"的意图是在手指动的那一瞬就有的；
+    /// 这里跟手势识别的习惯一致 —— 按住 + 移动 = 拖，按住不动才是等其他判定。
+    /// </summary>
+    private void OnRowPressMove(object sender, MouseEventArgs e)
+    {
+        if (_dragging || _pressButton == null) return;
+        if (e.LeftButton != MouseButtonState.Pressed) { CancelPress(); return; }
+
+        double dy = Math.Abs(e.GetPosition(ListScroll).Y - _dragStart.Y);
+        if (dy < DragStartMove) return;
+
+        var button = _pressButton;
+        CancelPress();
+        if (button?.DataContext is GestureRow row) StartDrag(button, row);
+    }
+
+    /// <summary>把这一行拎起来（轻微放大 + 影子 + 半透明），鼠标交给列表接着跟手。</summary>
+    private void StartDrag(Button button, GestureRow row)
+    {
+        /* 排序不是「自定义顺序」时，先切过来再拖。
+         * 以前这种档位下 Draggable=false，按住半天毫无反应 ——
+         * 而"把一条手势往下拖"本身就说明他想自己排顺序。
+         * 切换会重建整个列表，所以要按手势对象把新的行和按钮找回来。 */
+        if (!GestureListOrder.IsCustom(_sortMode) && !SwitchToCustomForDrag(row.Gesture, out button, out row))
+            return;
+
+        int from = _rows.IndexOf(row);
+        if (from < 0 || _rows.Count < 2) return;
+
+        _dragging = true;
+        _dragItem = row.Gesture;
+        _dragRow = row;
+        _dragButton = button;
+        _dragFrom = from;
+        _dropIndex = -1;
+        _dragScrollStart = ListScroll.VerticalOffset;
+
+        /* 浮起来的观感。别直接给 button.Opacity 赋值：它绑着 RowOpacity（停用的行本来就 0.48），
+           本地赋值会把那条绑定顶掉，复位之后再也变不回停用行的样子。
+           这里用动画占住 Opacity，复位时把动画清掉，绑定值自己就回来了。 */
+        _dragShift = new TranslateTransform();
+        button.RenderTransformOrigin = new Point(0.5, 0.5);
+        button.RenderTransform = new TransformGroup { Children = { new ScaleTransform(1.02, 1.02), _dragShift } };
+        button.Effect = new System.Windows.Media.Effects.DropShadowEffect
+        {
+            BlurRadius = 16, ShadowDepth = 3, Direction = 270, Opacity = 0.3,
+        };
+        button.BeginAnimation(UIElement.OpacityProperty,
+            new DoubleAnimation(0.9, TimeSpan.FromMilliseconds(120)) { FillBehavior = FillBehavior.HoldEnd });
+
+        System.Windows.Input.Mouse.OverrideCursor = System.Windows.Input.Cursors.SizeNS;
+
+        /* 鼠标交给列表：行按钮收不到抬起事件，拖动过程就不会顺手"选中"这一行。
+         *
+         * 但**不能依赖这一次捕获**：Buttons 自己拿着捕获，某些情况下
+         * CaptureMouse 会返回 false。捕获留在按钮上其实也能拖 ——
+         * 鼠标事件会从按钮冒泡到列表，OnDragMove / OnDragUp 照样收得到，
+         * 所以这里只是"优先转移"，失败就保持原样，绝不让拖动因为捕获失败而没反应。 */
+        if (!GestureList.CaptureMouse()) button.CaptureMouse();
+
+        // 松手时按钮可能还是会发一次 Click（捕获没转走的情况下），这一下不算点选。
+        _suppressClick = true;
+        CoreLog.Info($"手势拖动：开始 {row.Title}（第 {from + 1} 条，排序={_sortMode}）");
+        ShowDropLine(from);
+    }
+
+    /// <summary>
+    /// 把排序档切到「自定义顺序」，并按手势把新的行和行按钮找回来。
+    ///
+    /// 切换会 <see cref="LoadList"/> 重建整个列表（行对象、按钮、可视树全是新的），
+    /// 所以调用方手里那份 button/row 会失效 —— 这里负责换新的。
+    /// 失败就返回 false，调用方放弃这一次拖动（宁可不拖，也不能拖动一个已经不在列表里的行）。
+    /// </summary>
+    private bool SwitchToCustomForDrag(InputPlus.Core.Gestures.MouseGesture gesture,
+        out Button button, out GestureRow row)
+    {
+        button = null!;
+        row = null!;
+        if (_host is null) return false;
+
+        try
+        {
+            string from = _sortMode;
+            _sortMode = GestureListOrder.Custom;
+            _host.Settings.GestureOptions.ListSort = _sortMode;
+            _host.SaveSettings();
+            UpdateSortChecks();
+            CoreLog.Info("手势拖动：排序从「" + SortLabel(from) + "」切到「自定义顺序」");
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("手势拖动：切到自定义顺序失败，" + ex.Message);
+            return false;
+        }
+
+        LoadList(selectId: gesture.Id);
+        GestureList.UpdateLayout();   // 容器是懒生成的，量一次才会站出来
+
+        int index = _rows.FindIndex(r => string.Equals(r.Gesture.Id, gesture.Id, StringComparison.Ordinal));
+        if (index < 0) return false;
+        if (GestureList.ItemContainerGenerator.ContainerFromIndex(index) is not DependencyObject container) return false;
+        if (FindRowButton(container) is not { } found) return false;
+
+        button = found;
+        row = _rows[index];
+        return true;
+    }
+
+    /// <summary>在可视树里找第一个 Button（行模板的根就是那颗按钮）。</summary>
+    private static Button? FindRowButton(DependencyObject? root)
+    {
+        if (root is null) return null;
+        if (root is Button button) return button;
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            if (FindRowButton(VisualTreeHelper.GetChild(root, i)) is { } hit) return hit;
+        }
+        return null;
+    }
+
+    /// <summary>短按松手：那一颗还是普通点击（选中），这里只把计时收掉。</summary>
+    private void OnRowPressUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_dragging) return;   // 已经在拖了，鼠标在列表手里，这条抬起事件轮不到行
+        CancelPress();
+    }
+
+    /// <summary>按下之后丢了捕获（切窗口、被别的控件抢走）：别在半秒后凭空开始拖。</summary>
+    private void OnRowPressLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_dragging) return;   // 进拖动的那一下行会丢捕获（鼠标转给列表），不能当成松手
+        CancelPress();
+    }
+
+    private void CancelPress()
+    {
+        if (_pressTimer != null)
+        {
+            _pressTimer.Stop();
+            _pressTimer = null;
+        }
+        _pressButton = null;
+    }
+
+    private void OnDragMove(object sender, MouseEventArgs e)
     {
         if (_dragItem == null) return;
         if (e.LeftButton != MouseButtonState.Pressed)
@@ -1242,26 +1662,52 @@ public partial class GesturesView
             return;
         }
         var p = e.GetPosition(ListScroll);
-        if (_dropIndex < 0 && Math.Abs(p.Y - _dragStart.Y) < 4) return;   // 手抖不算拖动
+
+        // 跟手：条目跟着指针上下走。列表自动滚动时指针在视口里没动、内容动了，
+        // 得把滚动量补回去，否则条目会从指头底下溜走。
+        if (_dragShift != null)
+            _dragShift.Y = (p.Y - _dragStart.Y) + (ListScroll.VerticalOffset - _dragScrollStart);
 
         // 拖到上下边缘先滚一截：列表长的目标（全局 60 多条）不然根本拖不到头
         if (p.Y < 26) ListScroll.ScrollToVerticalOffset(Math.Max(0, ListScroll.VerticalOffset - 16));
         else if (p.Y > ListScroll.ActualHeight - 26)
             ListScroll.ScrollToVerticalOffset(ListScroll.VerticalOffset + 16);
 
-        ShowDropLine(DropIndexAt(e.GetPosition(ListScroll)));
+        ShowDropLine(DropIndexAt(p));
     }
 
-    private void OnGripUp(object sender, MouseButtonEventArgs e)
+    private void OnDragUp(object sender, MouseButtonEventArgs e)
     {
         if (_dragItem == null) return;
         FinishDrag(e.GetPosition(ListScroll));
         e.Handled = true;
     }
 
-    private void OnGripLostCapture(object sender, MouseEventArgs e)
+    private void OnDragLostCapture(object sender, MouseEventArgs e)
     {
+        /* LostMouseCapture 是冒泡事件，这是踩过的坑（v1.6.4 之前按住拖拽完全没反应）：
+         * StartDrag 把捕获从行按钮转给列表的那一瞬间，按钮"丢捕获"的那一下也会冒到这里，
+         * 于是刚立起来的拖动被当成"捕获丢了"立刻收掉 —— 看上去就是按住半天毫无反应，
+         * 只在列表顶上留一根插入线。真正的"列表自己丢了捕获"才是要收尾的那种。 */
+        if (!ReferenceEquals(e.OriginalSource, GestureList)) return;
+        if (GestureList.IsMouseCaptured) return;
         if (_dragItem != null) FinishDrag(null);
+    }
+
+    /// <summary>
+    /// 一行的顶边在列表里的 y。
+    /// 被拎起来的那一行带着 RenderTransform（已经跟着指针跑了），
+    /// 量插入位要的是它在布局里的原位，所以把位移减回去。
+    /// </summary>
+    private double RowTop(FrameworkElement container)
+    {
+        double top;
+        try { top = container.TransformToAncestor(ListScroll).Transform(new Point(0, 0)).Y; }
+        catch (InvalidOperationException) { return double.NaN; }   // 行不在可视树里（被虚拟化掉了）
+        if (_dragShift != null && container is ContentPresenter { Content: GestureRow row }
+            && ReferenceEquals(row, _dragRow))
+            top -= _dragShift.Y;
+        return top;
     }
 
     /// <summary>指针落在哪两行之间：返回"插到第几条之前"，等于行数就是插到最末尾。</summary>
@@ -1270,9 +1716,8 @@ public partial class GesturesView
         for (int i = 0; i < _rows.Count; i++)
         {
             if (GestureList.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement c) continue;
-            double top;
-            try { top = c.TransformToAncestor(ListScroll).Transform(new Point(0, 0)).Y; }
-            catch (InvalidOperationException) { continue; }   // 行不在可视树里（被虚拟化掉了）
+            double top = RowTop(c);
+            if (double.IsNaN(top)) continue;
             if (p.Y < top + c.ActualHeight / 2) return i;
         }
         return _rows.Count;
@@ -1291,12 +1736,8 @@ public partial class GesturesView
         double y = 0;
         if (GestureList.ItemContainerGenerator.ContainerFromIndex(probe) is FrameworkElement c)
         {
-            try
-            {
-                var corner = c.TransformToAncestor(ListScroll).Transform(new Point(0, 0));
-                y = index >= _rows.Count ? corner.Y + c.ActualHeight : corner.Y;
-            }
-            catch (InvalidOperationException) { y = 0; }
+            double top = RowTop(c);
+            if (!double.IsNaN(top)) y = index >= _rows.Count ? top + c.ActualHeight : top;
         }
 
         DropLine.Width = Math.Max(0, ListScroll.ViewportWidth - 6);
@@ -1329,14 +1770,26 @@ public partial class GesturesView
 
     private void ResetDragState()
     {
+        CancelPress();
+        if (_dragButton is { } button)
+        {
+            button.BeginAnimation(UIElement.OpacityProperty, null);   // 动画摘掉，退回 RowOpacity 那条绑定
+            button.RenderTransform = null;
+            button.Effect = null;
+        }
         _dragItem = null;
+        _dragRow = null;
+        _dragButton = null;
+        _dragShift = null;
         _dragFrom = -1;
         _dropIndex = -1;
+        _dragging = false;
         DropLine.Visibility = Visibility.Collapsed;
+        System.Windows.Input.Mouse.OverrideCursor = null;
         if (GestureList.IsMouseCaptured) GestureList.ReleaseMouseCapture();
     }
 
-    /// <summary>出图用：切到某一档排序并回报行数/手柄可见数（渲染时不动设置）。</summary>
+    /// <summary>出图用：切到某一档排序并回报行数/可拖动行数（渲染时不动设置）。</summary>
     internal string[] SetSortForRender(string mode)
     {
         _loading = true;
@@ -1352,7 +1805,7 @@ public partial class GesturesView
         {
             "排序：" + SortLabel(_sortMode),
             "这一档行数：" + _rows.Count + "（全表 " + _host!.Settings.Gestures.Count + " 条）",
-            "手柄可见：" + _rows.Count(r => r.GripVisibility == Visibility.Visible) + " 行",
+            "可拖动行：" + _rows.Count(r => r.Draggable) + " 行",
             "前四行：" + string.Join(" | ", _rows.Take(4).Select(r => r.Title)),
             // 边缘手势那一栏的账也顺手报一遍：整表导入会把四角悬停/贴边滚轮冲掉，
             // 只看全局行数是发现不了的（它们不在这一档里）。
@@ -1367,6 +1820,13 @@ public partial class GesturesView
 
     private void OnPickGesture(object sender, RoutedEventArgs e)
     {
+        /* 刚拖完放下的那一下不算点选：否则右侧编辑器会被切到这条上，
+           要是它正好是当前选中的，编辑器里没保存的改动还会被冲掉。 */
+        if (_suppressClick)
+        {
+            _suppressClick = false;
+            return;
+        }
         if ((sender as FrameworkElement)?.DataContext is not GestureRow row) return;
         _current = row.Gesture.Clone();
         LoadEditor();
@@ -1459,160 +1919,6 @@ public partial class GesturesView
         _host.SaveSettings();
     }
 
-    /// <summary>
-    /// 切换「手势作用目标」。只改一个字段：匹配哪个程序、执行前要不要切窗口
-    /// 都由 GestureService.ResolveTarget 在每次起手时现算，不用重挂钩子。
-    /// </summary>
-    private void OnTargetModeChanged(object sender, RoutedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        var o = _host.Settings.GestureOptions;
-        o.TargetMode = TargetPointerRadio.IsChecked == true
-            ? GestureOptions.TargetPointer
-            : GestureOptions.TargetActive;
-        UpdateTargetModeHint(o);
-        _host.SaveSettings();
-    }
-
-    /// <summary>右边的说明随选择变：两种模式最直观的差别就是"会不会把窗口切到前面"。</summary>
-    private void UpdateTargetModeHint(GestureOptions o)
-    {
-        TargetModeHint.Text = o.UsesPointerTarget
-            ? Loc.T("动作发给指针底下的那个程序，执行前把它切到前面。")
-            : Loc.T("动作只发给当前的活动窗口，不切换窗口。");
-    }
-
-    private void OnTrailOpacityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_loading || _host == null) return;
-        var o = _host.Settings.GestureOptions;
-        o.TrailOpacity = Math.Clamp(e.NewValue, 0.2, 1.0);
-        TrailOpacityText.Text = $"{Math.Round(o.TrailOpacity * 100):0}%";
-        _host.SaveSettings();
-    }
-
-    // ─────────────────── WGestures 2 的手势外观偏好 ───────────────────
-
-    /// <summary>把 WG2 那套外观偏好灌进控件（只读配置，不触发保存）。</summary>
-    private void SyncWg2Controls(GestureOptions o)
-    {
-        PathBox.IsChecked = o.ShowPath;
-        PathBorderBox.IsChecked = o.ShowPathBorder;
-        GestureNameBox.IsChecked = o.ShowGestureName;
-        FadeOutBox.IsChecked = o.FadeOutExecuted;
-        LabelBorderBox.IsChecked = o.ShowLabelBorder;
-        TimeoutIndicatorBox.IsChecked = o.ShowStartTimeoutIndicator;
-
-        PathWidthSlider.Value = Math.Clamp(o.PathLineWidth, 1.0, 4.0);
-        PathWidthText.Text = PathWidthSlider.Value.ToString("0.0");
-        NamePosSlider.Value = Math.Clamp(o.GestureNamePos, 0.0, 1.0);
-        NamePosText.Text = $"{Math.Round(NamePosSlider.Value * 100):0}%";
-
-        UpdateWg2Swatches();
-    }
-
-    /// <summary>
-    /// 六个外观勾选共用：Tag 就是字段名。
-    /// ShowPath 是计算属性，真正的开关是 ShowTrail —— 两个一起写，
-    /// 否则老配置里 ShowTrail=false 会把刚打开的勾选又压回去。
-    /// </summary>
-    private void OnWg2ToggleChanged(object sender, RoutedEventArgs e)
-    {
-        if (_loading || _host == null || sender is not CheckBox box) return;
-        var o = _host.Settings.GestureOptions;
-        bool on = box.IsChecked == true;
-        switch (box.Tag as string)
-        {
-            case "ShowPath":
-                o.ShowPath = on;
-                o.ShowTrail = on;
-                break;
-            case "ShowPathBorder": o.ShowPathBorder = on; break;
-            case "ShowGestureName": o.ShowGestureName = on; break;
-            case "FadeOutExecuted": o.FadeOutExecuted = on; break;
-            case "ShowLabelBorder": o.ShowLabelBorder = on; break;
-            case "ShowStartTimeoutIndicator": o.ShowStartTimeoutIndicator = on; break;
-            default: return;
-        }
-        _host.SaveSettings();
-        UpdateWg2Swatches();
-    }
-
-    /// <summary>粗细与名称位置两个滑杆。</summary>
-    private void OnWg2SliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_loading || _host == null) return;
-        var o = _host.Settings.GestureOptions;
-        if (ReferenceEquals(sender, PathWidthSlider))
-        {
-            o.PathLineWidth = Math.Clamp(e.NewValue, 1.0, 4.0);
-            PathWidthText.Text = o.PathLineWidth.ToString("0.0");
-        }
-        else if (ReferenceEquals(sender, NamePosSlider))
-        {
-            o.GestureNamePos = Math.Clamp(e.NewValue, 0.0, 1.0);
-            NamePosText.Text = $"{Math.Round(o.GestureNamePos * 100):0}%";
-        }
-        else return;
-        _host.SaveSettings();
-    }
-
-    /// <summary>四个色块：轨迹（已识别 / 未识别）、手势名称（未执行 / 已执行）。</summary>
-    private void OnPickWg2Color(object sender, RoutedEventArgs e)
-    {
-        if (_loading || _host == null || sender is not FrameworkElement el) return;
-        var o = _host.Settings.GestureOptions;
-        string tag = el.Tag as string ?? "";
-        string current = tag switch
-        {
-            "pathRecognized" => o.PathColorRecognized,
-            "pathNormal" => o.PathColorNormal,
-            "labelNormal" => o.LabelColorNormal,
-            "labelExecuted" => o.LabelColorExecuted,
-            _ => "",
-        };
-        if (current.Length == 0) return;
-
-        var before = Wg2Color.Parse(current, Colors.Magenta);
-        /* ColorDialog 没有 alpha：先按不透明色挑，挑完把原 alpha 贴回去。
-           WG2 的默认色本来就是「同一个紫、两种透明度」，这么处理正好保形。 */
-        var picked = PickColor($"#{before.A:X2}{before.R:X2}{before.G:X2}{before.B:X2}");
-        if (picked == null) return;
-        var after = Color.FromArgb(before.A, picked.Value.R, picked.Value.G, picked.Value.B);
-        string hex = Wg2Color.Format(after);
-        switch (tag)
-        {
-            case "pathRecognized": o.PathColorRecognized = hex; break;
-            case "pathNormal": o.PathColorNormal = hex; break;
-            case "labelNormal": o.LabelColorNormal = hex; break;
-            case "labelExecuted": o.LabelColorExecuted = hex; break;
-            default: return;
-        }
-        _host.SaveSettings();
-        UpdateWg2Swatches();
-    }
-
-    private void UpdateWg2Swatches()
-    {
-        if (_host == null) return;
-        var o = _host.Settings.GestureOptions;
-        SetRgbaSwatch(PathRecognizedSwatch, o.PathColorRecognized);
-        SetRgbaSwatch(PathNormalSwatch, o.PathColorNormal);
-        SetRgbaSwatch(LabelNormalSwatch, o.LabelColorNormal);
-        SetRgbaSwatch(LabelExecutedSwatch, o.LabelColorExecuted);
-    }
-
-    /// <summary>
-    /// 色块按原色的 alpha 画，但垫一个下限（0x66）：WG2 出厂的未识别色是 0x30 的 alpha，
-    /// 原样画几乎看不见，纯不透明又会把「淡」这个信息丢掉。原始 #RRGGBBAA 放 ToolTip。
-    /// </summary>
-    private static void SetRgbaSwatch(Border swatch, string hex)
-    {
-        var c = Wg2Color.Parse(hex, Colors.Magenta);
-        byte a = Math.Max(c.A, (byte)0x66);
-        swatch.Background = new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B));
-        swatch.ToolTip = hex.ToUpperInvariant();
-    }
 
     // ─────────────────── WGestures 2 的「允许的触发方式」 ───────────────────
 
@@ -1708,17 +2014,33 @@ public partial class GesturesView
         }
     }
 
-    /// <summary>出图用：把「外观 / 参数」两块展开（默认都收起），拍完再收回。</summary>
-    internal void SetPreferencesExpandedForRender(bool expanded)
-    {
-        AppearanceExpander.IsExpanded = expanded;
-        ParamExpander.IsExpanded = expanded;
-        if (!expanded) return;
-        UpdateLayout();
-        AppearanceExpander.UpdateLayout();
-        ParamExpander.UpdateLayout();
-    }
+    /// <summary>
+    /// 齿轮按钮：外观 / 参数 / 开关快捷键都在这个窗里。改动即时生效，关窗即可。
+    /// </summary>
+    /// <summary>当前开着的「手势设置」窗（同一时间只留一个）。</summary>
+    private GestureSettingsWindow? _settingsWindow;
 
+    private void OnOpenGestureSettings(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        /* 用 Show 而不是 ShowDialog：模态的时候点主窗只会"叮"一声，窗还赖在那儿；
+         * 用户要的是"点别处就关"。非模态之后，GestureSettingsWindow 自己在
+         * 失去焦点时判断是不是回到了主窗，是就关掉。 */
+        if (_settingsWindow is { IsVisible: true } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        var dlg = new GestureSettingsWindow(_host) { Owner = Window.GetWindow(this) };
+        _settingsWindow = dlg;
+        dlg.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_settingsWindow, dlg)) _settingsWindow = null;
+        };
+        dlg.Show();
+    }
     /// <summary>
     /// 出图用：把第一个应用程序作用目标标成「已禁用」，拍一张确认胶囊、灰标题、浅红底都画出来了。
     /// 只改内存不落盘，拍完用 false 收回去。
@@ -1776,6 +2098,68 @@ public partial class GesturesView
             "功能：" + (SelectedValue(ActionBox) ?? ""),
             "参数框：" + (ArgBox.Visibility == Visibility.Visible ? "显示" : "隐藏"),
             "下拉项：" + string.Join(" | ", ActionBox.Items.OfType<Choice>().Select(c => c.Text)),
+        };
+    }
+
+    /// <summary>
+    /// 出图：造一条「多步手势」并选中，让步骤清单（StepsRow）露出来。
+    /// 只在 --render 的临时数据目录里跑，写完不存盘，也不会进用户的设置。
+    /// </summary>
+    internal string[] AddStepsSampleForRender()
+    {
+        if (_host == null) return Array.Empty<string>();
+
+        var g = _host.Settings.Gestures.FirstOrDefault(x => x.Id == "rendersteps");
+        if (g == null)
+        {
+            var raw = new List<GestureMath.Pt>
+            {
+                new(0, 0), new(2, -12), new(9, -28), new(20, -46),
+            };
+            g = new MouseGesture
+            {
+                Id = "rendersteps",
+                Name = "画一笔再上滚",
+                Kind = "steps",
+                Button = "right",
+                Action = "winMinimize",
+                Steps =
+                {
+                    new GestureStep
+                    {
+                        Kind = "stroke",
+                        Path = GestureMath.ToFlat(GestureMath.Normalize(raw)),
+                    },
+                    new GestureStep { Kind = "scroll", Wheel = -1 },
+                },
+            };
+            _host.Settings.Gestures.Add(g);
+        }
+
+        LoadList(g.Id);
+        _current = g.Clone();
+        LoadEditor();
+        UpdateLayout();
+
+        /* 步骤清单在编辑卡的下半截，不滚过去的话截出来只有名称和触发方式。 */
+        try
+        {
+            var sv = FindAncestorScroll(StepsRow);
+            if (sv != null)
+            {
+                var pos = StepsRow.TransformToAncestor(sv).Transform(new Point(0, 0));
+                sv.ScrollToVerticalOffset(sv.VerticalOffset + pos.Y - 320);
+                sv.UpdateLayout();
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "出图：滚动到步骤清单"); }
+
+        return new[]
+        {
+            "手势：" + _current.Name,
+            "触发方式：" + (SelectedValue(KindBox) ?? ""),
+            "步骤数：" + _steps.Count.ToString(),
+            "步骤：" + string.Join(" | ", _steps.Select(s => s.Title())),
         };
     }
 
@@ -1875,130 +2259,6 @@ public partial class GesturesView
         _host.Notify(Loc.F("已删除作用目标「{0}」", row.Title));
     }
 
-    private void OnOptionsTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        var o = _host.Settings.GestureOptions;
-        if (int.TryParse(MinMoveBox.Text, out int min) && min is >= 4 and <= 400) o.MinMove = min;
-        if (int.TryParse(StartTimeoutBox.Text, out int timeout) && timeout is >= 100 and <= 3000) o.StartTimeoutMs = timeout;
-        if (double.TryParse(ThresholdBox.Text, out double th) && th is >= 0.005 and <= 0.3)
-            o.WgThreshold = th;
-        if (int.TryParse(ActivationBox.Text, out int act) && act is >= 4 and <= 200) o.ActivationDistance = act;
-        if (double.TryParse(TurnBox.Text, out double turn) && turn is >= 0 and <= 1) o.TurnTolerance = turn;
-        _host.SaveSettings();
-    }
-
-    private void OnCaptureToggleHotkey(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        KeyCaptureWindow.Capture(result =>
-        {
-            if (string.IsNullOrWhiteSpace(result.Combo)) return;
-            _host.Settings.GestureOptions.ToggleHotkey = result.Combo;
-            _host.SaveSettings();
-            ToggleHotkeyBox.Text = result.Combo;
-            if (TryFindResource("Brush.TextPrimary") is Brush hotkeyBrush)
-                ToggleHotkeyBox.Foreground = hotkeyBrush;
-            _host.Gestures.ApplyHotkey();
-            _host.Notify(Loc.F("鼠标手势开关快捷键已设为 {0}", result.Combo));
-        }, title: Loc.T("按下鼠标手势总开关快捷键"));
-    }
-
-    // ───────────────────────── 轨迹颜色 ─────────────────────────
-
-    private void OnPickTrailColor(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        string key = (sender as FrameworkElement)?.Tag as string ?? "uniform";
-        var o = _host.Settings.GestureOptions;
-        string initial = key == "uniform" ? o.TrailColor : o.TrailColorFor(key);
-        var picked = PickColor(initial);
-        if (picked == null) return;
-
-        string hex = $"#{picked.Value.R:X2}{picked.Value.G:X2}{picked.Value.B:X2}";
-        if (key == "uniform")
-        {
-            /* 统一色就是“所有键都回落到它”：清掉分键覆盖，
-             * 否则改了统一色看起来没反应。 */
-            o.TrailColor = hex;
-            o.ButtonTrailColors ??= new Dictionary<string, string>();
-            o.ButtonTrailColors.Clear();
-        }
-        else
-        {
-            o.ButtonTrailColors ??= new Dictionary<string, string>();
-            o.ButtonTrailColors[key] = hex;
-        }
-        _host.SaveSettings();
-        UpdateColorSwatches();
-    }
-
-    private void OnResetTrailColors(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        _host.Settings.GestureOptions.ButtonTrailColors ??= new Dictionary<string, string>();
-        _host.Settings.GestureOptions.ButtonTrailColors.Clear();
-        _host.SaveSettings();
-        UpdateColorSwatches();
-    }
-
-    private void UpdateColorSwatches()
-    {
-        if (_host == null) return;
-        var o = _host.Settings.GestureOptions;
-
-        /* 没配分键颜色时，画出来的是 WG2 的「未识别」色（RGBA），
-           色块也跟着显示它 —— 老版本这里显示的是统一色，而那个色已经不再参与绘制。 */
-        SetButtonSwatch(RightSwatch, o, "right");
-        SetButtonSwatch(MiddleSwatch, o, "middle");
-        SetButtonSwatch(X1Swatch, o, "x1");
-        SetButtonSwatch(X2Swatch, o, "x2");
-        SetButtonSwatch(LeftSwatch, o, "left");
-    }
-
-    private static void SetButtonSwatch(Border swatch, GestureOptions o, string key)
-    {
-        if (HasOverride(o, key))
-        {
-            SetSwatch(swatch, o.TrailColorFor(key), true);
-            return;
-        }
-        SetRgbaSwatch(swatch, o.PathColorNormal);
-        /* 淡到看得出是「跟随」，不是真的配了这色。 */
-        swatch.Opacity = 0.28;
-        swatch.ToolTip = Loc.T("未单独配色，跟随「未识别」色");
-    }
-
-    private static bool HasOverride(GestureOptions o, string key) =>
-        o.ButtonTrailColors != null &&
-        o.ButtonTrailColors.TryGetValue(key, out string? value) &&
-        !string.IsNullOrWhiteSpace(value);
-
-    private static void SetSwatch(Border swatch, string color, bool custom)
-    {
-        try
-        {
-            if (new BrushConverter().ConvertFromString(color) is Brush brush)
-                swatch.Background = brush;
-        }
-        catch { /* 配置里写了坏颜色就当默认色，不要拦住整个页面 */ }
-        swatch.Opacity = custom ? 1 : 0.45;
-        swatch.ToolTip = color;
-    }
-
-    private static System.Drawing.Color? PickColor(string initial)
-    {
-        System.Drawing.Color start;
-        try { start = System.Drawing.ColorTranslator.FromHtml(initial); }
-        catch { start = System.Drawing.Color.FromArgb(0x3B, 0x82, 0xF6); }
-
-        using var dialog = new System.Windows.Forms.ColorDialog
-        {
-            FullOpen = true,
-            Color = start,
-        };
-        return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK ? dialog.Color : null;
-    }
 
     // ───────────────────────── 编辑 ─────────────────────────
 
@@ -2028,13 +2288,15 @@ public partial class GesturesView
         var g = _current;
         g.Name = NameBox.Text.Trim();
         g.Kind = SelectedTag(KindBox) ?? "stroke";
+        /* 多步序列跟着保存 —— 它是这条手势的主内容，不是附加参数。 */
+        g.Steps = _steps.Select(s => s.Clone()).ToList();
         bool buttonless = g.Kind is "hotcorner" or "edgewheel";
         g.Button = buttonless ? "" : (SelectedValue(ButtonBox) ?? "");
         g.Chord = buttonless ? "" : (SelectedTag(ChordBox) ?? "");
         if (string.Equals(g.Chord, g.Button, StringComparison.OrdinalIgnoreCase)) g.Chord = "";
         g.Wheel = (g.Kind is "wheel" or "edgewheel") && int.TryParse(SelectedValue(WheelBox), out int w) ? w : 0;
         g.Corner = (g.Kind is "corner" or "wheel" or "hotcorner") && int.TryParse(SelectedValue(CornerBox), out int c) ? c : 0;
-        g.Edge = g.Kind == "edgewheel" && int.TryParse(SelectedValue(EdgeBox), out int edge) ? edge : 0;
+        g.Edge = g.Kind is "edgewheel" or "edge" && int.TryParse(SelectedValue(EdgeBox), out int edge) ? edge : 0;
         g.Enabled = GestureEnabledBox.IsChecked == true;
         g.Immediate = g.Kind == "stroke" && ImmediateBox.IsChecked == true;
         g.HideLabel = HideLabelBox.IsChecked == true;
@@ -2058,7 +2320,7 @@ public partial class GesturesView
             g.Arg = ArgBox.Text;
         else if (actionInfo?.Hidden != true)
             g.Arg = "";
-        /* 隐藏的兼容动作（打开网址 / 运行程序）目标就写在 Arg 里，参数框本来不显示，
+        /* 隐藏的兼容动作（如旧 id openFolder）目标就写在 Arg 里，参数框本来不显示，
          * 这里保留原值 —— 否则保存一次就把命令清空了。 */
         /* 限定程序不再在手势里选：由左边选中的「作用目标」决定，
          * 编辑时原样保留，避免把应用手势改成全局手势。 */
@@ -2087,6 +2349,16 @@ public partial class GesturesView
         if (g.Kind == "edgewheel" && g.Edge is < 1 or > 4)
         {
             _host.Notify(Loc.T("贴边滚轮要选一条屏幕边缘"));
+            return;
+        }
+        if (g.Kind == "steps" && g.Steps.Count < 2)
+        {
+            _host.Notify(Loc.T("多步手势至少要两步 —— 先往下面的清单里加两步"));
+            return;
+        }
+        if (g.Kind == "steps" && string.IsNullOrEmpty(g.Button))
+        {
+            _host.Notify(Loc.T("多步手势要选一个起始键（按住它一路做完）"));
             return;
         }
         if (g.Kind is "stroke" or "corner" && string.IsNullOrEmpty(g.Button))
@@ -2199,6 +2471,11 @@ public partial class GesturesView
         if (string.IsNullOrWhiteSpace(candidate.AppPath) && _scope != EdgeTargetKey)
             candidate.AppPath = _scope;
 
+        /* 创建阶段美化（任务四）：录到的原始像素轨迹进 RawPath，Path 换成规整后的模板。
+         * 语义守门在 StrokeBeautifier 里做 —— 美化完如果认不出是同一个手势，就保留原样并写日志。 */
+        try { GestureBeauty.Apply(candidate, recorded.Raw, _host.Settings.GestureOptions, "录制"); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "手势录制美化"); }
+
         /* 先把录到的笔画放进编辑器，保证用户立刻能看到这条轨迹；
          * 重复只阻止保存，不再把整笔丢掉（否则看起来像“录完是空的”）。 */
         _current = candidate;
@@ -2224,32 +2501,274 @@ public partial class GesturesView
         OnRecordClick(sender, e);
     }
 
+    // ───────────────────────── 多步手势（v1.5.0） ─────────────────────────
+
+    /// <summary>刷新「步骤」清单；每一步都能单独删掉。</summary>
+    private void RefreshSteps()
+    {
+        var rows = new List<GestureStepRow>(_steps.Count);
+        for (int i = 0; i < _steps.Count; i++)
+            rows.Add(new GestureStepRow((i + 1) + ".", _steps[i].Title(), _steps[i]));
+
+        StepList.ItemsSource = rows;
+        StepsEmpty.Visibility = _steps.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        StepsHint.Text = Loc.F("{0} / {1} 步", _steps.Count, GestureStep.MaxSteps);
+    }
+
+    private void AddStep(GestureStep step)
+    {
+        if (_steps.Count >= GestureStep.MaxSteps)
+        {
+            _host?.Notify(Loc.F("最多 {0} 步", GestureStep.MaxSteps));
+            return;
+        }
+        _steps.Add(step);
+        RefreshSteps();
+    }
+
+    private void OnRemoveStep(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not GestureStep step) return;
+        _steps.Remove(step);
+        RefreshSteps();
+    }
+
+    private void OnClearSteps(object sender, RoutedEventArgs e)
+    {
+        _steps.Clear();
+        RefreshSteps();
+    }
+
+    /// <summary>画一笔：复用主录制窗口，只取它的轨迹当一步。</summary>
+    private void OnAddStrokeStep(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var dlg = new UI.Windows.GestureRecordWindow
+        {
+            Owner = Window.GetWindow(this),
+            Options = _host.Settings.GestureOptions,
+        };
+
+        bool accepted;
+        _host.Gestures.Suspended = true;
+        try { accepted = dlg.ShowDialog() == true; }
+        finally { _host.Gestures.Suspended = false; }
+
+        if (!accepted || dlg.Result == null) return;
+        var path = dlg.Result.Path;
+        if (path == null || path.Count < 4)
+        {
+            _host.Notify(Loc.T("这次没有录到笔画，请重新录一次"));
+            return;
+        }
+
+        AddStep(new GestureStep { Kind = "stroke", Path = new List<int>(path) });
+    }
+
+    /// <summary>按一组键：用按键捕获窗拿 ctrl+a 这种写法。</summary>
+    private void OnAddKeyStep(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        UI.Windows.KeyCaptureWindow.Capture(result =>
+        {
+            if (string.IsNullOrWhiteSpace(result.Combo)) return;
+            AddStep(new GestureStep
+            {
+                Kind = "key",
+                Key = CustomKeyRunner.Canonical(result.Combo)
+            });
+        }, title: Loc.T("录一步按键"));
+    }
+
+    private void OnAddWheelStep(object sender, RoutedEventArgs e)
+    {
+        int wheel = int.TryParse(SelectedValue(StepWheelBox), out int w) ? w : -1;
+        AddStep(new GestureStep { Kind = "scroll", Wheel = wheel });
+    }
+
+    private void OnAddCornerStep(object sender, RoutedEventArgs e)
+    {
+        int corner = int.TryParse(SelectedValue(StepCornerBox), out int c) ? c : 1;
+        if (corner == 0) corner = 1;
+        AddStep(new GestureStep { Kind = "corner", Corner = corner });
+    }
+
+    private void OnAddEdgeStep(object sender, RoutedEventArgs e)
+    {
+        int edge = int.TryParse(SelectedValue(StepEdgeBox), out int value) ? value : 2;
+        if (edge == 0) edge = 2;
+        AddStep(new GestureStep { Kind = "edge", Edge = edge });
+    }
+
+    /// <summary>
+    /// 回放：就在上面的「笔画」框里把这一笔重画一遍，只看不执行。
+    ///
+    /// 以前是往屏幕上糊一层覆盖层（GestureService.Replay），画在光标旁边、还要等它收 ——
+    /// 用户看完得先满屏找它在哪。现在底下的静态线压暗，回放线在原位一笔一笔走，笔尖带个小圆点，
+    /// 位置永远是"这条手势本来待的地方"。
+    ///
+    /// 节奏上不再"一帧一个点"：那样点密的笔画会快得像闪一下，看不清走向。
+    /// 改成按时间推进、整段放慢到原来的 1.8 倍（约 0.55 倍速），
+    /// 进度过一条三次曲线 —— 起笔慢、中间快、收笔再慢，最后淡出，看着才像在画而不是在跳。
+    /// </summary>
+    private void OnReplayClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        var pts = BuildPreviewPoints();
+        if (pts == null || pts.Count < 2)
+        {
+            _host.Notify(Loc.T("这条手势还没有笔画可以回放"));
+            return;
+        }
+
+        StopReplay();
+
+        _replayPoints = pts;
+        _replayIndex = 0;
+        ReplayLine.Points.Clear();
+        ReplayLine.Visibility = Visibility.Visible;
+        ReplayHead.Visibility = Visibility.Visible;
+        PreviewLine.Opacity = 0.22;
+
+        /* 笔尖先站在起点上，不然第一帧是空框里凭空冒出来一个点。 */
+        Point first = pts[0];
+        Canvas.SetLeft(ReplayHead, first.X - ReplayHead.Width / 2);
+        Canvas.SetTop(ReplayHead, first.Y - ReplayHead.Height / 2);
+
+        /* 先按老公式算"每点多少毫秒"，再乘 1.8 得总时长：
+         * 点多的笔画本来就该慢一点，所以这里仍然按点数伸缩，只是整体拉长。 */
+        int perPoint = Math.Clamp(1200 / Math.Max(1, pts.Count), 6, 24);
+        _replayTotalMs = Math.Clamp((int)Math.Round(perPoint * (double)pts.Count * 1.8), 900, 3200);
+
+        _replayClock = System.Diagnostics.Stopwatch.StartNew();
+        /* 16ms 一帧、按经过的时间算画到第几个点，卡一下也不会把整体拖长。 */
+        _replayTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+        _replayTimer.Tick += OnReplayTick;
+        _replayTimer.Start();
+    }
+
+    private void OnReplayTick(object? sender, EventArgs e)
+    {
+        double elapsed = _replayClock?.Elapsed.TotalMilliseconds ?? _replayTotalMs;
+        double progress = Math.Clamp(elapsed / Math.Max(1, _replayTotalMs), 0.0, 1.0);
+
+        /* 三次缓入缓出：0.5 之前加速，之后减速，两头都慢。
+           进度 → 目标点数，缺几个就补几个，所以点密的那段自动"每帧多个点"。 */
+        double eased = progress < 0.5
+            ? 4 * progress * progress * progress
+            : 1 - Math.Pow(-2 * progress + 2, 3) / 2;
+        int target = Math.Clamp((int)Math.Round(eased * _replayPoints.Count), 0, _replayPoints.Count);
+        while (_replayIndex < target) AddReplayPoint(_replayPoints[_replayIndex++]);
+
+        if (progress >= 1.0) FinishReplay();
+    }
+
+    private void AddReplayPoint(Point p)
+    {
+        ReplayLine.Points.Add(p);
+        Canvas.SetLeft(ReplayHead, p.X - ReplayHead.Width / 2);
+        Canvas.SetTop(ReplayHead, p.Y - ReplayHead.Height / 2);
+    }
+
+    /// <summary>画完了：停表，让线和笔尖淡掉，淡完再收干净。</summary>
+    private void FinishReplay()
+    {
+        if (_replayTimer != null)
+        {
+            _replayTimer.Stop();
+            _replayTimer.Tick -= OnReplayTick;
+            _replayTimer = null;
+        }
+        _replayClock?.Stop();
+        _replayClock = null;
+
+        /* 收尾用 session 认领：淡出的这 0.26 秒里用户又点了回放 / 换了手势，
+         * session 就变了，这个回调什么也不做，不会把新的一次掐掉。 */
+        int session = _replaySession;
+        var fade = new DoubleAnimation(1.0, 0.0, TimeSpan.FromMilliseconds(260))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        fade.Completed += (_, _) =>
+        {
+            if (session == _replaySession) StopReplay();
+        };
+        ReplayLine.BeginAnimation(UIElement.OpacityProperty, fade);
+        ReplayHead.BeginAnimation(UIElement.OpacityProperty, fade);
+    }
+
+    /// <summary>收掉回放：停定时器、清线、静态线恢复不透明。切手势 / 改形状 / 重画预览都会先调它。</summary>
+    private void StopReplay()
+    {
+        _replaySession++;
+        if (_replayTimer != null)
+        {
+            _replayTimer.Stop();
+            _replayTimer.Tick -= OnReplayTick;
+            _replayTimer = null;
+        }
+        _replayClock?.Stop();
+        _replayClock = null;
+        _replayTotalMs = 1;
+
+        /* 淡出是动画占着 Opacity 打的，不清掉的话下一次回放会从 0 开始（等于看不见）。 */
+        ReplayLine.BeginAnimation(UIElement.OpacityProperty, null);
+        ReplayHead.BeginAnimation(UIElement.OpacityProperty, null);
+        ReplayLine.Opacity = 1.0;
+        ReplayHead.Opacity = 1.0;
+
+        _replayPoints = new List<Point>();
+        _replayIndex = 0;
+        ReplayLine.Points.Clear();
+        ReplayLine.Visibility = Visibility.Collapsed;
+        ReplayHead.Visibility = Visibility.Collapsed;
+        PreviewLine.Opacity = 1.0;
+    }
+
     // ───────────────────────── 预览 ─────────────────────────
 
     private void DrawPreview()
     {
+        StopReplay();
         PreviewLine.Points.Clear();
         PatternBadge.Text = "";
+        /* 状态文字与两颗按钮要跟着每一笔走，包括"还没画出形状"的时候（那时它们是隐藏的）。 */
+        UpdateBeautyStatus();
 
-        /* 箭头退休（5.13）：识别只看形状，方向串不再是手势的"样子"，
-         * 画成一串箭头只会让人以为还要照着方向串去画。没轨迹就直说没录过。 */
-        if (!_current.HasPath)
-        {
-            PatternBadge.FontSize = 13;
-            PatternBadge.FontWeight = FontWeights.Normal;
-            if (TryFindResource("Brush.TextTertiary") is Brush tertiary)
-                PatternBadge.Foreground = tertiary;
-            PatternBadge.Text = Loc.T("还没有笔画：点「录制」画一笔，或者从别的软件导入一条。");
-            return;
-        }
-
+        /* 没录过就什么都不画：框里空着，下面那颗「按住鼠标键画一笔（重新录制）」
+         * 已经把下一步说清楚了，再叠一行灰字只是噪音。 */
         _current.EnsurePattern();
+        var pts = BuildPreviewPoints();
+        if (pts == null) return;
+
+        foreach (var p in pts) PreviewLine.Points.Add(p);
+    }
+
+    /// <summary>
+    /// 把这一笔归一化到预览框里（居中、四周留 14px）。没笔画时返回 null。
+    /// 静态预览和回放动画共用这一份换算 —— 两边画出来必须是同一条线。
+    /// </summary>
+    private List<Point>? BuildPreviewPoints()
+    {
+        if (!_current.HasPath) return null;
 
         double w = PreviewCanvas.ActualWidth > 10 ? PreviewCanvas.ActualWidth : 340;
         double h = PreviewCanvas.ActualHeight > 10 ? PreviewCanvas.ActualHeight : 118;
         const double pad = 14;
 
-        var pts = GestureMath.Normalize(_current.Points());
+        /* 预览 / 回放画的是"存下来之后会是什么样"：有美化模板就是模板本身，
+         * 没有再退回校正后的那一笔 —— 用户在详情里看到的就是识别时用的形状，
+         * 不会出现"预览是斜的、实际按竖线认"的错位。 */
+        var pts = _current.HasBeauty
+            ? GestureMath.Normalize(_current.BeautyPoints())
+            : GestureMath.Normalize(
+                InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(_current.Points()));
+        if (pts.Count < 2) return null;
+
         double minX = pts.Min(p => p.X), maxX = pts.Max(p => p.X);
         double minY = pts.Min(p => p.Y), maxY = pts.Max(p => p.Y);
         double spanX = Math.Max(1, maxX - minX), spanY = Math.Max(1, maxY - minY);
@@ -2257,8 +2776,79 @@ public partial class GesturesView
         // 居中：直线笔画也不会贴着左边画
         double offX = (w - spanX * scale) / 2, offY = (h - spanY * scale) / 2;
 
+        var list = new List<Point>(pts.Count);
         foreach (var p in pts)
-            PreviewLine.Points.Add(new Point(offX + (p.X - minX) * scale, offY + (p.Y - minY) * scale));
+            list.Add(new Point(offX + (p.X - minX) * scale, offY + (p.Y - minY) * scale));
+        return list;
+    }
+
+    // ───────────────────────── 美化（任务四） ─────────────────────────
+
+    /// <summary>
+    /// 美化状态文字 + 「重新美化 / 恢复原始轨迹」两颗按钮的可用性。
+    /// 只对"笔画"类手势有意义；滚轮 / 角落 / 贴边这些没有轨迹，整块藏起来。
+    /// </summary>
+    private void UpdateBeautyStatus()
+    {
+        bool stroke = _current.Kind == "stroke" && _current.HasPath;
+        BeautyStatus.Visibility = stroke ? Visibility.Visible : Visibility.Collapsed;
+        RebuildBeautyButton.Visibility = stroke ? Visibility.Visible : Visibility.Collapsed;
+        UseRawButton.Visibility = stroke && _current.HasRaw ? Visibility.Visible : Visibility.Collapsed;
+        if (!stroke)
+        {
+            BeautyStatus.Text = "";
+            return;
+        }
+
+        string state = GestureBeauty.Describe(_current);
+        BeautyStatus.Text = _host != null && !_host.Settings.GestureOptions.BeautifyOnCreate
+            ? Loc.F("模板：{0}（创建时美化已关闭）", state)
+            : Loc.F("模板：{0}", state);
+    }
+
+    /// <summary>
+    /// 按当前强度把编辑器里这一笔重新整理一遍（原始轨迹优先，没有就用现在的 Path）。
+    /// 只改编辑器里的副本 —— 用户点保存才落盘；没能通过语义校验就保留原样并说清楚。
+    /// </summary>
+    private void OnRebuildBeautyClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        if (!_current.HasPath)
+        {
+            _host.Notify(Loc.T("这条手势还没有笔画，先录一笔"));
+            return;
+        }
+
+        var result = GestureBeauty.Rebuild(_current, _host.Settings.GestureOptions, "手动重新美化");
+        if (result == null || !result.Beautified)
+        {
+            _host.Notify(Loc.T("这一笔整理后会认成别的手势，已保留原始轨迹"));
+        }
+        else if (result.Fallback)
+        {
+            _host.Notify(Loc.F("已按「{0}」档重新整理（原档位过不了语义校验），保存后生效",
+                StrokeBeautifier.DisplayName(result.UsedLevel)));
+        }
+        else
+        {
+            _host.Notify(Loc.T("已重新整理成标准图形，保存后生效"));
+        }
+
+        DrawPreview();
+    }
+
+    /// <summary>「恢复原始轨迹」：把存档的原始笔画写回 Path，清掉美化模板。</summary>
+    private void OnUseRawClick(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        if (!GestureBeauty.UseRaw(_current))
+        {
+            _host.Notify(Loc.T("这条手势没有可恢复的原始轨迹"));
+            return;
+        }
+
+        DrawPreview();
+        _host.Notify(Loc.T("已恢复录制时的原始轨迹，保存后生效"));
     }
 
     // ───────────────────────── 小工具 ─────────────────────────
@@ -2287,15 +2877,23 @@ public partial class GesturesView
     }
 
     /// <summary>
-    /// 手势列表的一行。<see cref="GripVisibility"/> 决定最左边那根拖动手柄露不露出来
+    /// 手势列表的一行。<see cref="Draggable"/> 决定这一行能不能长按拖动
     /// （只有「自定义顺序」+ 没在筛选时才给拖）。
     /// </summary>
+    /// <summary>「步骤」清单的一行：序号 + 人话 + 原对象（删除按引用摘）。</summary>
+    private sealed record GestureStepRow(string Index, string Title, GestureStep Step);
+
     private sealed record GestureRow(
         MouseGesture Gesture, string Title, string Subtitle, string Badge, string Glyph,
         PointCollection? IconPoints, ImageSource? EdgeIcon,
         Visibility GlyphVisibility, Visibility StrokeVisibility, Visibility EdgeIconVisibility,
-        Visibility GripVisibility,
-        double RowOpacity, string StateText, Visibility StateVisibility);
+        /* 这一行现在能不能拖（自定义顺序 + 没在筛）。没有手柄了，拖动靠"按住 2 秒"。 */
+        bool Draggable,
+        double RowOpacity, string StateText, Visibility StateVisibility)
+    {
+        /// <summary>能拖的行给一句提示，让"按住两秒"这件事有地方说。</summary>
+        public string? DragTooltip => Draggable ? Loc.T("按住这条往上/下拖，就能调整它的顺序") : null;
+    }
 
     /// <summary>
     /// 左侧「作用目标」的一行。四类共用一个类型：
@@ -2311,8 +2909,10 @@ public partial class GesturesView
         public string Tooltip { get; init; } = "";
         public bool Selected { get; init; }
         public string ToggleText { get; init; } = "";
+        public string ToggleGlyph { get; init; } = "";
         public string ToggleTooltip { get; init; } = "";
         public Visibility ToggleVisibility { get; init; } = Visibility.Collapsed;
+        public Visibility MenuVisibility { get; init; } = Visibility.Collapsed;
         public string DeleteTooltip { get; init; } = "";
         public Visibility DeleteVisibility { get; init; } = Visibility.Collapsed;
         public bool Disabled { get; init; }

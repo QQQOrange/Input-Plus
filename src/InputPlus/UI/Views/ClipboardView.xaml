@@ -53,10 +53,15 @@
                                    TextWrapping="Wrap" />
                     </ScrollViewer>
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                        <Button Content="{loc:T '复制'}" Style="{StaticResource Button.Primary}" Padding="12,5"
-                                Click="OnCopy1" />
-                        <Button Content="{loc:T '清空'}" Style="{StaticResource Button.Ghost}" Padding="12,5"
-                                Margin="6,0,0,0" Click="OnClear1" />
+                        <!-- 图标化（m01050）：两张卡片各占一半宽度，"复制""清空"四颗文字按钮把卡片撑得很挤，
+                             换成字形后同一行还能多放一截内容预览。 -->
+                        <Button Content="&#xE8C8;" Style="{StaticResource Button.Icon}" Click="OnCopy1"
+                                AutomationProperties.Name="{loc:T '复制'}"
+                                ToolTip="{loc:T '复制这一格的内容'}" />
+                        <Button Content="&#xE74D;" Style="{StaticResource Button.Icon}" Click="OnClear1"
+                                Margin="4,0,0,0" Foreground="{DynamicResource Brush.Danger}"
+                                AutomationProperties.Name="{loc:T '清空'}"
+                                ToolTip="{loc:T '清空这一格'}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -68,10 +73,15 @@
                                    TextWrapping="Wrap" />
                     </ScrollViewer>
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                        <Button Content="{loc:T '复制'}" Style="{StaticResource Button.Primary}" Padding="12,5"
-                                Click="OnCopy2" />
-                        <Button Content="{loc:T '清空'}" Style="{StaticResource Button.Ghost}" Padding="12,5"
-                                Margin="6,0,0,0" Click="OnClear2" />
+                        <!-- 图标化（m01050）：两张卡片各占一半宽度，"复制""清空"四颗文字按钮把卡片撑得很挤，
+                             换成字形后同一行还能多放一截内容预览。 -->
+                        <Button Content="&#xE8C8;" Style="{StaticResource Button.Icon}" Click="OnCopy2"
+                                AutomationProperties.Name="{loc:T '复制'}"
+                                ToolTip="{loc:T '复制这一格的内容'}" />
+                        <Button Content="&#xE74D;" Style="{StaticResource Button.Icon}" Click="OnClear2"
+                                Margin="4,0,0,0" Foreground="{DynamicResource Brush.Danger}"
+                                AutomationProperties.Name="{loc:T '清空'}"
+                                ToolTip="{loc:T '清空这一格'}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -85,8 +95,10 @@
                 </Grid.RowDefinitions>
                 <Grid Grid.Row="0">
                     <TextBlock Text="{loc:T '最近复制'}" Style="{StaticResource Text.H3}" />
-                    <Button Content="{loc:T '清空历史'}" Style="{StaticResource Button.Ghost}" HorizontalAlignment="Right"
-                            Click="OnClearHistory" />
+                    <Button Content="&#xE74D;" Style="{StaticResource Button.Icon}" HorizontalAlignment="Right"
+                            Click="OnClearHistory" Foreground="{DynamicResource Brush.Danger}"
+                            AutomationProperties.Name="{loc:T '清空历史'}"
+                            ToolTip="{loc:T '清空历史：把最近复制的记录全删掉'}" />
                 </Grid>
                 <ListBox Grid.Row="1" x:Name="HistoryList" Background="Transparent" BorderThickness="0"
                          ItemContainerStyle="{StaticResource RowItem}" Margin="0,10,0,0"

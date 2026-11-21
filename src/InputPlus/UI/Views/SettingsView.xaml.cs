@@ -59,6 +59,18 @@ public partial class SettingsView : UserControl
             TriggerStarText.Text = Loc.F("当前 {0:0.0} 倍（默认 1.5 倍，改完立即生效）", g.TriggerStarScale);
         }
 
+        /* 提示条：滑块/色块都是控件直接读配置，这里只负责把配置灌回去
+         * （改主题、重新加载配置、切页回来都会走一遍）。
+         * 手势名称框的外观不在这里 —— 它跟手势一起放在「鼠标手势 → 手势设置」。 */
+        if (ToastBorderBox != null)
+        {
+            var style = _host.Settings.Toasts;
+            ToastBorderBox.IsChecked = style.ShowBorder;
+            ToastBorderSlider.Value = Math.Clamp(style.BorderWidth, 0.5, 3);
+            ToastBorderText.Text = ToastBorderSlider.Value.ToString("0.0");
+            UpdateToastSwatch();
+        }
+
         MouseSpeedSlider.Value = g.MouseSpeed;
         MouseSpeedText.Text = Loc.F("{0}（Caps+LAlt+滚轮 可快速调整）", g.MouseSpeed);
         /* 音量下限跟系统步进走：系统一步就是 2%，设 1% 也只能走 2%，
@@ -1103,6 +1115,82 @@ public partial class SettingsView : UserControl
             mw.RefreshCachedKeysPage();
     }
 
+    // ---------------- 提示条（设置 → 外观 → 提示条） ----------------
+
+    /* 这一组只管右下角那类提示。手势名称框的外观在「鼠标手势 → 手势设置」里，
+     * 两套配置各自独立（v1.6.0 曾合并成一套，用下来两边需求不一样，v1.6.3 拆开了）。 */
+
+    private void OnToastToggleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Toasts.ShowBorder = ToastBorderBox.IsChecked == true;
+        Save();
+    }
+
+    /// <summary>描边粗细：直接写配置，下一次提示立刻按新值画。</summary>
+    private void OnToastBorderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_host == null || _suppress) return;
+        if (ToastBorderText == null) return;
+
+        var style = _host.Settings.Toasts;
+        style.BorderWidth = Math.Round(Math.Clamp(ToastBorderSlider.Value, 0.5, 3), 1);
+        ToastBorderText.Text = style.BorderWidth.ToString("0.0");
+        Save();
+    }
+
+    /// <summary>
+    /// 底色（只有一个：提示条没有「执行后」这第二种状态）。
+    /// 空串 = 跟随主题：取色对话框从当前主题卡色起步，挑完才写死 RGBA。
+    /// </summary>
+    private void OnPickToastColor(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        var style = _host.Settings.Toasts;
+        string current = style.Color;
+        if (string.IsNullOrWhiteSpace(current))
+            current = Core.Gestures.Wg2Color.Format(ToastThemeColor());
+        if (ColorSwatch.PickRgba(current) is not { } hex) return;
+        style.Color = hex;
+        Save();
+        UpdateToastSwatch();
+    }
+
+    /// <summary>还原成旧观感的「跟随主题」底色（空串），而不是写死某一个颜色。</summary>
+    private void OnResetToastColor(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Toasts.Color = "";
+        Save();
+        UpdateToastSwatch();
+    }
+
+    /// <summary>当前主题的提示条卡色，给取色对话框当初始色 / 解析失败时的兜底。</summary>
+    private Color ToastThemeColor() =>
+        TryFindResource("Brush.OverlayCardAlt") is SolidColorBrush brush
+            ? brush.Color
+            : Color.FromArgb(0xF2, 0x16, 0x1A, 0x23);
+
+    private void UpdateToastSwatch()
+    {
+        if (_host == null) return;
+        var style = _host.Settings.Toasts;
+        if (string.IsNullOrWhiteSpace(style.Color))
+        {
+            // 空串 = 跟随主题：色块直接绑动态资源，切深浅色也跟着变。
+            ToastColorSwatch.SetResourceReference(Border.BackgroundProperty, "Brush.OverlayCardAlt");
+            ToastColorSwatch.ToolTip = Loc.T("提示条的底色（保留透明度）。");
+            return;
+        }
+        ColorSwatch.Apply(ToastColorSwatch, style.Color);
+    }
+
+    /// <summary>弹一条真提示：用的是当前配置（不依赖保存），改完色马上能看见。</summary>
+    private void OnPreviewToast(object sender, RoutedEventArgs e)
+    {
+        ToastWindow.Show(Loc.T("提示条就长这个样子：动作反馈、复制成功、音量百分比都用它。"));
+    }
+
     private void OnRepeatChanged(object sender, RoutedEventArgs e)
     {
         if (_host == null || _suppress) return;
@@ -1209,6 +1297,18 @@ public partial class SettingsView : UserControl
         RootScroll.UpdateLayout();
         double y = LanguageBox.TransformToAncestor(content).Transform(default).Y;
         RootScroll.ScrollToVerticalOffset(Math.Max(0, y - 130));
+        RootScroll.UpdateLayout();
+    }
+
+    /// <summary>
+    /// 出图用：滚到「提示条」那张卡 —— 它紧跟在外观卡后面，默认在折叠线以下。
+    /// </summary>
+    internal void ScrollToNotificationsForRender()
+    {
+        if (RootScroll.Content is not System.Windows.FrameworkElement content) return;
+        RootScroll.UpdateLayout();
+        double y = ToastBorderBox.TransformToAncestor(content).Transform(default).Y;
+        RootScroll.ScrollToVerticalOffset(Math.Max(0, y - 96));
         RootScroll.UpdateLayout();
     }
 

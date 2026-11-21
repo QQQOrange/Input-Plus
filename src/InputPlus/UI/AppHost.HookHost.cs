@@ -37,6 +37,21 @@ public sealed partial class AppHost
     /// <summary>钩子宿主进程（最小进程，只装钩子跑热键）。</summary>
     private System.Diagnostics.Process? _hookHost;
 
+    /// <summary>
+    /// 宿主只当"注入中继"（管理员模式）：钩子不交给它，仍由本进程安装。
+    ///
+    /// 为什么管理员模式下要反着来：钩子能看见的是**同级或更低**完整性进程的
+    /// 输入 —— 提升的钩子看得最全，所以钩子必须留在提升的主进程；而注入
+    /// （SendInput）要发给普通程序时，让普通权限的宿主代发最"干净"。
+    /// </summary>
+    private volatile bool _hookHostRelay;
+
+    /// <summary>宿主自己报上来的 PID（经 explorer 拉起时拿不到 Process 句柄）。</summary>
+    private int _hookHostPid;
+
+    /// <summary>宿主自报的权限：true=提升，false=普通权限，null=还没说。</summary>
+    private bool? _hookHostElevated;
+
     /// <summary>宿主是否已就绪（就绪后本进程不再装钩子）。</summary>
     private volatile bool _hookHostReady;
 
@@ -294,18 +309,29 @@ public sealed partial class AppHost
             string? exe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exe)) return false;
 
-            var psi = new System.Diagnostics.ProcessStartInfo(exe)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = AppContext.BaseDirectory,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("--hookhost");
-            psi.ArgumentList.Add(pipeName);
-            psi.ArgumentList.Add(Environment.ProcessId.ToString());
+            /* 管理员模式下宿主必须是**普通权限**：否则"注入下沉"没有意义
+             * （同级进程之间没有 UIPI 边界）。借 explorer 的手拉起它，并告诉
+             * 它别装钩子（--relay）：钩子留在提升的我们这里，才看得见提升
+             * 窗口的输入。见 Core/App/HookHostLauncher.cs 与 ElevationState.cs。 */
+            bool elevated = Core.App.ElevationState.Elevated;
+            bool wantRelay = elevated;
 
-            _hookHost = System.Diagnostics.Process.Start(psi);
-            if (_hookHost == null) return false;
+            var hostArgs = new List<string> { "--hookhost", pipeName, Environment.ProcessId.ToString() };
+            if (wantRelay) hostArgs.Add("--relay");
+
+            if (!Core.App.HookHostLauncher.TryStart(exe, hostArgs.ToArray(), elevated, out var startedHost))
+            {
+                CoreLog.Warn("启动钩子宿主失败，改由本进程自己装钩子："
+                             + Core.App.HookHostLauncher.LastDetail);
+                return false;
+            }
+
+            _hookHost = startedHost;
+            _hookHostRelay = wantRelay;
+            CoreLog.Info($"钩子宿主启动：{Core.App.HookHostLauncher.LastMode}"
+                         + (Core.App.HookHostLauncher.LastDetail.Length > 0
+                            ? "（" + Core.App.HookHostLauncher.LastDetail + "）" : "")
+                         + (wantRelay ? "；中继模式" : "；钩子模式"));
 
             var ready = new ManualResetEventSlim(false);
             var hookFailed = new ManualResetEventSlim(false);
@@ -322,6 +348,24 @@ public sealed partial class AppHost
                     string? line;
                     while ((line = reader.ReadLine()) != null)
                     {
+                        if (line.StartsWith("HELLO	", StringComparison.Ordinal))
+                        {
+                            /* HELLO <是否提升> <pid>：宿主的自我介绍。
+                             * 经 explorer 拉起时我们拿不到 Process 句柄，按 PID 补一个，
+                             * 否则退出时 Kill 不掉、会留下孤儿占着管道。 */
+                            var hello = line.Split('	');
+                            _hookHostElevated = hello.Length > 1 && hello[1] == "1";
+                            if (hello.Length > 2 && int.TryParse(hello[2], out int hostPid) && hostPid > 0)
+                            {
+                                _hookHostPid = hostPid;
+                                if (_hookHost == null)
+                                {
+                                    try { _hookHost = System.Diagnostics.Process.GetProcessById(hostPid); } catch { }
+                                }
+                            }
+                            CoreLog.Info($"钩子宿主自报：{(_hookHostElevated == true ? "提升权限" : "普通权限")}，PID={_hookHostPid}");
+                            continue;
+                        }
                         if (line == "READY") { ready.Set(); continue; }
                         if (line == "BYE") break;
                         if (Environment.GetEnvironmentVariable("CLP_MIRROR_LOG") == "1")
@@ -402,6 +446,15 @@ public sealed partial class AppHost
                 }
                 catch (Exception ex) { CoreLog.Warn("钩子宿主管道异常：" + ex.Message); }
 
+                /* 中继没了：注入自动退回本进程（TryForwardToRelay 发现通道断开
+                 * 就会返回 false）。提升的主进程直接发，高 → 低本来就允许。 */
+                if (_hookHostRelay)
+                {
+                    _hookHostRelay = false;
+                    Core.App.InjectionBridge.Detach();
+                    CoreLog.Warn("注入中继已退出：改回本进程直接发送输入");
+                }
+
                 if (_hookHostReady)
                 {
                     _hookHostReady = false;
@@ -452,9 +505,28 @@ public sealed partial class AppHost
 
             if (signaled == 0 && ready.IsSet)
             {
+                string hostPidText = (_hookHost?.Id ?? _hookHostPid).ToString();
+
+                if (_hookHostRelay)
+                {
+                    /* 中继模式：钩子**不**交给宿主（它看不见提升窗口的输入），
+                     * 只把"发送输入"这条腿接到宿主的控制管道上。
+                     * 返回值 false 是有意的：调用方据此让本进程继续装钩子。 */
+                    Core.App.InjectionBridge.SendLine = cmd =>
+                    {
+                        SendHookHostCommand(cmd);
+                        return true;
+                    };
+                    CoreLog.Info($"注入中继已就绪（PID={hostPidText}）："
+                                 + (_hookHostElevated == false
+                                     ? "宿主为普通权限，注入由它代发"
+                                     : "⚠ 宿主也是提升的，UIPI 边界与主进程相同（注入仍可用，只是没有降权）"));
+                    return false;
+                }
+
                 _hookHostReady = true;
                 Engine.HookDelegatedToHost = true;
-                CoreLog.Info($"钩子宿主已就绪（PID={_hookHost.Id}）：钩子由它负责");
+                CoreLog.Info($"钩子宿主已就绪（PID={hostPidText}）：钩子由它负责");
                 return true;
             }
 
@@ -463,13 +535,17 @@ public sealed partial class AppHost
             else
                 CoreLog.Warn("钩子宿主 2.5 秒内没有就绪，改由本进程自己装钩子");
 
-            try { _hookHost.Kill(); } catch { }
+            Core.App.InjectionBridge.Detach();
+            _hookHostRelay = false;
+            try { _hookHost?.Kill(); } catch { }
             _hookHost = null;
             return false;
         }
         catch (Exception ex)
         {
             CoreLog.Warn("启动钩子宿主失败，改由本进程自己装钩子：" + ex.Message);
+            Core.App.InjectionBridge.Detach();
+            _hookHostRelay = false;
             try { _hookHost?.Kill(); } catch { }
             _hookHost = null;
             return false;
@@ -742,6 +818,18 @@ public sealed partial class AppHost
          * 远程桌面 / 注入工具的按键根本进不了钩子，但它们不算进这里（不是物理设备）。 */
         if (_hookHeals >= 2)
         {
+            /* 重装两次都救不回来。管理员模式下这基本只剩一个解释：这台机器上
+             * "提升进程装全局低级钩子"被安全软件掐了（杀软/输入法的键盘保护、
+             * 某些 EDR 都这么干）—— 进程内换多少次钩子都没用，只有真正降到
+             * 普通权限重启才能恢复。这里自动做掉，而不是让热键一直"按了没反应"。
+             * 防抖有两层：_selfRestartTried（本次运行一次）+ 15 分钟时间戳。 */
+            if (Core.ElevationHelper.IsElevated && !_selfRestartTried)
+            {
+                _selfRestartTried = true;
+                CoreLog.Warn("管理员模式下低级键盘钩子连续漏掉物理按键（重装两次仍无效，多半被安全软件拦了提升进程的全局钩子），以普通权限自动重启");
+                _dispatcher.BeginInvoke(() => RestartSelfForHookRecovery());
+            }
+
             _rawSinceHook = 0;
             _hookSilentSince = 0;
             return;

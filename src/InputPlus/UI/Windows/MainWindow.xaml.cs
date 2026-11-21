@@ -101,8 +101,10 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        WindowChrome.Apply(this, ThemeManager.Current == ThemeManager.Mode.Dark ||
-                                 (ThemeManager.Current == ThemeManager.Mode.System && ThemeManager.IsDarkSystem));
+        /* ApplyShell 而不是 Apply：后者会把系统可见边框压成 0，Win11 的圆角
+         * 正好画在那圈边框上，主窗口就成了直角（见 WindowChrome.ApplyShell 注释）。 */
+        WindowChrome.ApplyShell(this, ThemeManager.Current == ThemeManager.Mode.Dark ||
+                                      (ThemeManager.Current == ThemeManager.Mode.System && ThemeManager.IsDarkSystem));
         WindowChrome.EnableRounded(this);
         UpdateStatus();
         ClampToWorkArea();
@@ -113,9 +115,25 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 右侧那张圆角卡片跟着窗口状态变形：正常时浮起（四周留 8px 缝、圆角 16、1px 描边），
+    /// 最大化时铺满（缝、圆角、描边全收掉）。
+    ///
+    /// 不这么做的话，最大化之后屏幕四角会露出 8px 的侧栏色，圆角也留在屏幕上显得怪。
+    /// </summary>
+    private void UpdateContentCard()
+    {
+        bool max = WindowState == WindowState.Maximized;
+        ContentCard.Margin = max ? new Thickness(0) : new Thickness(8);
+        ContentCard.CornerRadius = max ? new CornerRadius(0) : new CornerRadius(16);
+        ContentCard.BorderThickness = max ? new Thickness(0) : new Thickness(1);
+    }
+
     private void OnStateChanged(object? sender, EventArgs e)
     {
         BorderThickness = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+        UpdateContentCard();
+        UpdateMaxButton();
         if (WindowState == WindowState.Normal) ClampToWorkArea();
     }
 
@@ -379,7 +397,9 @@ public partial class MainWindow : Window
     /// <summary>打开 Ctrl+K 搜索面板；选中结果后跳转（别名会顺带选中那一条）。</summary>
     private void OpenSearchPalette()
     {
-        var hits = InputPlus.Core.Search.GlobalSearch.Build(_host.Settings, Loc.T);
+        /* 索引 = 全部功能：页面 + 页面里的设置项 + 动作目录 + 手势/宏/脚本/菜单/别名/绑定。 */
+        var hits = InputPlus.Core.Search.GlobalSearch.Build(
+            _host.Settings, Loc.T, _host.Actions.Items);
         var picked = SearchPaletteWindow.Pick(this, hits);
         if (picked == null) return;
 
@@ -511,16 +531,37 @@ public partial class MainWindow : Window
     private void UpdateStatus()
     {
         bool enabled = _host.Engine.Enabled;
-        StatusText.Text = enabled ? Loc.T("正在运行") : Loc.T("已暂停");
+        StatusText.Text = enabled ? Loc.T("正在运行") : Loc.T("已暂停 · 热键、手势、滚动、拖拽都停");
         StatusDot.Fill = (System.Windows.Media.Brush)FindResource(enabled ? "Brush.Success" : "Brush.Warning");
-        HookText.Text = _host.HookAlive ? Loc.T("键盘钩子正常") : Loc.T("键盘钩子未生效");
-        PauseButton.Content = enabled ? Loc.T("暂停") : Loc.T("恢复");
+        HookText.Text = !enabled
+            ? Loc.T("已暂停，钩子都卸下了")
+            : _host.HookAlive ? Loc.T("键盘钩子正常") : Loc.T("键盘钩子未生效");
+        // 标题栏改成图标按钮（m01050）：暂停/恢复用字形区分，E769 暂停、E768 恢复。
+        // 字形要按当前状态走，所以不能写死在 XAML 里；ToolTip 与读屏名字一起换。
+        PauseButton.Content = enabled ? "\uE769" : "\uE768";
+        PauseButton.ToolTip = enabled ? Loc.T("暂停") : Loc.T("恢复");
+        System.Windows.Automation.AutomationProperties.SetName(PauseButton, enabled ? Loc.T("暂停") : Loc.T("恢复"));
         PauseButton.Foreground = (System.Windows.Media.Brush)FindResource(enabled ? "Brush.TextSecondary" : "Brush.Accent");
     }
 
     private void OnEnabledChanged(bool enabled) => UpdateStatus();
 
     private void OnPauseClick(object sender, RoutedEventArgs e) => _host.ToggleEnabled();
+
+    /// <summary>最大化 / 还原（m01050：标题栏补上这颗按钮，以前没最大化后回不去的办法）。</summary>
+    private void OnMaximizeClick(object? sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    /// <summary>最大化按钮的字形与提示随窗口状态切换：E922 最大化、E923 还原。</summary>
+    private void UpdateMaxButton()
+    {
+        if (MaxButton == null) return;
+        bool max = WindowState == WindowState.Maximized;
+        MaxButton.Content = max ? "\uE923" : "\uE922";
+        string tip = max ? Loc.T("还原") : Loc.T("最大化");
+        MaxButton.ToolTip = tip;
+        System.Windows.Automation.AutomationProperties.SetName(MaxButton, tip);
+    }
 
     private void OnThemeClick(object sender, RoutedEventArgs e)
     {

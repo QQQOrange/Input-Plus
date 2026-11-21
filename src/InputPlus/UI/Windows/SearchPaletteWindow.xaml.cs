@@ -48,6 +48,22 @@ public partial class SearchPaletteWindow : Window
         };
     }
 
+    /// <summary>
+    /// 出图用：拿一份现成结果直接摆出来（不走 ShowDialog），截完立刻关。
+    /// 面板是模态浮层，页面截图里永远没有它，但它现在是"整个软件都搜得到"的入口。
+    /// </summary>
+    internal static SearchPaletteWindow ForRender(List<GlobalHit> all, string query)
+    {
+        _lastQuery = query;
+        return new SearchPaletteWindow(all)
+        {
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = 120,
+            Top = 90,
+        };
+    }
+
     /// <summary>打开面板并等用户选择；取消返回 null。</summary>
     public static GlobalHit? Pick(Window? owner, List<GlobalHit> all)
     {
@@ -77,8 +93,8 @@ public partial class SearchPaletteWindow : Window
         if (_view.Count > 0) ResultList.SelectedIndex = 0;
 
         HintText.Text = _view.Count == 0
-            ? Loc.T("没有匹配的结果")
-            : Loc.T("↑↓ 选择 · Enter 打开 · Esc 关闭");
+            ? Loc.T("没有匹配的结果：换个词试试，或者直接打开对应的页面找。")
+            : Loc.F("↑↓ 选择 · Enter 打开 · Esc 关闭 · 命中 {0} 条", _view.Count);
     }
 
     private void OnQueryChanged(object sender, TextChangedEventArgs e) => Refresh(QueryBox.Text);

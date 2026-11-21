@@ -46,27 +46,8 @@ public static class IconCache
      * 也跨进程记住，但保留 TTL —— 站点以后补上 favicon 还能自动恢复。 */
     private static readonly TimeSpan WebMissTtl = TimeSpan.FromMinutes(30);
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct SHFILEINFO
-    {
-        public IntPtr hIcon;
-        public int iIcon;
-        public uint dwAttributes;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szDisplayName;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
-        public string szTypeName;
-    }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes,
-        ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
-
-    private const uint SHGFI_ICON = 0x000000100;
-    private const uint SHGFI_LARGEICON = 0x000000000;
-
+    /* SHGetFileInfo / SHFILEINFO 那一套已整体搬到 ShellIcons（带 SHIL_JUMBO 大图、
+     * 快捷方式叠加箭头、按尺寸取档）。这里只留 ExtractIconEx 作为 exe/dll 的兜底。 */
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern uint ExtractIconEx(string lpszFile, int nIconIndex, nint[] phiconLarge, nint[] phiconSmall, uint nIcons);
 
@@ -435,16 +416,41 @@ public static class IconCache
         return true;
     }
 
+    /* Qbar 结果行的图标格是 28 DIP（QbarWindow.xaml:IconTile），设置页的图标列表
+     * 也在这个量级。FromFile 没有尺寸参数，就按这个固定 DIP 折算像素档位 ——
+     * 老代码无论什么 DPI 都返回 32px，150% 缩放下被放大 1.5 倍，糊。 */
+    private const int DefaultIconDip = 28;
+
+    /// <summary>
+    /// 取文件图标（同步签名保留，老调用点不用改）。
+    ///
+    /// 行为变更（2026-10 图标统一）：**除图片/SVG 仍按图片解码外，其它一切都由
+    /// Windows Shell 提供** —— PDF、Office 文档、未知扩展名、无扩展名、快捷方式、
+    /// UWP 包应用、.exe、网络路径、超长路径全部走 <see cref="ShellIcons"/>。
+    ///
+    /// 老版本对 PDF/文档/未知类型直接 <see cref="FromImageFile"/> 用 BitmapImage
+    /// 硬解码，必然抛异常返回 null，Qbar 结果行于是退化成字形图标 ——
+    /// 这就是「PDF 图标不是资源管理器那个」的根因。
+    /// </summary>
     public static ImageSource? FromFile(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-        string text = path.Trim().Trim('"');
+        return FromFile(path, DefaultIconDip, ShellIcons.SystemDpiScale());
+    }
+
+    /// <summary>
+    /// 按显示尺寸取图标：DIP × DPI 向上取到 16/24/32/48/64/96/256 档
+    /// （<see cref="ShellIcons.PickPixels"/>），永远不用小图放大。
+    /// </summary>
+    public static ImageSource? FromFile(string? path, int dip, double dpiScale)
+    {
+        string norm = ShellIcons.NormalizePath(path);
+        if (norm.Length == 0) return null;
+
+        int px = ShellIcons.PickPixels(dip, dpiScale);
+        string key = CacheKey(norm, px);
         lock (Gate)
         {
-            if (Cache.TryGetValue(text, out ImageSource? value))
+            if (Cache.TryGetValue(key, out ImageSource? value))
             {
                 return value;
             }
@@ -453,65 +459,108 @@ public static class IconCache
                 Cache.Clear();
             }
         }
+
         ImageSource? imageSource = null;
         try
         {
-            if (File.Exists(text))
+            if (ShellIcons.IsImageFile(norm))
             {
-                imageSource = text.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
-                              text.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                    ? FromShellIcon(text)
-                    : IsShellDocument(text) ? FromShellFile(text) : FromImageFile(text);
+                /* 用户自选的 png/ico/svg/图片：本来就是图片，按图片解码最快也最准。 */
+                imageSource = FromImageFile(norm);
+            }
+            else if (File.Exists(norm) || Directory.Exists(norm))
+            {
+                /* 同步调用点（设置页/按键页）先吃缓存，未命中才同步等一小会儿。
+                 * 本地文件通常是毫秒级；网络路径 ShellIcons 内部按 400ms 上限探，
+                 * 超时返回 null，请求继续在后台队列跑，下次重绘就能命中缓存。 */
+                imageSource = ShellIcons.TryGetCached(norm, px, dpiScale)
+                              ?? ShellIcons.RequestSync(norm, px, dpiScale, SyncWaitMs);
+            }
+
+            /* Shell 拿不到时才回退到老的 ExtractIconEx（只对 exe/dll 有意义）：
+             * 绿色软件常常没注册文件关联，IShellItemImageFactory 交白卷，
+             * 但 PE 资源里确实带图标，直接放弃会退化。 */
+            if (imageSource == null && IsExecutable(norm))
+            {
+                imageSource = FromShellIcon(norm);
             }
         }
         catch (Exception ex)
         {
-            CoreLog.Warn("读取图标失败（" + text + "）：" + ex.Message);
+            CoreLog.Warn("读取图标失败（" + norm + "）：" + ex.Message);
         }
         lock (Gate)
         {
-            Cache[text] = imageSource;
+            Cache[key] = imageSource;
             return imageSource;
         }
     }
 
-    private static bool IsShellDocument(string path)
+    /* 同步等待上限：够本地文件解析，又不至于把 UI 线程卡成假死。 */
+    private const int SyncWaitMs = 1200;
+
+    private static string CacheKey(string normPath, int pixelSize)
     {
-        return path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
-               path.EndsWith(".url", StringComparison.OrdinalIgnoreCase) ||
-               path.EndsWith(".appref-ms", StringComparison.OrdinalIgnoreCase) ||
-               path.EndsWith(".cpl", StringComparison.OrdinalIgnoreCase) ||
-               path.EndsWith(".msc", StringComparison.OrdinalIgnoreCase);
+        return pixelSize.ToString() + "|" + normPath;
     }
 
     /// <summary>
-    /// 快捷方式/控制面板项没有可直接 ExtractIconEx 的图标资源，
-    /// 交给 shell 解析，拿到的就是目标程序/设置页的图标。
+    /// 异步取文件图标（Qbar 结果行用这个）：先画占位字形，图标到了再刷。
+    /// 回调在**后台线程**触发，UI 调用方自己 Dispatcher 切回去。
     /// </summary>
-    private static ImageSource? FromShellFile(string path)
+    public static void FromFileAsync(string? path, Action<ImageSource?>? done)
     {
-        var info = new SHFILEINFO();
-        IntPtr hIcon = SHGetFileInfo(path, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), SHGFI_ICON | SHGFI_LARGEICON);
-        if (hIcon == IntPtr.Zero || info.hIcon == IntPtr.Zero) return null;
-        try
+        FromFileAsync(path, DefaultIconDip, ShellIcons.SystemDpiScale(), done);
+    }
+
+    /// <summary>异步取文件图标（指定以 DIP 计的显示尺寸与 DPI 缩放）。</summary>
+    public static void FromFileAsync(string? path, int dip, double dpiScale, Action<ImageSource?>? done)
+    {
+        string norm = ShellIcons.NormalizePath(path);
+        if (norm.Length == 0)
         {
-            using Icon icon = Icon.FromHandle(info.hIcon);
-            using Bitmap bitmap = icon.ToBitmap();
-            using MemoryStream stream = new MemoryStream();
-            bitmap.Save(stream, ImageFormat.Png);
-            stream.Position = 0;
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.CacheOption = BitmapCacheOption.OnLoad;
-            image.StreamSource = stream;
-            image.EndInit();
-            image.Freeze();
-            return image;
+            if (done != null) done(null);
+            return;
         }
-        finally
+
+        int px = ShellIcons.PickPixels(dip, dpiScale);
+        string key = CacheKey(norm, px);
+        lock (Gate)
         {
-            DestroyIcon(info.hIcon);
+            if (Cache.TryGetValue(key, out ImageSource? hit) && hit != null)
+            {
+                if (done != null) done(hit);
+                return;
+            }
         }
+
+        if (ShellIcons.IsImageFile(norm))
+        {
+            Task.Run(() =>
+            {
+                ImageSource? img = FromFile(norm, dip, dpiScale);
+                if (done != null) done(img);
+            });
+            return;
+        }
+
+        ShellIcons.Request(norm, px, dpiScale, image =>
+        {
+            ImageSource? result = image;
+            if (result == null && IsExecutable(norm))
+            {
+                result = FromShellIcon(norm);
+            }
+            if (result != null)
+            {
+                lock (Gate)
+                {
+                    if (Cache.Count > 256) Cache.Clear();
+                    Cache[key] = result;
+                }
+            }
+            if (done != null) done(result);
+        });
     }
 
     private static ImageSource? FromImageFile(string path)
@@ -614,5 +663,8 @@ public static class IconCache
         {
             Cache.Clear();
         }
+        /* Shell 侧也有一份更细的缓存（按尺寸/DPI/关联戳分档），
+         * 一起清掉，否则「重建图标缓存」后会立刻又读回旧图。 */
+        ShellIcons.Invalidate("IconCache.Clear()");
     }
 }

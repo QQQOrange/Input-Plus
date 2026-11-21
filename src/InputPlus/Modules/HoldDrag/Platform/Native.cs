@@ -452,6 +452,16 @@ internal static class Native
 
 	public const int VK_CONTROL = 17;
 
+	// 低级键盘钩子送来的是左右分开的具体键码（altdrag hooks.c:589/951/958/984/1053/1088 用的正是这四个），
+	// 只认 VK_SHIFT/VK_CONTROL 会让「Shift 拉满吸附档」「Ctrl 夹屏」两条分支永远进不去。
+	public const int VK_LSHIFT = 160;
+
+	public const int VK_RSHIFT = 161;
+
+	public const int VK_LCONTROL = 162;
+
+	public const int VK_RCONTROL = 163;
+
 	public const int VK_MENU = 18;
 
 	public const int VK_SPACE = 32;
@@ -460,6 +470,23 @@ internal static class Native
 	public const int VK_ESCAPE = 27;
 
 	public const int WM_SIZING = 532;
+
+	/// <summary>WM_SIZING 的 wParam：AltSnap hooks.c:1435-1445 的 map[3][3] 用的就是这八个值。</summary>
+	public const int WMSZ_LEFT = 1;
+
+	public const int WMSZ_RIGHT = 2;
+
+	public const int WMSZ_TOP = 3;
+
+	public const int WMSZ_TOPLEFT = 4;
+
+	public const int WMSZ_TOPRIGHT = 5;
+
+	public const int WMSZ_BOTTOM = 6;
+
+	public const int WMSZ_BOTTOMLEFT = 7;
+
+	public const int WMSZ_BOTTOMRIGHT = 8;
 
 	public const int WM_SYNCPAINT = 136;
 

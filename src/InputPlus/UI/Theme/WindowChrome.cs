@@ -36,7 +36,8 @@ public static class WindowChrome
         Tabbed = 4,
     }
 
-    public static void Apply(Window window, bool dark, BackdropType backdrop = BackdropType.Mica)
+    public static void Apply(Window window, bool dark, BackdropType backdrop = BackdropType.Mica, bool zeroFrame = true,
+        string captionBrushKey = "Brush.SurfaceAlt")
     {
         try
         {
@@ -56,9 +57,11 @@ public static class WindowChrome
             int type = (int)backdrop;
             DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref type, sizeof(int));
 
-            /* 标题栏颜色跟皮肤走：用「比正文稍亮/稍暗一档」的 SurfaceAlt，
-             * 既不纯黑也不纯白，和对话框正文是同一条色阶。 */
-            if (ThemeColor("Brush.SurfaceAlt") is int caption)
+            /* 标题栏颜色跟皮肤走：默认用「比正文稍亮/稍暗一档」的 SurfaceAlt，
+             * 既不纯黑也不纯白，和对话框正文是同一条色阶。
+             * 页面底色是 Background 的窗口（手势设置窗）要传 "Brush.Background"：
+             * 那种窗口正文是从头铺到底的，标题栏比正文亮一档就成了"顶上贴了一条"。 */
+            if (ThemeColor(captionBrushKey) is int caption)
                 DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref caption, sizeof(int));
             /* 边框：整圈外壳都是自绘的，系统那 1px 不要。
              *
@@ -69,8 +72,16 @@ public static class WindowChrome
              * 现在直接设成"无"，并且跟着窗口状态重新设一次（见 AttachBorderless）。 */
             int none = ColorNone;
             DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR_ATTR, ref none, sizeof(int));
-            int frame = 0;
-            DwmSetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, ref frame, sizeof(int));
+            /* 只有主窗口（外壳全自绘）才把系统那圈 1px 的可见边框压成 0。
+             *
+             * 普通对话框必须留着它：Win11 的圆角就画在这圈边框上，压成 0 之后
+             * 窗口是**直角**的 —— 手势设置窗看起来跟系统里其它窗口对不上，就是
+             * 这么来的（v1.6.0 起 AttachTo 传 zeroFrame: false 修掉）。 */
+            if (zeroFrame)
+            {
+                int frame = 0;
+                DwmSetWindowAttribute(hwnd, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, ref frame, sizeof(int));
+            }
             if (ThemeColor("Brush.TextPrimary") is int text)
                 DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ref text, sizeof(int));
         }
@@ -92,14 +103,19 @@ public static class WindowChrome
     /// 用 AttachTo 而不是让每个对话框自己写 —— 以前只有 AppDialog 做了，
     /// 其它弹窗在深色界面里顶着一根白条，非常突兀。
     /// </summary>
-    public static void AttachTo(Window window)
+    /// <param name="captionBrushKey">
+    /// 标题栏取哪个主题色。默认 <c>Brush.SurfaceAlt</c>（比正文亮/暗一档）；
+    /// 正文本身就铺成 <c>Brush.Background</c> 的窗口要传 <c>Brush.Background</c>，
+    /// 否则顶上那条和窗口底色对不上。
+    /// </param>
+    public static void AttachTo(Window window, string captionBrushKey = "Brush.SurfaceAlt")
     {
         try
         {
             window.SourceInitialized += (_, _)
-                => Apply(window, IsDarkTheme(), BackdropType.None);
+                => Apply(window, IsDarkTheme(), BackdropType.None, zeroFrame: false, captionBrushKey);
 
-            void OnThemeChanged(bool dark) => Apply(window, dark, BackdropType.None);
+            void OnThemeChanged(bool dark) => Apply(window, dark, BackdropType.None, zeroFrame: false, captionBrushKey);
             ThemeManager.ThemeChanged += OnThemeChanged;
             window.Closed += (_, _) => ThemeManager.ThemeChanged -= OnThemeChanged;
         }
@@ -120,14 +136,14 @@ public static class WindowChrome
     {
         try
         {
-            void Refresh() => Apply(window, IsDarkTheme());
+            void Refresh() => ApplyShell(window, IsDarkTheme());
 
             window.SourceInitialized += (_, _) => Refresh();
             window.Activated += (_, _) => Refresh();
             window.StateChanged += (_, _) => Refresh();
             window.DpiChanged += (_, _) => Refresh();
 
-            void OnThemeChanged(bool dark) => Apply(window, dark);
+            void OnThemeChanged(bool dark) => ApplyShell(window, dark);
             ThemeManager.ThemeChanged += OnThemeChanged;
             window.Closed += (_, _) => ThemeManager.ThemeChanged -= OnThemeChanged;
         }
@@ -156,6 +172,19 @@ public static class WindowChrome
 
         return null;
     }
+
+    /// <summary>
+    /// 自绘外壳的主窗口专用的实际调用：云母背景 + 圆角，但**不**把可见边框压成 0。
+    ///
+    /// v1.3.0 修正：以前主窗口走 <c>Apply(..., zeroFrame: true)</c>，把系统那圈 1px 的
+    /// 可见边框压成 0 —— 而 Win11 的圆角正是画在这圈边框上的（见 Apply 里的注释），
+    /// 于是所有对话框是圆的、主窗口偏偏是直角。用户原话「设置窗口没有圆角」就是这个。
+    ///
+    /// 现在只是不再压边框厚度；边框颜色仍然是 <see cref="ColorNone"/>，
+    /// 所以补不出那一圈白线，只是把圆角让出来。
+    /// </summary>
+    public static void ApplyShell(Window window, bool dark)
+        => Apply(window, dark, BackdropType.Mica, zeroFrame: false);
 
     public static void EnableRounded(Window window)
     {

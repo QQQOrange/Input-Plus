@@ -164,5 +164,24 @@ public static partial class SelfTest
         {
             SmoothScrollService.SendForTest = null;
         }
+
+        // ---- 全局暂停（标题栏的「暂停」）：滚轮原样交给系统 ----
+        {
+            var pauseSettings = new AppSettings { Scroll = new ScrollOptions { Enabled = true, AnimationTime = 60 } };
+            SmoothScrollService.SendForTest = (_, _) => { };
+
+            try
+            {
+                using var paused = new SmoothScrollService(() => pauseSettings) { Suspended = true };
+                Check("全局暂停：平滑滚动不再接管滚轮", !paused.OnWheel(120, false, false));
+
+                paused.Suspended = false;
+                Check("全局暂停：恢复后照常接管滚轮", paused.OnWheel(120, false, false));
+            }
+            finally
+            {
+                SmoothScrollService.SendForTest = null;
+            }
+        }
     }
 }

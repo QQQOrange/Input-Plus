@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using InputPlus.Core.Input;
+using InputPlus.Core.Qbar;
+using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Text;
 using InputPlus.Core.Windows;
@@ -170,6 +172,204 @@ public sealed partial class ActionContext
     }
 
     /// <summary>
+    /// 用某个**文件搜索过滤器**（wd = 文档 / pic = 图片 / 自己加的）搜当前选中的文字。
+    ///
+    /// 场景：在资源管理器里选中一个词、或在网页上看到一段名字，按一下绑好的键 ——
+    /// Qbar 面板打开时**已经挂好过滤器 chip**，结果只在这个类型里。
+    /// 与 <see cref="SearchSelection"/> 的区别只在"最后把词交给谁"：那边是浏览器，
+    /// 这边是 Qbar 面板；取词那一段完全共用（三层提示、Ctrl+C 保底、长度截断），
+    /// 不另写一套，否则"读不到选区"时的体验会两样。
+    /// </summary>
+    /// <param name="filterIdOrKeyword">过滤器 Id（builtin.doc），或关键字（wd / doc）</param>
+    /// <param name="overrideText">自检用：直接指定要搜的文字</param>
+    public bool SearchSelectionAsFile(string filterIdOrKeyword, string? overrideText = null)
+    {
+        var all = QbarFilterCatalog.Create(Settings().Qbar.Filters).All;
+        string key = (filterIdOrKeyword ?? "").Trim();
+
+        /* 先按 Id 认，再按关键字认：过滤器被改过关键字之后，
+         * 绑定里留着的还是 Id —— 只按关键字找会让"改了 wd 就失效"。 */
+        QbarFilter? filter =
+            all.FirstOrDefault(f => string.Equals(f.Id, key, StringComparison.Ordinal))
+            ?? all.FirstOrDefault(f => f.Keyword.Equals(key, StringComparison.OrdinalIgnoreCase));
+
+        if (filter == null)
+        {
+            /* 过滤器被删掉之后，绑定里还留着 qfilter:旧Id。
+             * 报"没反应"等于让用户去猜，直接说清是哪一条没了。 */
+            Notify(Loc.F("找不到这个过滤器：{0}（到设置 → Qbar → 文件搜索 → 过滤器里看一眼）", key));
+            return true;
+        }
+
+        /* 文件名/标题很少超过 200 字。整段网页正文塞进 Qbar 输入框，
+         * 结果只会是一屏无关文件，还把过滤器 chip 和输入框一起挤变形。 */
+        if (!TryCaptureWord(Loc.T("搜文件"), overrideText, 300, out string text)) return true;
+
+        CoreLog.Info($"[文件搜索] 过滤器={filter.Id} 词长={text.Length}");
+        RequestQbarFileSearch(filter.Id, text);
+        return true;
+    }
+
+    /* ── 查词 ───────────────────────────────────────────────────────
+       两条路都从"选中的那一小段文字"出发，区别只在最后把词交给谁：
+         · 直接搜索：立刻把词送进欧路词典（没装就开网页词典）—— 按一下就出词典窗口；
+         · Qbar 搜索：打开面板、ol 变 chip、词填好 —— 想按 Esc 或者换个词再查。
+       取词不另写一套：三层提示 + Ctrl+C 保底 + 截断必须和文件搜索一致，
+       否则同一个"读不到选区"的场景会给出两种解释。 */
+
+    /// <summary>查词时最多取多少字：整段正文塞给词典只会查不到。</summary>
+    private const int DictionaryMaxLen = 120;
+
+    /// <summary>
+    /// 「直接搜索」分类里的查词：把选中的词直接送进欧路词典。
+    ///
+    /// 与面板里按回车那条路的差别只是"要不要先看见面板"：
+    /// 这条路按下去就出词典窗口，适合"看到不认识的词，按一下看释义"。
+    /// </summary>
+    /// <param name="overrideText">自检用：直接指定要查的词</param>
+    public bool LookupSelectionInDictionary(string? overrideText = null)
+    {
+        if (!TryCaptureWord(Loc.T("查词"), overrideText, DictionaryMaxLen, out string word)) return true;
+
+        QbarCommand? template = DictionaryLauncher.EffectiveCommand(Settings().Qbar.Commands);
+        DictionaryLaunchResult run = DictionaryLauncher.Launch(word, template);
+        CoreLog.Info($"[查词] 词长={word.Length} 目标={(run.External ? "欧路词典" : "网页词典")}");
+
+        /* 外部程序成功时 launcher 不给文案（它只负责启动），这里补一句"查的是哪个词"；
+           走网页时那条"没装欧路"的说明由 launcher 带上来，别覆盖掉。 */
+        Notify(run.Ok && run.External ? Loc.F("查词：{0}", Preview(word)) : run.Message);
+        return true;
+    }
+
+    /// <summary>
+    /// 「Qbar 搜索」分类里的查词：打开面板、挂 ol chip、词填好。
+    /// 想在面板里顺手改词、或者复制某条释义时走这条。
+    /// </summary>
+    public bool SearchSelectionWithDictionary(string? overrideText = null)
+    {
+        if (!TryCaptureWord(Loc.T("查词"), overrideText, DictionaryMaxLen, out string word)) return true;
+        CoreLog.Info($"[查词] 交给 Qbar 面板 词长={word.Length}");
+        RequestQbarDictionary(word);
+        return true;
+    }
+
+    /// <summary>
+    /// 取一小段要处理的文字：选区 → 请用户按 Ctrl+C → 截断。
+    /// <paramref name="action"/> 只影响提示里的动词（"搜文件" / "查词"），
+    /// 提示本身必须和别的取词路径一模一样 —— 用户不该因为换了条功能就看到不同的解释。
+    /// </summary>
+    private bool TryCaptureWord(string action, string? overrideText, int maxLen, out string text)
+    {
+        text = "";
+        if (string.IsNullOrWhiteSpace(overrideText)) overrideText = null;
+        string? captured = overrideText ?? CaptureSelectionText();
+
+        if (string.IsNullOrWhiteSpace(captured))
+        {
+            string where = ForegroundAppLabel();
+            Notify(InputSender.IsForegroundHigherIntegrity()
+                ? Loc.F("没读到选中文字：{0} 以管理员身份运行，系统不允许读取它的选区。请按一下 Ctrl+C，我马上用它{1}", where, action)
+                : Core.ElevationHelper.IsElevated
+                    ? Loc.F("没读到选中文字（{0} × 管理员模式）。请按一下 Ctrl+C，我马上用它{1}", where, action)
+                    : Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它{1}", where, action));
+
+            var waitManualCopy = ManualCopyWaitForTest
+                                 ?? new Func<int, string>(Text.TextActions.WaitForManualCopy);
+            captured = waitManualCopy(ManualCopyWaitMs);
+        }
+
+        if (string.IsNullOrWhiteSpace(captured))
+        {
+            Notify(Loc.F("没取到要{0}的文字 —— 先选中它再按这个键", action));
+            return false;
+        }
+
+        text = captured.Trim();
+        if (text.Length > maxLen)
+        {
+            int cut = maxLen;
+            if (char.IsHighSurrogate(text[cut - 1])) cut--;   // 别把 emoji 劈成半个
+            text = text[..cut];
+        }
+        return text.Length > 0;
+    }
+
+    /// <summary>
+    /// 用一条 Qbar 命令处理**当前选中的文字**。
+    ///
+    /// 场景：配一条命令 <c>ol</c>（欧路词典 <c>-w {query}</c>），把它绑到一个键上；
+    /// 在任意程序里选中一个单词，按这个键 —— 词典直接带着这个词打开。
+    ///
+    /// 与 <see cref="SearchSelection"/> 的区别只在"谁来处理"：
+    /// 那边是浏览器 + 网址模板，这边是任意程序 + 参数模板（{query} / {action_path} / …），
+    /// runas / silent / workdir 全都按命令自己的配置生效 —— 取词那一段完全共用，
+    /// 所以"读不到选区"时的三层提示、Ctrl+C 保底、长度截断都不会两套。
+    /// </summary>
+    /// <param name="commandIdOrKeyword">命令 Id，或命令关键字（ol / 词典）</param>
+    /// <param name="overrideText">自检用：直接指定要处理的文字</param>
+    public bool SearchSelectionWithCommand(string commandIdOrKeyword, string? overrideText = null)
+    {
+        string key = (commandIdOrKeyword ?? "").Trim();
+        List<QbarCommand> table = QbarCommandStore.Effective(Settings().Qbar.Commands);
+        QbarCommand? command =
+            table.FirstOrDefault(c => string.Equals(c.Id, key, StringComparison.Ordinal))
+            ?? table.FirstOrDefault(c => c.Keyword.Equals(key, StringComparison.OrdinalIgnoreCase));
+
+        if (command == null)
+        {
+            /* 命令被删掉/改了关键字之后，绑定里还留着旧 Id。
+             * 报"没反应"等于让用户去猜，直接说清是哪条命令没了。 */
+            Notify(Loc.F("找不到这条命令：{0}（到 Qbar → 文件搜 → 命令里看一眼）", key));
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(overrideText)) overrideText = null;
+        string? text = overrideText ?? CaptureSelectionText();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            string where = ForegroundAppLabel();
+            Notify(InputSender.IsForegroundHigherIntegrity()
+                ? Loc.F("没读到选中文字：{0} 以管理员身份运行，系统不允许读取它的选区。请按一下 Ctrl+C，我马上用它查词", where)
+                : Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它查词", where));
+
+            var waitManualCopy = ManualCopyWaitForTest
+                                 ?? new Func<int, string>(Text.TextActions.WaitForManualCopy);
+            text = waitManualCopy(ManualCopyWaitMs);
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            Notify(Loc.T("没有取到选中的文字 —— 先选中要查询的内容再按这个键"));
+            return true;
+        }
+
+        text = text.Trim();
+        if (text.Length > 2000) text = text[..2000];   // 参数不是网址，长度上限只防手滑全选
+
+        /* 拦截钩子只替换"真正启动程序"这一步，成功文案照发 ——
+         * 否则自检看到的是一半流程，用户看到的那句反馈反而没人测。 */
+        if (RunQbarCommandInterceptForTest != null)
+        {
+            RunQbarCommandInterceptForTest(command, text);
+        }
+        else
+        {
+            QbarCommandResult run = QbarCommandStore.Execute(command, text, null, null);
+            if (!run.Ok)
+            {
+                // 失败文案由 QbarCommandStore 分好层（找不到程序 / 提权被取消 / 路径非法），别在这里糊成一句
+                Notify(run.Message);
+                return true;
+            }
+        }
+
+        string name = string.IsNullOrWhiteSpace(command.Title) ? command.Keyword : command.Title;
+        Notify(Loc.F("用「{0}」查「{1}」…", name, Preview(text)));
+        CoreLog.Info($"[命令搜索] {name} ← {Preview(text)}");
+        return true;
+    }
+
+    /// <summary>
     /// 取当前选区文字：主动取词优先，其次用「选中即捕获」的新鲜结果。
     ///
     /// 顺序是刻意这样排的：
@@ -280,6 +480,9 @@ public sealed partial class ActionContext
     /// </summary>
     public Func<int, string>? ManualCopyWaitForTest { get; set; }
 
+    /// <summary>自检用：拦下"选中文字 → Qbar 命令"的最终执行，避免自检真的启动词典。</summary>
+    public static Action<QbarCommand, string>? RunQbarCommandInterceptForTest { get; set; }
+
     /// <summary>
     /// 自检用：指定"剪贴板里最新的一条内容"，避免自检受到真实剪贴板（可能是用户刚复制的密码）影响。
     /// 返回 null / 空串表示剪贴板是空的。
@@ -331,7 +534,7 @@ public sealed partial class ActionContext
     /// 那两个是"先填地址、按键就开"，目标在设置里写死；
     /// 这个是"眼前有什么就开什么"，用户选中一段文字按下即可，不用预先配置。
     ///
-    /// 也正因为目标来自选区，它被归到「系统」分类，和「打开网址」「运行程序」并列 ——
+    /// 也正因为目标来自选区，它被归到「智能直达」分类，和「打开网址」「运行命令」并列 ——
     /// 三者都是"给什么开什么"，只是参数来源不同（手填 / 选区）。
     /// </summary>
     /// <param name="overrideText">自检用：直接指定"选中的文字"，绕开真实取词。</param>

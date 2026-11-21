@@ -609,6 +609,12 @@ public static class NativeMethods
 
     public const uint WS_POPUP = 0x80000000;
 
+    /// <summary>有标题栏（含边框）的窗口：真全屏 / 无边框全屏都不会带这两位。</summary>
+    public const int WS_CAPTION = 0x00C00000;
+
+    /// <summary>可以用鼠标拖边框改大小的窗口。</summary>
+    public const int WS_THICKFRAME = 0x00040000;
+
     public const uint BI_RGB = 0;
     public const uint DIB_RGB_COLORS = 0;
 
@@ -786,5 +792,33 @@ public static class NativeMethods
     /// </summary>
     [DllImport("Shlwapi.dll", CharSet = CharSet.Unicode, EntryPoint = "SHLoadIndirectString")]
     public static extern int SHLoadIndirectString(string pszSource, StringBuilder pszOutBuf, int cchOutBuf, IntPtr ppvReserved);
+
+    /// <summary>ShellExecuteEx 的参数包。布局照 shellapi.h，x64 下 cbSize=112。</summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct SHELLEXECUTEINFO
+    {
+        public int cbSize;
+        public uint fMask;
+        public IntPtr hwnd;
+        public string? lpVerb;
+        public string? lpFile;
+        public string? lpParameters;
+        public string? lpDirectory;
+        public int nShow;
+        public IntPtr hInstApp;
+        public IntPtr lpIDList;
+        public string? lpClass;
+        public IntPtr hkeyClass;
+        public uint dwHotKey;
+        public IntPtr hIcon;
+        public IntPtr hProcess;
+    }
+
+    /// <summary>让 Shell 按 IDList 走外壳动词（"properties" 靠它才走系统属性页）。0x0000000C = INVOKEIDLIST | NOASYNC。</summary>
+    public const uint SEE_MASK_INVOKEIDLIST = 0x0000000C;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ShellExecuteExW(ref SHELLEXECUTEINFO info);
 
 }

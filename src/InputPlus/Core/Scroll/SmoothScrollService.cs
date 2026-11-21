@@ -58,6 +58,31 @@ public sealed class SmoothScrollService : IDisposable
     public bool Installed => _hook != null;
 
     /// <summary>
+    /// 全局暂停（标题栏的「暂停」按钮）。
+    ///
+    /// 和"关掉平滑滚动"不是一回事：暂停不改用户的设置，只是因为整个软件被按了
+    /// 暂停，滚轮就该原样交给系统。恢复时这面旗子落回去，设置照旧生效。
+    /// </summary>
+    private volatile bool _suspended;
+    public bool Suspended
+    {
+        get => _suspended;
+        set
+        {
+            if (_suspended == value) return;
+            _suspended = value;
+            if (!value) return;
+
+            /* 正在缓动的那一段立刻停手：暂停之后还在替用户滚屏幕很奇怪。 */
+            lock (_gate)
+            {
+                _running = false;
+                _target = 0;
+            }
+        }
+    }
+
+    /// <summary>
     /// 仅供自检：替换真正的注入口。
     /// 否则一跑自检就会真的滚一下桌面 —— 那种"测试通过但桌面被滚跑了"的行为
     /// 和 InputSender.SenderForTest 是同一个道理。
@@ -94,6 +119,8 @@ public sealed class SmoothScrollService : IDisposable
 
         AppSettings settings;
         try { settings = _settings(); } catch { return false; }
+        if (Suspended) return false;
+
         var o = settings.Scroll ?? new ScrollOptions();
         if (!o.Enabled) return false;
 

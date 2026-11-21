@@ -526,7 +526,7 @@ public partial class KeysView : UserControl
         string? keepType = (CategoryBoxType.SelectedItem as ComboBoxItem)?.Tag as string;
         string? keepCustom = (CategoryBoxCustom.SelectedItem as ComboBoxItem)?.Tag as string;
 
-        /* 隐藏动作（openUrl / runProgram）不参与分类列表：
+        /* 隐藏动作（openUrl / openFolder）不参与分类列表：
          * 它们只为老配置的绑定保留执行能力，不该再出现在界面上。 */
         var cats = _host.Actions.Items.Where(i => !i.Hidden)
             .Select(i => i.Category).Distinct().ToList();
@@ -572,8 +572,8 @@ public partial class KeysView : UserControl
     /// <summary>
     /// 「直达链接」分类的名字（同样不走功能下拉）。
     ///
-    /// 这一类下面有三个动作：直达网址 / 直达文件夹 / 直达文件。
-    /// 面板里先用三个按钮选类型，再填目标 + 备注 ——
+    /// 这一类下面有两个可见动作：直达网址 / 直达文件（文件夹也填进「直达文件」）。
+    /// 面板里先用按钮选类型，再填目标 + 备注 ——
     /// 比"在功能下拉里翻 200 个动作"直观得多。
     /// </summary>
     private const string WebPageCategory = "直达链接";
@@ -589,10 +589,22 @@ public partial class KeysView : UserControl
     /// </summary>
     private const string CustomKeyCategory = "自定义按键";
 
-    /// <summary>「直达链接」下的三个动作 ID。</summary>
+    /// <summary>
+    /// 「直达链接」下的两个动作 ID。
+    /// 文件夹和文件都是 <see cref="LinkFileAction"/>：文件/文件夹从此只有一个入口，
+    /// 老 id openFolder 仍能执行，启动时由 LegacyActionMigration 换到这里。
+    /// </summary>
     private const string LinkUrlAction = "webPage";
-    private const string LinkFolderAction = "openFolder";
     private const string LinkFileAction = "openFile";
+
+    /// <summary>
+    /// 「系统功能」里的「运行命令」。
+    ///
+    /// 它不属于「直达链接」分类，但**共用同一个 Arg**（一整行命令行）。
+    /// 直达链接的目标框认出一行命令时会绑到它身上（见 KeysView.Inputs 的
+    /// LinkActionFor）—— 两边共用同一个参数族，切来切去才不会把命令行清空。
+    /// </summary>
+    private const string RunProgramAction = "runProgram";
 
     /// <summary>当前分类是不是「窗口绑定」。</summary>
     private bool IsWinBindCategory =>
@@ -710,7 +722,7 @@ public partial class KeysView : UserControl
                 RefreshWinBindPanel();
                 break;
             case EditorMode.WebPage:
-                ActionDesc.Text = Loc.T("选「直达网址」就用默认浏览器打开网址；选「直达文件夹」就在资源管理器里打开那个目录；选「直达文件」就用系统默认程序打开它。备注会显示在键帽上。");
+                ActionDesc.Text = Loc.T("选「直达网址」就用默认浏览器打开网址；选「直达文件」就用系统默认程序打开文件（填文件夹则用资源管理器打开）；一整行命令行（如 ipconfig）会绑成「运行命令」。备注会显示在键帽上。");
                 RefreshWebPageFields();
                 break;
             case EditorMode.TypeText:
@@ -824,21 +836,35 @@ public partial class KeysView : UserControl
     /// <summary>
     /// 选了「直达链接」分类时的默认动作。
     ///
-    /// 与其它分类不同，这一类里已经有三个动作（网址 / 文件夹 / 文件）——
+    /// 与其它分类不同，这一类里已经有网址 / 文件两条动作 ——
     /// 用户在这个键上原本绑的是「直达文件」时，重新点一下分类
     /// **不能**把它悄悄改成「直达网址」，那会把他填的路径当成网址打开。
+    ///
+    /// 绑着「运行命令」时同样不动它：命令行存不进"网址"，但目标框
+    /// 认得出它是命令（LinkActionFor → runProgram），点「确定绑定」还是命令；
+    /// 先清空反而把用户写的东西弄丢了。
     /// </summary>
     private void EnsureLinkAction()
     {
         if (_host == null) return;
         var binding = FindInCurrentLayer(CurrentCombo());
-        if (binding != null && IsLinkAction(binding.Action)) return;
+        if (binding != null && IsTargetAction(binding.Action)) return;
         EnsureActionForCategory(LinkUrlAction);
     }
 
-    /// <summary>是不是「直达链接」分类下的三种动作之一。</summary>
+    /// <summary>是不是「直达链接」分类下的两种动作之一（文件夹算「直达文件」）。</summary>
     private static bool IsLinkAction(string? actionId) =>
-        actionId is LinkUrlAction or LinkFolderAction or LinkFileAction;
+        actionId is LinkUrlAction or LinkFileAction;
+
+    /// <summary>
+    /// Arg 里存的是"要打开 / 要运行的目标"的动作：
+    /// 直达链接的两个 + 运行命令。
+    ///
+    /// 这几个共用同一个目标框、同一份文字（网址 / 路径 / 一整行命令），
+    /// 换分类时不该互相清空 —— 清了就是把用户填的东西弄丢。
+    /// </summary>
+    private static bool IsTargetAction(string? actionId) =>
+        IsLinkAction(actionId) || actionId == RunProgramAction;
 
     /// <summary>
     /// 参数就是"内容"的动作：Arg 存的是用户填的文字 / 程序 / 目标 / 按键组合。
@@ -846,20 +872,21 @@ public partial class KeysView : UserControl
     /// 和"参数是步进值"的动作（移动几个字符、音量步进几 %）不是一回事：
     /// 两类之间切换时绝不能沿用对方的 Arg。
     /// </summary>
-    private static bool IsContentArgAction(string? actionId) =>
-        actionId is "typeText" or "winBind" or "customKey"
-                 or LinkUrlAction or LinkFolderAction or LinkFileAction;
+    internal static bool IsContentArgAction(string? actionId) =>
+        actionId is "typeText" or "winBind" or "customKey" or RunProgramAction
+                 or LinkUrlAction or LinkFileAction
+                 or "openFolder";   // 老 id：参数同样是"要打开的目录"，换分类时不能清掉
 
     /// <summary>两个动作的 Arg 语义是否相同（同类之内切换才允许保留）。</summary>
-    private static bool SameArgFamily(string? from, string? to)
+    internal static bool SameArgFamily(string? from, string? to)
         => string.Equals(from, to, StringComparison.OrdinalIgnoreCase)
-           || (IsLinkAction(from) && IsLinkAction(to));
+           || (IsTargetAction(from) && IsTargetAction(to));
 
     /* 这里原本有「直达网址 / 直达文件夹 / 直达文件」三个按钮和 CurrentLinkKind()。
      * v4.5.19 起类型不再让用户选：输入框边填边识别，
      * 由 KeysView.Inputs.ApplyLinkDetection 决定绑哪个动作（见 LinkActionFor）。
      *
-     * 之所以能安全去掉"手动选类型"：三个动作只决定**怎么打开**，
+     * 之所以能安全去掉"手动选类型"：动作只决定**怎么打开**，
      * 目标字符串是同一份 Arg，识别结果的 Target 也会在打开时再归一，
      * 所以认错了改一下文字就自动纠回来，不会像以前那样把 Arg 清空重填。 */
 
@@ -994,9 +1021,17 @@ public partial class KeysView : UserControl
             binding = new KeyBinding { Combo = combo };
             CurrentLayerKeys.Add(binding);
         }
+        /* 上一个动作要在覆盖前记下来：下面判断"参数能不能沿用"靠的是它。 */
+        string? previousAction = binding.Action;
+
         binding.Action = actionId;
         if (actionId == "doNothing") binding.Arg = "";
         else if (IsStepArgAction(actionId) && !IsValidStep(binding.Arg)) binding.Arg = "";
+        /* 切到"参数就是内容"的动作（输入文本 / 直达链接 / 运行命令 / 自定义按键）
+         * 时，上一个动作的步进值（"移动 5 个字符"的 5）必须清掉 —— 否则用户在这里
+         * 选了「运行命令」，按下去执行的却是"运行 5"。 */
+        else if (IsContentArgAction(actionId) && !SameArgFamily(previousAction, actionId))
+            binding.Arg = "";
         /* 改的是**已存在**的绑定：条数没变、列表引用也没变，层绑定缓存
          * （ReferenceEquals + Count + BindingsVersion）会认成"还是老样子"，
          * 键帽上显示的仍是旧功能，直到用户去点别的键把缓存冲掉 ——

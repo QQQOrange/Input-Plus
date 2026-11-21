@@ -33,6 +33,16 @@ public static class RenderTools
         Directory.CreateDirectory(outDir);
         int count = 0;
 
+        /* 出图要能指定深浅色：深色界面的问题（标题栏一条白杠、字看不清）
+           只有真切成深色才看得见。INPUTPLUS_RENDER_THEME=dark|light|system。
+           只改这一轮进程里的主题，不写盘。 */
+        try
+        {
+            string? theme = Environment.GetEnvironmentVariable("INPUTPLUS_RENDER_THEME");
+            if (!string.IsNullOrWhiteSpace(theme)) Theme.ThemeManager.Apply(Theme.ThemeManager.Parse(theme!));
+        }
+        catch (Exception ex) { CoreLog.Warn("渲染：切换主题失败：" + ex.Message); }
+
         /* 截图是给人看"正常长什么样"的：老配置里可能还留着 `/`、`、` 这类
          * 不在候选里的旧符号，截出来胶囊旁边会写「旧符号」，容易被当成 bug。
          * 所以只在渲染这一轮里临时换成冒号，**不写盘**。 */
@@ -81,8 +91,17 @@ public static class RenderTools
         main.Show();
         Pump();
 
+        /* 只出指定页面：INPUTPLUS_RENDER_PAGES=qbar,holddrag
+           全套 15 页出一遍要十几秒，改一页就只想看那一页 ——
+           不能因为「想快一点」就得去改 Pages 数组再改回来。 */
+        string? only = Environment.GetEnvironmentVariable("INPUTPLUS_RENDER_PAGES");
+        string[] wanted = string.IsNullOrWhiteSpace(only)
+            ? Pages
+            : only.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
         foreach (var page in Pages)
         {
+            if (Array.IndexOf(wanted, page) < 0) continue;
             main.Navigate(page);
             /* 手势页最重（左中右三栏 + 61 条触发方式 + 动作下拉），
                220ms 常常还没画完就按快门，拍出来是一张白页。多等一拍。 */
@@ -124,13 +143,94 @@ public static class RenderTools
                     }
                     catch (Exception ex) { CoreLog.Warn("渲染吸附档位失败：" + ex.Message); }
 
-                    /* 黑名单与「按程序规则」在这页最底下，视口里看不到 ——
-                       滚到底再拍一张，验证那里两个挑程序的按钮也在。 */
+                    /* 左栏最底下是「窗口例外」，右边「当前状态」里是程序例外清单 ——
+                       左栏滚到底、右栏停在卡片顶上，一张图里两边都看得见。 */
                     hdv.ScrollListsForRender();
                     Pump(160);
                     Save(main, Path.Combine(outDir, "holddrag-lists.png"));
                 }
                 catch (Exception ex) { CoreLog.Warn("渲染按住拖拽示例失败：" + ex.Message); }
+            }
+
+            /* Qbar 页右栏滚到底才看得到「文件搜索」那张卡（内置索引的状态与范围），
+               平时没人会截图给它，回归时它的排版坏了也发现不了。 */
+            if (page == "qbar" && main.GetPage("qbar") is InputPlus.UI.Views.QbarSettingsView qv)
+            {
+                try
+                {
+                    Pump(200);
+                    qv.ScrollRightToEndForRender();
+                    Pump(220);
+                    Save(main, Path.Combine(outDir, "qbar-files.png"));
+
+                    /* 「文件搜」标签是折叠的，不主动切过去就永远拍不到：
+                       过滤器/优先级两张编辑卡有没有挤坏、内置项有没有列出来，
+                       只能靠这张图看。拍完切回「搜索指令」，别把页面留在别的标签上。 */
+                    qv.SelectTabForRender("files");
+                    Pump(280);
+                    Save(main, Path.Combine(outDir, "qbar-files-tab.png"));
+
+                    /* 下半截（优先级 / 语法与调试）在折叠面板的滚动区里，
+                       一张图看不全 —— 滚到底再拍一张，别让它们永远没人看。 */
+                    qv.ScrollFilesToForRender(0.5);
+                    Pump(200);
+                    Save(main, Path.Combine(outDir, "qbar-files-tab-mid.png"));
+
+                    /* 命令卡夹在优先级和语法之间，两个端点都拍不到它，
+                        单独给它一个位置 —— 命令列表挤坏过一次，得能看图查。 */
+                    qv.ScrollFilesToForRender(0.75);
+                    Pump(200);
+                    Save(main, Path.Combine(outDir, "qbar-files-tab-cmd.png"));
+                    qv.ScrollFilesToForRender(1.0);
+                    Pump(220);
+                    Save(main, Path.Combine(outDir, "qbar-files-tab-bottom.png"));
+
+                    /* 命令卡换成了软件自带的「选择程序… / 点选窗口」按钮（跟手势页同一套），
+                       按钮挤掉输入框这种事故只有看图才发现，所以按卡片锚点单独拍一张。 */
+                    qv.ScrollFilesToCardForRender(3);
+                    Pump(220);
+                    Save(main, Path.Combine(outDir, "qbar-files-tab-picker.png"));
+                    qv.ScrollFilesToForRender(0.0);
+                    qv.SelectTabForRender("search");
+                    Pump(160);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染 Qbar 文件搜索卡失败：" + ex.Message); }
+
+                /* 展开后的文件搜索窗口：它只在按了展开按钮之后才存在，
+                   平时连编译期都看不出来长啥样。这里用一个固定查询拍一张，
+                   分面侧栏挤没挤坏、两列表对齐没有，全靠这张图。 */
+                try
+                {
+                    var expand = new QbarExpandWindow(host, "report");
+                    expand.WindowStartupLocation = WindowStartupLocation.Manual;
+                    expand.Left = -32000;
+                    expand.Top = -32000;
+                    expand.ShowInTaskbar = false;
+                    if (TryRenderSize(expand))
+                    {
+                        expand.Show();
+                        Pump(700);          // 等一次防抖 + 查询回来
+                        Save(expand, Path.Combine(outDir, "qbar-expand.png"));
+
+                        /* 圆角、跟随系统明暗是 DWM 画的，RenderTargetBitmap 拍不到。
+                           把窗口真摆到屏幕上再拷一张（几百毫秒），拍完挪回离屏。 */
+                        expand.Left = 80;
+                        expand.Top = 80;
+                        Pump(500);
+                        SaveOnScreen(expand, Path.Combine(outDir, "qbar-expand-onscreen.png"));
+                        expand.Left = -32000;
+                        expand.Top = -32000;
+                        Pump(120);
+
+                        /* 点表头排序是纯交互，截图看不出来 —— 切到"大小降序"再拍一张，
+                           顺带验证表头箭头和数值序（不是字符串序）。 */
+                        expand.SortForRender("size", true);
+                        Pump(120);
+                        Save(expand, Path.Combine(outDir, "qbar-expand-sorted.png"));
+                        expand.Close();
+                    }
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染展开搜索窗口失败：" + ex.Message); }
             }
 
             /* 手势录制窗口：不单独拍一张的话，回归时根本看不到它长什么样。
@@ -177,23 +277,153 @@ public static class RenderTools
                 Pump(120);
             }
 
-            /* 外观 / 参数两块默认收起：不展开就没人验过"开关条上删干净的项，
-             * 是不是真的都搬进来了"，所以再拍一张两块都展开的。 */
-            if (page == "gestures" &&
-                main.GetPage("gestures") is InputPlus.UI.Views.GesturesView gp)
+            /* 外观 / 参数 / 开关快捷键都进了右上角齿轮开的「手势设置」窗：
+             * 不单拍一张，回归时谁也看不到它长什么样。模态窗，用 Show() 拍完就关。 */
+            if (page == "gestures")
             {
                 try
                 {
-                    gp.SetPreferencesExpandedForRender(true);
+                    var dlg = new GestureSettingsWindow(host)
+                    {
+                        Owner = main,
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = 80,
+                        Top = 40,
+                    };
+                    dlg.ExpandAllForRender();
+                    dlg.Show();
                     Pump(320);
-                    Save(main, Path.Combine(outDir, "gestures-prefs.png"));
+                    Save(dlg, Path.Combine(outDir, "gestures-prefs.png"));
+                    /* 美化卡夹在外观与参数之间，滚到它再拍一张。 */
+                    dlg.ScrollOptionsToBeautyForRender();
+                    Pump(220);
+                    Save(dlg, Path.Combine(outDir, "gestures-prefs-beauty.png"));
+                    /* 参数卡在最底下：滚到底再拍一张，免得只有外观那半截。 */
+                    dlg.ScrollOptionsToEndForRender();
+                    Pump(220);
+                    Save(dlg, Path.Combine(outDir, "gestures-prefs-params.png"));
+                    dlg.Close();
                 }
                 catch (Exception ex)
                 {
-                    CoreLog.Warn("渲染外观偏好失败：" + ex.Message);
+                    CoreLog.Warn("渲染手势设置窗失败：" + ex.Message);
                 }
-                gp.SetPreferencesExpandedForRender(false);
-                Pump(120);
+            }
+
+            /* 多步手势（v1.5.0）：步骤清单长什么样只能靠眼睛验，单独拍一张。 */
+            if (page == "gestures" &&
+                main.GetPage("gestures") is InputPlus.UI.Views.GesturesView gst)
+            {
+                try
+                {
+                    var lines = gst.AddStepsSampleForRender();
+                    Pump(300);
+                    Save(main, Path.Combine(outDir, "gestures-steps.png"));
+                    foreach (string line in lines) CoreLog.Info("多步手势出图：" + line);
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("渲染多步手势失败：" + ex.Message);
+                }
+            }
+
+            /* Lua 脚本窗口（v1.5.0）：左边脚本列表、右边代码与 ip.* 速查表。 */
+            if (page == "gestures")
+            {
+                try
+                {
+                    if (host.Settings.Scripts.Count == 0)
+                    {
+                        host.Settings.Scripts.Add(new InputPlus.Core.Scripting.LuaScript
+                        {
+                            Id = "renderlua",
+                            Name = "整理剪贴板",
+                            Comment = "去掉首尾空白再写回去",
+                            Code = InputPlus.Core.Scripting.LuaRunner.SampleCode,
+                        });
+                    }
+                    var dlg = new LuaScriptsWindow(host)
+                    {
+                        Owner = main,
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = 70,
+                        Top = 30,
+                    };
+                    dlg.Show();
+                    Pump(260);
+                    dlg.SelectFirstForRender();
+                    Pump(200);
+                    Save(dlg, Path.Combine(outDir, "lua-scripts.png"));
+                    dlg.Close();
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("渲染 Lua 脚本窗口失败：" + ex.Message);
+                }
+            }
+
+            /* 手势菜单管理窗（v1.5.0）：三栏 —— 菜单 / 条目 / 条目详情。 */
+            if (page == "gestures")
+            {
+                try
+                {
+                    if (host.Settings.GestureMenus.Count == 0)
+                    {
+                        var sample = new InputPlus.Core.Scripting.GestureMenuDef
+                        {
+                            Id = "rendermenu",
+                            Name = "窗口菜单",
+                            Hint = "选一个窗口操作",
+                        };
+                        sample.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem { Title = "最小化", Action = "winMinimize" });
+                        sample.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem { Title = "最大化", Action = "winMaximize" });
+                        sample.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem { Title = "关闭窗口", Action = "winClose" });
+                        host.Settings.GestureMenus.Add(sample);
+                    }
+                    var dlg = new GestureMenusWindow(host)
+                    {
+                        Owner = main,
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = 70,
+                        Top = 30,
+                    };
+                    dlg.Show();
+                    Pump(260);
+                    dlg.SelectFirstForRender();
+                    Pump(200);
+                    Save(dlg, Path.Combine(outDir, "gesture-menus.png"));
+                    dlg.Close();
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("渲染手势菜单管理窗失败：" + ex.Message);
+                }
+            }
+
+            /* 手势菜单弹层（v1.5.0）：鼠标旁边那一列，1..9 快选。 */
+            if (page == "gestures" && host.Settings.GestureMenus.Count > 0)
+            {
+                try
+                {
+                    var dlg = new GestureMenuWindow(host.Settings.GestureMenus[0], InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = 120,
+                        Top = 90,
+                    };
+                    dlg.Show();
+                    Pump(240);
+                    Save(dlg, Path.Combine(outDir, "gesture-menu-popup.png"));
+                    dlg.Close();
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("渲染手势菜单弹层失败：" + ex.Message);
+                }
             }
 
             /* 「已禁用」到底看不看得出来，只能靠眼睛：拍一张第一个应用程序被禁用后的样子。 */
@@ -245,7 +475,7 @@ public static class RenderTools
 
             /* 「（旧功能，建议换掉）」这类补偿文案已经删掉了，改由启动时的迁移
              * 换成正式动作。这里拍一条原本会撞上它的手势（runProgram），
-             * 确认分类自己跳到「系统功能」、功能显示「运行程序 / 命令」、
+             * 确认分类自己跳到「系统功能」、功能显示「运行命令」、
              * 参数框出现，并且下拉里一个"旧功能"字样都没有。
              * 下拉列表本身弹窗截不到，所以同时写一份 txt 记录列表内容。 */
             if (page == "gestures" &&
@@ -401,6 +631,12 @@ public static class RenderTools
                         kv.FillLinkTargetForRender(@"C:\Windows\notepad.exe");
                         Pump(260);
                         Save(main, Path.Combine(outDir, "keys-link-file.png"));
+
+                        /* 命令行（v1.4.2）：徽标该是「命令」、说明该说参数原样传、
+                         * 「浏览…」按钮该消失 —— 这张图就是这三件事的证据。 */
+                        kv.FillLinkTargetForRender(@"notepad.exe D:\笔记.txt");
+                        Pump(260);
+                        Save(main, Path.Combine(outDir, "keys-command.png"));
 
                         /* 回归：真的按一次「确定绑定」（环境变量打开才跑）。
                          *
@@ -703,6 +939,19 @@ public static class RenderTools
                 {
                     CoreLog.Warn("渲染设置页外观区失败：" + ex.Message);
                 }
+                /* 「提示条」（v1.6.3，原名「通知样式」）：紧跟在外观卡后面的那张卡，
+                 * 默认落在折叠线以下 —— 它是「所有提示共用一个外观」的唯一入口，
+                 * 排版必须有人看见过。 */
+                try
+                {
+                    sv.ScrollToNotificationsForRender();
+                    Pump(240);
+                    Save(main, Path.Combine(outDir, "settings-notifications.png"));
+                }
+                catch (Exception ex)
+                {
+                    CoreLog.Warn("渲染设置页提示条失败：" + ex.Message);
+                }
                 Pump(120);
 
                 // 「使用统计 → 查看明细」：默认收起，不展开就没人看见过它的排版
@@ -737,6 +986,26 @@ public static class RenderTools
                 }
             }
             count++;
+        }
+
+        /* 全局搜索面板（Ctrl+K）。
+         *
+         * 模态浮层，页面截图里永远没有它；但它现在的角色是「整个软件都从这里找」，
+         * 「Kind 徽章 + 标题 + 明细」这套三栏排版值得一张固定的图。 */
+        try
+        {
+            var paletteHits = Core.Search.GlobalSearch.Build(host.Settings, Loc.T, host.Actions.Items);
+            var palette = SearchPaletteWindow.ForRender(paletteHits, "手势");
+            palette.Show();
+            Pump(260);
+            palette.UpdateLayout();
+            Save(palette, Path.Combine(outDir, "search-palette.png"));
+            palette.Close();
+            count++;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("渲染全局搜索面板失败：" + ex.Message);
         }
 
         /* 右键菜单样式（`CLP_RENDER_MENU=1` 时额外出一张）。
@@ -839,6 +1108,86 @@ public static class RenderTools
         qbar.UpdateLayout();
         Pump(120);
         Save(qbar, Path.Combine(outDir, "qbar-chip-typing.png"));
+        count++;
+
+        /* 查词：ol 标签 + 词，走的是和用户完全一样的路径（TryStartDictionary）。
+           联网结果不固定，但"有没有释义行 / 排版会不会挤爆"这张图能看出来；
+           渲染时网络不通就只会显示一行错误文案，同样是有效信息。 */
+        qbar.OpenForRender("ol", "report");
+        qbar.ParkOffScreenForRender();
+        Pump(2600);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-dict.png"));
+        count++;
+
+        /* 中文词另出一张：中文释义比英文长，最容易把行高/静默截断的问题暴露出来；
+           顺带验证「银行」这种简体词走的是有道那条路（萌典只有繁体）。 */
+        /* 不带标签的查词：直接把整句打进去（用户不打空格就不会生成 chip）。
+           这条路径以前是死的，现在应该同样出释义；出一张图钉住它。 */
+        qbar.OpenForRenderQuery("ol hello");
+        qbar.ParkOffScreenForRender();
+        Pump(2400);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-dict-nolabel.png"));
+        count++;
+
+        /* 动作触发的那条路（「Qbar 搜索」分类的 qdict.lookup → OpenDictionary）：
+           与上面 OpenForRender("ol", …) 不是同一段代码 —— 前者要自己把
+           "命令关键字"变成 chip，关键字还可能被用户改过名。出一张图钉住它。 */
+        qbar.OpenDictionary("hello");
+        qbar.ParkOffScreenForRender();
+        Pump(2600);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-dict-action.png"));
+        count++;
+
+        /* 命令行：首词命中命令关键字时，动作行与普通搜索结果必须并列出现（不许互相吃掉）。
+           这里用 cmd 而不是 ol：cmd 走的是「外部程序 + {current_folder}」那条模板，
+           参数展开对不对一眼能看出来；ol 是内部动作，验证不到模板那一层。 */
+        qbar.OpenForRenderQuery("cmd dir");
+        qbar.ParkOffScreenForRender();
+        Pump(700);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-command.png"));
+        count++;
+
+        /* 过滤器 chip：输入 doc 直接按空格就该变成左侧的 chip 并把结果筛成文档。
+           以前只有 "doc:" 加点的写法，这条新路没有图就没人能确认它真的生效。 */
+        qbar.OpenForRenderFilter("doc", "报表");
+        qbar.ParkOffScreenForRender();
+        Pump(600);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-filter-chip.png"));
+        count++;
+
+        /* 绑定按键那条路：动作 qfilter:<Id> 直接把面板打开并挂好 chip。
+           和上一张的区别只看一件事 —— 不用用户打关键字，chip 就已经在框外了。 */
+        qbar.OpenFileSearch("builtin.doc", "报表");
+        qbar.ParkOffScreenForRender();
+        Pump(600);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-filter-action.png"));
+        count++;
+
+        qbar.OpenForRender("ol", "银行");
+        qbar.ParkOffScreenForRender();
+        Pump(2600);
+        qbar.Height = qbar.ActualHeight;
+        qbar.UpdateLayout();
+        Pump(120);
+        Save(qbar, Path.Combine(outDir, "qbar-dict-cn.png"));
         count++;
 
         // 网址关键字：不建标签，整条 URL 直接进输入框
@@ -1268,6 +1617,55 @@ public static class RenderTools
         DrawDot(new SolidColorBrush(Color.FromRgb(0x53, 0x59, 0x63)), "gesture-dot.png");
     }
 
+    /// <summary>
+    /// 把 INPUTPLUS_RENDER_SIZE 套到任意窗口上。主窗口那边是内联解析的，
+    /// 这里单独抽一个给"临时弹出来的窗口"用（展开窗口、手势录制窗口之类），
+    /// 免得每加一个窗口就复制一遍解析逻辑。
+    /// 返回 false 表示没设尺寸或格式不对 —— 调用方自己决定用默认大小。
+    /// </summary>
+    private static bool TryRenderSize(Window window)
+    {
+        string? size = Environment.GetEnvironmentVariable("INPUTPLUS_RENDER_SIZE");
+        if (string.IsNullOrWhiteSpace(size)) return false;
+        string[] parts = size!.Split('x', 'X');
+        if (parts.Length != 2
+            || !double.TryParse(parts[0], out double w) || w <= 200
+            || !double.TryParse(parts[1], out double h) || h <= 200) return false;
+        window.Width = w;
+        window.Height = h;
+        return true;
+    }
+
+    /// <summary>
+    /// 拍一张"屏幕上真的长什么样"的图。RenderTargetBitmap 只画 WPF 视觉树，
+    /// DWM 画的圆角、系统阴影、Mica 背景、深浅色标题栏统统拍不到 —— 而"窗口没有圆角"、
+    /// "不跟系统明暗"这类反馈恰好只存在于合成器那一层。这里把窗口真摆到屏幕上，
+    /// 用屏幕拷贝取窗口的物理矩形（连圆角外的桌面像素一起取进来），拍完由调用方挪回去。
+    /// </summary>
+    private static void SaveOnScreen(Window window, string path)
+    {
+        try
+        {
+            window.UpdateLayout();
+            Point topLeft = window.PointToScreen(new Point(0, 0));
+            Point bottomRight = window.PointToScreen(new Point(window.ActualWidth, window.ActualHeight));
+            /* 四周多留 12 像素：圆角外面是桌面，留白才能看出"角被切掉了"。 */
+            const int pad = 12;
+            int x = (int)Math.Round(topLeft.X) - pad;
+            int y = (int)Math.Round(topLeft.Y) - pad;
+            int w = (int)Math.Round(bottomRight.X - topLeft.X) + pad * 2;
+            int h = (int)Math.Round(bottomRight.Y - topLeft.Y) + pad * 2;
+            if (w <= 0 || h <= 0) return;
+            using var bmp = new System.Drawing.Bitmap(w, h);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h));
+            }
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        catch (Exception ex) { CoreLog.Warn("屏幕截图失败：" + ex.Message); }
+    }
+
     private static void Save(Window window, string path)
     {
         window.UpdateLayout();
@@ -1295,6 +1693,14 @@ public static class RenderTools
             }
             logicalH = Math.Max(logicalH, desiredH);
         }
+
+        /* 根元素带 Margin 时，RenderTargetBitmap.Render(root) 会把它在窗口里的位置
+         * 一起算进去（相当于从窗口左上角开始画）。以前位图只按 ActualWidth/Height 开，
+         * 带 Margin 的窗口（对话框都是 22,18）右下角就被裁掉一条 ——
+         * 「手势设置」窗的底栏按钮就这么少过半截。把外边距算进位图尺寸即可。 */
+        var rootMargin = root.Margin;
+        logicalW += rootMargin.Left + rootMargin.Right;
+        logicalH += rootMargin.Top + rootMargin.Bottom;
 
         int w = (int)Math.Ceiling(logicalW * scale);
         int ht = (int)Math.Ceiling(logicalH * scale);

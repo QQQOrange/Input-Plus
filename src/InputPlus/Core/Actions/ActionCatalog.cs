@@ -342,6 +342,87 @@ public sealed class ActionCatalog
                 shortTitle: name.Length <= 4 ? name : name[..4]);
         }
 
+        /* 「直接搜索」的第二类：用你自己配的 Qbar 命令处理选区。
+         *
+         * 典型用法：Qbar 命令 ol = 欧路词典 -w {query}。绑一个键，在任意程序里
+         * 选中单词按一下，词典直接带词打开 —— 不用先打开 Qbar、再打 ol、再打字。
+         *
+         * 只注册配了程序的命令：newFile / newFolder 这类内部动作没有 exe，
+         * 塞进「直接搜索」只会让下拉里多出一堆按了没用的项。 */
+        foreach (var cmd in InputPlus.Core.Qbar.Search.QbarCommandStore
+                     .Effective(ctx.Settings().Qbar.Commands)
+                     .Where(x => !string.IsNullOrWhiteSpace(x.Path)))
+        {
+            string id = cmd.Id;
+            string keyword = string.IsNullOrWhiteSpace(cmd.Keyword) ? cmd.Title : cmd.Keyword;
+            string name = string.IsNullOrWhiteSpace(cmd.Title) ? keyword : cmd.Title;
+            c.Add("qcmdsearch:" + id, "直接搜索",
+                Loc.F("命令：{0}", name),
+                Loc.F("把选中的文字交给「{0}」（Qbar 里输入 {1} 的那条命令）", name, keyword),
+                a => ctx.SearchSelectionWithCommand(id, a),
+                needsArg: false, argHint: "",
+                shortTitle: name.Length <= 4 ? name : name[..4]);
+        }
+
+        /* 文件搜索过滤器（wd = 文档 / pic = 图片 / 视频 / 音频 / 自己加的）也进这两个分类。
+         *
+         * 「Qbar 搜索」：一键打开面板并挂上过滤器 —— 等价于"打 wd 再按空格"，
+         *              少两步操作，也是唯一能给过滤器绑定按键的入口。
+         * 「直接搜索」：在任意程序里选中一个名字，按一下就按这个类型找本地文件。
+         *
+         * 只注册 Enabled 的：关掉的过滤器在面板里连 chip 都打不出来，
+         * 绑上键只会得到一个空面板，用户会以为键坏了。 */
+        foreach (var f in InputPlus.Core.Qbar.Search.QbarFilterCatalog
+                     .Create(ctx.Settings().Qbar.Filters).All.Where(x => x.Enabled))
+        {
+            string filterId = f.Id;
+            string filterName = string.IsNullOrWhiteSpace(f.Name) ? f.Keyword : f.Name;
+
+            c.Add("qfilter:" + filterId, "Qbar 搜索",
+                Loc.F("Qbar：{0}", filterName),
+                Loc.F("打开 Qbar 并只看「{0}」", filterName),
+                _ => { ctx.RequestQbarFileSearch(filterId); return true; });
+
+            c.Add("fsearch:" + filterId, "直接搜索",
+                Loc.F("文件：{0}", filterName),
+                Loc.F("按「{0}」把选中的文字当文件名去搜", filterName),
+                a => ctx.SearchSelectionAsFile(filterId, a),
+                needsArg: false, argHint: "",
+                shortTitle: filterName.Length <= 4 ? filterName : filterName[..4]);
+        }
+
+        /* 查词（欧路词典）也进这两个分类 —— 文件搜索能绑键，查词没有理由不能。
+         *
+         * 「直接搜索」：选中一个词按下去，欧路词典窗口带着这个词打开（没装就走网页词典）。
+         * 「Qbar 搜索」：打开面板、ol 变成 chip、词已经填好 —— 想改词、想复制某条释义时走这条。
+         *
+         * 程序 / 参数 / 工作目录全部取 ol 命令自己的配置，动作里不硬编码 -w：
+         * 用户在设置里把 ol 改成别的词典，这两个动作跟着变。 */
+        {
+            var dictCmd = InputPlus.Core.Qbar.DictionaryLauncher
+                .EffectiveCommand(ctx.Settings().Qbar.Commands);
+            if (dictCmd != null)
+            {
+                bool isBuiltinDict = string.Equals(dictCmd.Id,
+                    InputPlus.Core.Qbar.Search.QbarCommandStore.BuiltinDictId, StringComparison.OrdinalIgnoreCase);
+                string dictName = (isBuiltinDict || string.IsNullOrWhiteSpace(dictCmd.Title))
+                    ? Loc.T("欧路词典")
+                    : dictCmd.Title.Trim();
+
+                c.Add("dict.lookup", "直接搜索",
+                    Loc.F("词：{0}", dictName),
+                    Loc.F("把选中的词直接送进「{0}」查（没装就开网页词典）", dictName),
+                    a => ctx.LookupSelectionInDictionary(a),
+                    needsArg: false, argHint: "", shortTitle: "查词");
+
+                c.Add("qdict.lookup", "Qbar 搜索",
+                    Loc.F("Qbar：{0}", dictName),
+                    Loc.F("打开 Qbar 并查这个词（「{0}」）", dictName),
+                    a => ctx.SearchSelectionWithDictionary(a),
+                    needsArg: false, argHint: "", shortTitle: "查词");
+            }
+        }
+
         // ---------------- 窗口 ----------------
         c.Add("winPin", "窗口功能", "窗口置顶 / 取消", "让当前窗口永远在最前面", _ => ctx.Windows.ToggleTopmost(), shortTitle: "置顶");
         c.Add("winTransparent", "窗口功能", "窗口透明度切换", "在几档透明度之间循环", _ => ctx.Windows.CycleOpacity(), shortTitle: "透明");
@@ -474,19 +555,20 @@ public sealed class ActionCatalog
             "打开「此电脑」", _ => { ctx.RunProgram("explorer.exe"); return true; }, shortTitle: "资源");
         c.Add("openTaskManager", "系统功能", "打开任务管理器",
             "打开任务管理器", _ => { ctx.RunProgram("taskmgr.exe"); return true; }, shortTitle: "任务");
-        /* 运行程序 —— 老 id 不变，直接升级成正式可见动作。
+        /* 运行命令 —— 老 id 不变，语义收窄成"只跑命令"。
          *
-         * 以前它和「打开网址」一起被藏起来，理由是"直达链接能覆盖"。
-         * 但「直达链接」只能开 网址 / 文件夹 / 文件，**带参数的命令行**它做不到
-         * （notepad.exe D:\笔记.txt、cmd.exe /c …）。
-         * 藏起来之后，老配置里的「强制退出」「任务管理器」「休眠」这类手势
-         * 在下拉里只剩一条"旧功能，建议换掉"，用户又找不到等价的新功能。
-         * 现在放回「系统功能」并补上 needsArg —— 参数框会正常显示，
-         * 选它就能直接填命令行。 */
-        c.Add("runProgram", "系统功能", "运行程序 / 命令",
-            "运行参数里的程序或命令，可以带参数（例如 notepad.exe D:\\笔记.txt）",
-            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("要运行的程序") : Run(() => ctx.RunProgram(a)),
-            needsArg: true, argHint: "例如 notepad.exe D:\\笔记.txt", shortTitle: "运行");
+         * 以前它叫「运行程序 / 命令」，用 UseShellExecute=true 执行，等于
+         * "填什么就用关联程序打开什么" —— 填一个 .docx 进去和「直达文件」
+         * 做的事一模一样。用户在两个地方都能开文件，不知道该用哪个（这次要解的冲突）。
+         *
+         * 现在：命令行可以带参数，交给程序本身或 cmd 执行；文件、文件夹一律不在这里打开，
+         * 提示改用「直达文件」。打开文件/文件夹从此只有「直达文件」一个入口。
+         * id 保持 runProgram 不变，老配置里绑的动作和参数照旧能用，不需要迁移。 */
+        c.Add("runProgram", "系统功能", "运行命令",
+            "执行一条命令，可以带参数（例如 ipconfig、notepad.exe D:\\笔记.txt）；只跑命令，"
+            + "打开文件或文件夹请用「直达文件」",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("命令") : Run(() => ctx.RunProgram(a)),
+            needsArg: true, argHint: "例如 ipconfig 或 notepad.exe D:\\笔记.txt", shortTitle: "命令");
         c.Add("lockScreen", "系统功能", "锁定屏幕", "立即锁定当前会话", _ =>
         {
             // Win+L 走 SendInput 会被系统当成注入组合键忽略；直接锁会话最可靠。
@@ -539,31 +621,37 @@ public sealed class ActionCatalog
 
         // ---------------- 直达链接 ----------------
         //
-        // 这一类下面有三个动作：直达网址 / 直达文件夹 / 直达文件。
+        // 这一类下面有两个可见动作：直达网址 / 直达文件。
         // 共同点：目标**预先填好**，按键时照单打开，不需要选区。
         // 选了「直达链接」分类后，界面会换成"类型 + 目标 + 备注"的专用面板
         // （见 KeysView），备注还能显示在键帽上。
         //
-        // 与「系统 → 直达链接」的区别：
+        // 为什么文件夹和文件合成「直达文件」一条：
+        // 两者只差"交给资源管理器还是交给默认程序"，而 OpenFile 内部先看
+        // Directory.Exists 再分派（见 ActionContext.Open.cs），填文件夹也照样打开。
+        // 拆成两条唯一的效果是让用户在「直达文件夹 / 直达文件」之间选错一次 ——
+        // 和「运行程序」时代重复填地址是同一类问题。
+        //
+        // 与「智能直达」的区别：
         //   预填 = 常用地址一键直达（每天点的后台、常开的工作目录）
         //   智能 = 眼前临时出现的东西，选中即开，不用配置
-        //
-        // 为什么单独建动作而不是复用「系统 → 打开网址」：
-        // 界面要根据分类切换到专用面板，复用的话用户在「系统」分类里
-        // 选「打开网址」就看不到备注框，也不会出现文件夹/文件那一套。
         c.Add("webPage", "直达链接", "直达网址",
             "用默认浏览器打开这个网址；可以加备注，备注会显示在键帽上",
             a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("网址") : Run(() => ctx.OpenUrl(a)),
             needsArg: true);
 
+        /* 「直达文件夹」不再显示：openFile 已经能开文件夹（先认目录，再走 OpenFolder）。
+         * 但**不能删** —— 老配置里绑过它的按键要照旧按得动。启动时
+         * LegacyActionMigration 会把它换成「直达文件」，参数（路径）原样带走。 */
         c.Add("openFolder", "直达链接", "直达文件夹",
             "在文件资源管理器里打开这个文件夹；可以加备注，备注会显示在键帽上",
             a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("文件夹路径") : Run(() => ctx.OpenFolder(a)),
-            needsArg: true);
+            needsArg: true, hidden: true);
 
         c.Add("openFile", "直达链接", "直达文件",
-            "用系统默认程序打开这个文件（.docx 进 Word、.mp4 进播放器，跟双击一样）；可以加备注，备注会显示在键帽上",
-            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("文件路径") : Run(() => ctx.OpenFile(a)),
+            "用系统默认程序打开这个文件（.docx 进 Word、.mp4 进播放器，跟双击一样）；"
+            + "填文件夹就在资源管理器里打开；可以加备注，备注会显示在键帽上",
+            a => string.IsNullOrWhiteSpace(a) ? ctx.MissingArg("文件或文件夹路径") : Run(() => ctx.OpenFile(a)),
             needsArg: true);
 
         // ---------------- 自定义按键 ----------------
@@ -638,51 +726,16 @@ public sealed class ActionCatalog
         // 而是直接给出两个按钮（点选窗口 / 选择程序文件）—— 因为"绑哪个窗口"
         // 是去抓来的，不是从列表里选出来的。
         //
-        // 旧的 10 个固定槽位动作已彻底移除：它们只会让下拉里多出 20 个
-        // 「激活窗口槽位 N / 绑定到窗口槽位 N」的噪声，与现在的用法重复。
+        // 旧的 10 个固定槽位动作、以及后来那一个「记住当前窗口到槽位」的
+        // bindWindowSlot（连同 WindowSlots / WindowSlotBinder 整套窗口绑定管理、
+        // Qbar 的「窗口绑定管理」入口）已在 v1.3.1 按用户要求彻底删除：
+        // 想用一个键打开某个程序，直接给它绑「直达文件」动作即可，不需要先记槽位。
         //
         // 第三个参数把设置传进去 —— 有它才播「唤出动画」（见 WindowSummonAnimator）。
         c.Add("winBind", "窗口绑定", "切换窗口",
             "选定一个程序后：按一下切过去，再按一次最小化；没开就自动启动",
             a => ctx.WindowBindings.ActivateExe(a, "winBind:" + a, ctx.Settings()),
             needsArg: true);
-
-        /* 唯一的槽位动作。Capslox 3.0 里 cx-alt-1..0 是「把当前窗口记到槽位 N」，
-         * 槽位本身又是 Caps+1~0 的切换目标。这里不新增 20 个槽位动作，
-         * 只留这一个带参数的捕获动作：它把前台窗口的 exe 写进
-         * WindowSlots，并把第 1 层的 caps_<N> 改成普通的 winBind 绑定 ——
-         * 于是切换、循环、没开就启动这些行为全部复用 ActivateExe，零重复实现。 */
-        c.Add("bindWindowSlot", "窗口绑定", "记住当前窗口到槽位",
-            "把当前前台窗口记到 1~10 号槽位，并把第 1 层的 Caps+数字 改成切换它",
-            a =>
-            {
-                int slot = WindowSlotBinder.ParseSlot(a);
-                if (slot == 0)
-                {
-                    ctx.Notify(Loc.F("槽位号必须是 1~{0}", WindowSlotBinder.SlotCount));
-                    return false;
-                }
-
-                var info = WindowService.ForegroundInfo();
-                string path = info?.ExePath ?? "";
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                {
-                    ctx.Notify("前台没有可用的程序窗口，先切到要记住的那个窗口再按");
-                    return false;
-                }
-
-                var settings = ctx.Settings();
-                if (!WindowSlotBinder.TryBind(settings, slot, path, info!.ExeName, out string message))
-                {
-                    ctx.Notify(message);
-                    return false;
-                }
-
-                SettingsStore.RequestSave(settings);
-                ctx.Notify(message);
-                return true;
-            },
-            needsArg: true, argHint: "1~10", shortTitle: "记住槽位");
 
         // ---------------- 宏 ----------------
         // 宏动作 ID 形如 macro:<宏ID>，参数可覆盖重复次数。
@@ -698,13 +751,86 @@ public sealed class ActionCatalog
         }
         c.Add("macroManager", "宏", "打开宏管理", "录制 / 编辑 / 绑定宏", _ => { ctx.RequestOpenMacros(); return true; });
 
+        // ---------------- Lua 脚本（v1.5.0） ----------------
+        /* 一条脚本一个动作：ID 形如 lua:<脚本ID>。
+         *
+         * 为什么归类而不是"一个动作带参数选脚本"：分类里能直接看到自己的脚本名，
+         * 绑键时不用记编号；脚本改了名这里跟着变（重建目录时重新读设置）。
+         * 脚本里能调软件自己的功能 —— ip.action / ip.run / ip.open / ip.key …
+         * 宿主注入的 invoke 就是这本目录本身，能调的动作与手动绑键完全一样。 */
+        /* 内置模板（v1.5.2）：不用先写脚本，装好就能直接选 —— 这就是"Lua 脚本"
+         * 分类里以前缺的那一步。模板代码活在 Core/Scripting/LuaTemplates.cs 里，
+         * 不进用户设置；想改就在管理窗里「从模板新建」复制一份出来改。 */
+        /* Visible 而不是 All：与原生动作重复的那 49 条（v1.6.1 审计）不再铺进目录，
+         * 否则「打开计算器」这类会有两条一模一样的动作，绑键时得猜哪条是脚本。
+         * 老配置里已经绑好的 luaTpl:<id> 照旧能执行 —— 执行走的是 Find(id)。 */
+        foreach (var tpl in Core.Scripting.LuaTemplates.Visible)
+        {
+            var snap = tpl;
+            c.Add("luaTpl:" + snap.Id, "Lua 脚本", snap.Name, snap.Description,
+                a =>
+                {
+                    var result = Core.Scripting.LuaRunner.Run(snap.Code, snap.Name, ctx,
+                        (id, arg) => c.Invoke(id, arg), a ?? "");
+                    if (!result.Ok) ctx.Notify(Loc.F("脚本「{0}」出错：{1}", snap.Name, result.Error));
+                    else if (!string.IsNullOrWhiteSpace(result.Output)) ctx.Notify(result.Output);
+                    return result.Ok;
+                },
+                needsArg: snap.NeedsArg, argHint: snap.ArgHint, shortTitle: "脚本");
+        }
+
+        foreach (var script in ctx.Settings().Scripts)
+        {
+            var snap = script;                      // 循环变量不能被 lambda 捕获
+            string sid = snap.Id;
+            string sname = snap.DisplayName;
+            c.Add("lua:" + sid, "Lua 脚本", Loc.F("运行脚本：{0}", sname),
+                string.IsNullOrWhiteSpace(snap.Comment) ? "Lua 脚本：把软件的功能串成一条命令" : snap.Comment,
+                a =>
+                {
+                    /* 每次都从设置里取最新那份：脚本在管理窗里改完不用重启就能生效。 */
+                    var now = ctx.Settings().Scripts.FirstOrDefault(s => s.Id == sid) ?? snap;
+                    if (!now.Enabled)
+                    {
+                        ctx.Notify(Loc.F("脚本「{0}」已停用", now.DisplayName));
+                        return false;
+                    }
+
+                    var result = Core.Scripting.LuaRunner.Run(now, ctx, (id, arg) => c.Invoke(id, arg), a ?? "");
+                    now.LastResult = result.Ok
+                        ? Loc.F("成功 · {0}ms", (int)result.ElapsedMs)
+                        : Loc.T("失败：") + result.Error;
+                    if (!result.Ok) ctx.Notify(Loc.F("脚本「{0}」出错：{1}", now.DisplayName, result.Error));
+                    else if (!string.IsNullOrWhiteSpace(result.Output)) ctx.Notify(result.Output);
+                    try { SettingsStore.RequestSave(ctx.Settings()); } catch { }
+                    return result.Ok;
+                },
+                needsArg: true, argHint: "传给脚本的 ip.arg（可留空）", shortTitle: "脚本");
+        }
+        c.Add("luaManager", "Lua 脚本", "打开脚本管理", "写 / 改 / 试跑 Lua 脚本", _ => { ctx.RequestOpenLuaScripts(); return true; });
+
+        // ---------------- 手势菜单（v1.5.0） ----------------
+        /* 一个菜单一个动作：ID 形如 menu:<菜单ID>，触发了就在鼠标旁边弹出来。 */
+        foreach (var menu in ctx.Settings().GestureMenus)
+        {
+            var snap = menu;
+            string mid = snap.Id;
+            c.Add("menu:" + mid, "手势菜单", Loc.F("弹出菜单：{0}", snap.DisplayName),
+                string.IsNullOrWhiteSpace(snap.Hint)
+                    ? Loc.F("{0} 项，在鼠标旁边弹出", snap.Items.Count)
+                    : snap.Hint,
+                _ => { ctx.RequestGestureMenu(mid); return true; },
+                shortTitle: "菜单");
+        }
+        c.Add("gestureMenuManager", "手势菜单", "打开菜单管理", "编辑菜单的条目与动作", _ => { ctx.RequestOpenGestureMenus(); return true; });
+
         return c;
     }
 
     /// <summary>
     /// 执行一个"没有返回值"的动作，并按成功返回。
     ///
-    /// 这些动作（打开网址 / 文件夹 / 文件 / 运行程序）内部已经处理了
+    /// 这些动作（打开网址 / 文件夹 / 文件 / 运行命令）内部已经处理了
     /// 自己的失败与提示，这里只负责把它们变成 ActionCatalog 需要的 bool。
     /// </summary>
     private static bool Run(Action action)

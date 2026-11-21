@@ -60,6 +60,23 @@ internal sealed class HookWatchdog : IDisposable
 
 	private long _prevSeenCount;
 
+	/// <summary>
+	/// 「要装鼠标钩子、但一直没装上」连续命中的次数。
+	///
+	/// 鼠标钩子是按需装的：AltDragSink 调 SetMouseHookWanted(true)，HookEngine 往钩子线程
+	/// PostThreadMessage(WM_MOUSE_WANT) 让它在自己的线程上 SetWindowsHookEx —— 不能装在键盘
+	/// 回调里（实测装出来的句柄非零却收不到任何事件）。
+	///
+	/// 这条路径没有返回值：消息可能没送到（钩子线程刚退出 / 消息队列还没建好 / 被安全软件
+	/// 拦了），SetWindowsHookEx 也可能失败。失败之后**没有任何人再试一次**，于是按下触发键
+	/// 完全没反应，直到下次重启 —— 这就是「按住拖拽时好时坏」最像的一类现场。
+	/// 看门狗每秒跑一次，这里专门盯「想装但没装」这个状态。
+	/// </summary>
+	private int _mouseMissTicks;
+
+	/// <summary>上一次补装鼠标钩子的时刻（TickCount64），防止每秒刷一次日志。</summary>
+	private long _lastMouseRetryAt;
+
 	public int Checks { get; private set; }
 
 	public int Rescues { get; private set; }
@@ -120,6 +137,16 @@ internal sealed class HookWatchdog : IDisposable
 	{
 		Checks++;
 		CheckCallbackStall();
+		// 鼠标钩子现在是按需装的（不拖的时候本来就卸着）：这段时间收不到鼠标事件完全正常，
+		// 绝不能当成「钩子掉了」去重装 —— 否则空闲时每 5 秒白重装一次。
+		if (!_hooks.MouseInstalled)
+		{
+			_strikes = 0;
+			_hasPrev = false;
+			RepairMissingMouseHook();
+			return false;
+		}
+		_mouseMissTicks = 0;
 		if (!Native.GetCursorPos(out var lpPoint))
 		{
 			return false;
@@ -170,6 +197,37 @@ internal sealed class HookWatchdog : IDisposable
 		_hooks.Reinstall();
 		_hasPrev = false;
 		return true;
+	}
+
+	/// <summary>
+	/// v1.6.4：补装丢失的鼠标钩子。
+	///
+	/// 只在「确实需要鼠标钩子」时才动（_hooks.MouseWanted）：闲时它本来就该是卸着的。
+	/// 连续 3 秒都要装却没装上，才认为是那一次 PostThreadMessage/SetWindowsHookEx 丢了，
+	/// 重新提一次要求；每 5 秒最多补一次，日志只在这一轮第一次失败时写一行。
+	/// </summary>
+	private void RepairMissingMouseHook()
+	{
+		if (!_hooks.MouseWanted)
+		{
+			_mouseMissTicks = 0;
+			return;
+		}
+		if (Interlocked.Increment(ref _mouseMissTicks) < 3)
+		{
+			return;
+		}
+		long now = Environment.TickCount64;
+		if (now - Interlocked.Read(ref _lastMouseRetryAt) < 5000)
+		{
+			return;
+		}
+		Interlocked.Exchange(ref _lastMouseRetryAt, now);
+		if (_mouseMissTicks == 3)
+		{
+			Log.Info("按住拖拽：鼠标钩子应该在装却没装上（键盘钩子正常），正在补装一次。");
+		}
+		_hooks.SetMouseHookWanted(wanted: true);
 	}
 
 	private void CheckCallbackStall()

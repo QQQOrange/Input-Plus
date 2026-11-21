@@ -25,9 +25,9 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.2.12</Version>
-    <FileVersion>1.2.12.0</FileVersion>
-    <AssemblyVersion>1.2.12.0</AssemblyVersion>
+    <Version>1.3</Version>
+    <FileVersion>1.3.0.0</FileVersion>
+    <AssemblyVersion>1.3.0.0</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -37,7 +37,7 @@
     <!-- 文件属性里显示的"说明"来自 AssemblyTitle；不给的话会用程序集名 InputPlus（少个空格）。 -->
     <AssemblyTitle>Input Plus</AssemblyTitle>
     <Company>QQQOrange</Company>
-    <Description>Input Plus：键盘增强与鼠标手势工具。任意键绑定功能、光标移动与选择、快速搜索面板、窗口绑定、直达链接（网址/文件夹/文件）、独立剪贴板、宏与多图层、鼠标手势、平滑滚动、按住拖拽</Description>
+    <Description>Input Plus：键盘增强与鼠标手势工具。任意键绑定功能、光标移动与选择、快速搜索面板、直达链接（网址/文件）、独立剪贴板、宏与多图层、鼠标手势、平滑滚动、按住拖拽</Description>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -107,6 +107,16 @@
          清单名变成 命名空间.目录.文件 之外的样子。 -->
     <EmbeddedResource Include="Assets\gestures-builtin.json"
                       LogicalName="InputPlus.Assets.gestures-builtin.json" />
+    <!-- 内置 Everything：SDK 的 x86/x64 DLL + Everything 客户端 exe。
+         为什么连客户端一起内置：Everything 的 SDK 只是 IPC 封装，用户机器上
+         没有 Everything 进程时，搜索永远是 0 条（本机实测就是这个）。
+         详见 Core/Qbar/Search/EverythingBundle.cs 顶部的取舍说明。 -->
+    <EmbeddedResource Include="Assets\Everything\Everything.exe"
+                      LogicalName="InputPlus.Assets.Everything.Everything.exe" />
+    <EmbeddedResource Include="Assets\Everything\Everything64.dll"
+                      LogicalName="InputPlus.Assets.Everything.Everything64.dll" />
+    <EmbeddedResource Include="Assets\Everything\Everything32.dll"
+                      LogicalName="InputPlus.Assets.Everything.Everything32.dll" />
     <!-- 界面语言包已经挪到 InputPlus.Localization 工程（Assets\Lang），
          原因见该工程 csproj 顶部：XAML 里的 {loc:T} 一旦引用**本程序集**的类型，
          WPF 就必须先编一个临时程序集再跑第二趟标记编译，那趟临时编译会和正式产物
@@ -129,6 +139,8 @@
     <PackageReference Include="System.Management" Version="8.0.0"
                       Condition="'$(TargetFramework)' == 'net7.0-windows'" />
     <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
+    <!-- Lua 脚本动作（v1.5.0）：沙盒里跑用户脚本，只暴露 ip.* 这一层软件能力 -->
+    <PackageReference Include="MoonSharp" Version="2.0.0" />
   </ItemGroup>
 
   <!-- Win7 线用自己的清单：补 Win7 的 supportedOS GUID，并去掉 Win10 才认的

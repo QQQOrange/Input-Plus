@@ -1,0 +1,260 @@
+<Window x:Class="InputPlus.UI.Windows.LuaScriptsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+        Title="{loc:T 'Lua 脚本'}"
+        Width="980" Height="680" MinWidth="760" MinHeight="480"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource Brush.Background}"
+        Foreground="{DynamicResource Brush.TextPrimary}"
+        FontFamily="{StaticResource Font.Ui}"
+        UseLayoutRounding="True">
+
+    <!--
+        版式照抄仓库里的对话框（GestureSettingsWindow / MacrosView.xaml）：
+        Brush.Background 底 + Card（圆角 14、1px 描边）+ Text.H2 标题 + Text.Tertiary 说明；
+        底栏「关闭」用 DockPanel.Dock="Bottom" 钉在窗口最底下，剩下的全给主体。
+
+        高度预算（980×680：客户区约 650，去掉外边距 36、底栏 48、标题区 91，主体约 475）：
+          · 上一行「脚本名」38 + 8 + 「一句话说明」38 = 84
+          · 代码编辑器 MinHeight=200
+          · 编辑卡内边距 24 + 行间 10 = 34  → 编辑卡约 318
+          · 运行结果卡 MaxHeight=104（结果区露出 4 行，多的在卡里自己滚）
+          · 「可以用什么」Expander 收起时约 44
+        加起来压在 475 以内，编辑器能拿满 200 高，不会出现"下半截被裁掉"。
+        想把编辑器拉更高：把窗口往下拖 —— 第一行是 *，多出来的高度全给它。
+    -->
+    <DockPanel Margin="22,18,22,18">
+
+        <!-- ===== 底栏：一句提示 + 状态 + 关闭 ===== -->
+        <Grid DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0"
+                       Text="{loc:T '脚本里用 ip.* 调软件自己的功能；绑到按键或手势上就能用。'}"
+                       Style="{StaticResource Text.Tertiary}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+            <TextBlock x:Name="StatusText" Grid.Column="1" Style="{StaticResource Text.Tertiary}"
+                       VerticalAlignment="Center" Margin="0,0,12,0" TextTrimming="CharacterEllipsis"
+                       MaxWidth="320" />
+            <Button Grid.Column="2" Content="{loc:T '关闭'}" Style="{StaticResource Button.Ghost}"
+                    Padding="16,7" IsCancel="True" Click="OnClose" />
+        </Grid>
+
+        <!-- ===== 顶部：标题 + 说明 + 按钮行 ===== -->
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="{loc:T 'Lua 脚本'}" Style="{StaticResource Text.H2}" />
+            <TextBlock Text="{loc:T '一个脚本就是动作目录里「Lua 脚本」分类下的一条动作 —— 可以绑按键、绑手势、塞进手势菜单。'}"
+                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+            <Grid Margin="0,12,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <WrapPanel Grid.Column="0" VerticalAlignment="Center">
+                    <Button Content="{loc:T '新建'}" Style="{StaticResource Button.Primary}"
+                            Margin="0,0,8,0" Click="OnNewClick" />
+                    <Button x:Name="TemplateButton" Content="{loc:T '从模板新建'}"
+                            Style="{StaticResource Button.Ghost}" Margin="0,0,8,0"
+                            Click="OnTemplateClick"
+                            ToolTip="{loc:T '从内置模板复制一份出来改 —— 打开参数里的路径、复制窗口标题、剪贴板转大写……'}" />
+                    <Button Content="{loc:T '复制'}" Style="{StaticResource Button.Ghost}"
+                            Margin="0,0,8,0" Click="OnDuplicateClick" />
+                    <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Ghost}"
+                            Margin="0,0,8,0" Click="OnDeleteClick" />
+                    <Button Content="{loc:T '运行测试'}" Style="{StaticResource Button.Primary}"
+                            Margin="0,0,8,0" Click="OnRunClick" />
+                    <Button Content="{loc:T '保存'}" Style="{StaticResource Button.Ghost}"
+                            Click="OnSaveClick" />
+                </WrapPanel>
+                <!-- ToggleSwitch 的模板是固定 44×24 的开关，没有 ContentPresenter：
+                     文字必须另起一个 TextBlock，「启用」二字写在 Content 上是不会显示的。 -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{loc:T '启用'}" Style="{StaticResource Text.Secondary}"
+                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <CheckBox x:Name="EnabledBox" Style="{StaticResource ToggleSwitch}"
+                              VerticalAlignment="Center" Click="OnEnabledClick" />
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <!-- ===== 主体：左列表 / 右编辑器 ===== -->
+        <Grid Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ===== 左：脚本列表 ===== -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Padding="12" Margin="0,0,14,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <ListBox x:Name="ScriptList" Grid.Row="0"
+                             Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource RowItem}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             SelectionChanged="OnScriptSelected">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource Brush.TextPrimary}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <!-- 停用的脚本照样能编辑，只是绑上去不触发 —— 列表里标一下，
+                                             不然用户会以为"绑了没反应"是软件坏了。 -->
+                                        <TextBlock Grid.Column="1" Text="{loc:T '已停用'}" Margin="6,0,0,0"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Tertiary}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                    <TextBlock Text="{Binding Comment}" Style="{StaticResource Text.Tertiary}"
+                                               FontSize="11.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock x:Name="CountText" Grid.Row="1" Style="{StaticResource Text.Tertiary}"
+                               Margin="4,8,4,2" TextWrapping="Wrap" />
+                </Grid>
+            </Border>
+
+            <!-- ===== 右：名称 / 说明 / 代码 / 结果 / 速查 =====
+                 外面套一层 ScrollViewer：窗口被拖到 MinHeight 480 时，右边放不下就出滚动条，
+                 而不是把代码框下边缘裁掉（裁掉的话用户连自己在输入什么都看不见）。
+                 窗口正常大小时内容够宽裕，滚动条不出现，代码框照常吃满剩余高度。 -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- 行0：编辑卡 -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}" Padding="14,12" Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <!-- 脚本名（占位文字只在输入框为空时出现，纯 XAML 控制，不用代码同步） -->
+                            <Grid Grid.Row="0">
+                                <TextBox x:Name="NameBox" Style="{StaticResource TextBox.Base}"
+                                         TextChanged="OnNameChanged" />
+                                <TextBlock Text="{loc:T '脚本名'}" IsHitTestVisible="False" Margin="11,0,10,0"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Tertiary}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=NameBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+
+                            <!-- 一句话说明（列表第二行就显示这段） -->
+                            <Grid Grid.Row="1" Margin="0,8,0,0">
+                                <TextBox x:Name="CommentBox" Style="{StaticResource TextBox.Base}"
+                                         TextChanged="OnCommentChanged" />
+                                <TextBlock Text="{loc:T '一句话说明'}" IsHitTestVisible="False" Margin="11,0,10,0"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Tertiary}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=CommentBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+
+                            <!-- 代码：等宽、不折行（Lua 里缩进就是结构，一折行全乱）、Tab 直接插入缩进 -->
+                            <TextBox x:Name="CodeBox" Grid.Row="2" Margin="0,10,0,0" MinHeight="200"
+                                     Style="{StaticResource TextBox.Base}"
+                                     FontFamily="Consolas" FontSize="12.5"
+                                     AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
+                                     VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     TextChanged="OnCodeChanged" />
+                        </Grid>
+                    </Border>
+
+                    <!-- 行1：运行结果
+                         结果区用只读 TextBox 而不是 TextBlock —— TextBlock 在 WPF 里选不中、复制不了，
+                         而"脚本跑到哪一步、报了什么错"恰恰是用户最想复制去搜索的东西。 -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14,10" MaxHeight="104">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="{loc:T '运行结果'}" Style="{StaticResource Text.H3}" />
+                            <TextBox x:Name="ResultText" Grid.Row="1" Margin="0,6,0,0"
+                                     IsReadOnly="True" IsTabStop="False" AcceptsReturn="True" TextWrapping="Wrap"
+                                     FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                                     Background="Transparent" BorderThickness="0" Padding="0"
+                                     Foreground="{DynamicResource Brush.TextSecondary}"
+                                     VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                     MaxHeight="110" />
+                        </Grid>
+                    </Border>
+
+                    <!-- 行2：速查表（默认收起：不写脚本的不会展开，写脚本的一眼能找到） -->
+                    <Expander Grid.Row="2" Margin="0,10,0,0" IsExpanded="False">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{loc:T '可以用什么'}" Style="{StaticResource Text.H3}"
+                                           VerticalAlignment="Center" />
+                                <Button Content="{loc:T '插入示例'}" Style="{StaticResource Button.Ghost}"
+                                        Padding="10,3" Margin="12,0,0,0" VerticalAlignment="Center"
+                                        Click="OnInsertSampleClick"
+                                        ToolTip="{loc:T '把一段能直接跑的示例填进编辑器（会问一句要不要覆盖）'}" />
+                            </StackPanel>
+                        </Expander.Header>
+                        <Border Style="{StaticResource Card}" Padding="12,10">
+                            <ScrollViewer MaxHeight="160"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Auto">
+                                <TextBlock x:Name="ApiText" FontFamily="{StaticResource Font.Mono}" FontSize="11.5"
+                                           TextWrapping="NoWrap"
+                                           Foreground="{DynamicResource Brush.TextSecondary}" />
+                            </ScrollViewer>
+                        </Border>
+                    </Expander>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

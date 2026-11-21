@@ -555,6 +555,98 @@
                 </StackPanel>
             </Border>
 
+            <!-- 提示条（v1.6.3）：这里只管右下角那类提示 —— 动作反馈、复制成功、音量百分比。
+                 手势名称有自己的外观（「鼠标手势 → 手势设置」），两套不再互相牵制：
+                 名称框要跟着手势调出现高度、要分「认出来 / 已执行」两档底色，
+                 提示条固定贴右下角、只有一种底色。 -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                <StackPanel>
+                    <TextBlock Text="{loc:T '提示条'}" Style="{StaticResource Text.H2}" Margin="0,0,0,4" />
+                    <TextBlock Text="{loc:T '除手势名称以外的提示都从屏幕右下角浮出来：动作反馈、复制成功、音量百分比…… 描边和底色在这里调，改完立刻生效。'}"
+                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
+                    <TextBlock Text="{loc:T '画手势时的手势名称请到『鼠标手势 → 手势设置』里调。'}"
+                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{loc:T '描边'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '提示条外面的那圈白边。'}" Style="{StaticResource Text.Tertiary}"
+                                       Margin="0,3,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" x:Name="ToastBorderBox" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="OnToastToggleChanged" />
+                    </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '描边粗细'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '0.5 是一条细线，3.0 是一圈明显的白框。'}"
+                                       Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Slider x:Name="ToastBorderSlider" Width="120" Minimum="0.5" Maximum="3"
+                                    SmallChange="0.1" LargeChange="0.5" TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center" ValueChanged="OnToastBorderChanged" />
+                            <TextBlock x:Name="ToastBorderText" Style="{StaticResource Text.Secondary}" Width="40"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" Text="1.0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '底色'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '带透明度也行：淡一点能看见后面的窗口，但不挡字。'}"
+                                       Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Style="{StaticResource Button.Ghost}" Padding="8,3"
+                                    Tag="toast" Click="OnPickToastColor"
+                                    ToolTip="{loc:T '提示条的底色（保留透明度）。'}">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="ToastColorSwatch" Width="16" Height="16" CornerRadius="4"
+                                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
+                                    <TextBlock Text="{loc:T '选择颜色'}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Content="{loc:T '默认'}" Style="{StaticResource Button.Ghost}" Padding="8,3"
+                                    Margin="6,0,0,0" VerticalAlignment="Center" Click="OnResetToastColor" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{StaticResource Divider}" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
+                            <TextBlock Text="{loc:T '预览'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '弹一条真提示看看效果 —— 用的就是上面这些设置，不用先去保存。'}"
+                                       Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="{loc:T '弹一条'}" Style="{StaticResource Button.Ghost}"
+                                VerticalAlignment="Center" Click="OnPreviewToast" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <Border Style="{StaticResource Card}">
                 <StackPanel>
                     <TextBlock Text="{loc:T '数据与维护'}" Style="{StaticResource Text.H2}" Margin="0,0,0,4" />

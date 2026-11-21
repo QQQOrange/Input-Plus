@@ -36,13 +36,29 @@ internal sealed class GestureTrail
 
     private readonly List<Point> _points = new(256);
 
+    /// <summary>
+    /// 「笔尖」：鼠标最后一次移动的位置（不进采样表）。
+    ///
+    /// 采样点之间隔 20px，线头就停在最后一个采样点上 —— 手感上"线跟不上手"。
+    /// 每次移动只把笔尖挪到光标处（<see cref="Tail"/>），<see cref="Build"/> 时
+    /// 接在末尾，画面就一直是通的；采样表本身不变，识别仍按 20px 均匀点算。
+    /// </summary>
+    private Point? _tail;
+
     /// <summary>已收下的采样点（设备像素，未平滑）。</summary>
     internal IReadOnlyList<Point> Points => _points;
 
     internal int Count => _points.Count;
 
     /// <summary>清空整条轨迹（WG2 的 <c>U.E()</c>：手势结束一瞬间就没了）。</summary>
-    internal void Clear() => _points.Clear();
+    internal void Clear()
+    {
+        _points.Clear();
+        _tail = null;
+    }
+
+    /// <summary>把线头挪到光标处（不满足 20px 采样距离时也画得出来）。</summary>
+    internal void Tail(double x, double y) => _tail = new Point(x, y);
 
     /// <summary>
     /// 收一个点。离上一个点不到 <see cref="MinDistance"/> 就丢弃并返回 false
@@ -58,25 +74,51 @@ internal sealed class GestureTrail
             if (dx * dx + dy * dy < MinDistance * MinDistance) return false;
         }
         _points.Add(new Point(x, y));
+        _tail = null;
         return true;
     }
 
     /// <summary>覆盖最后一个点（自检注入用；正常采样只走 <see cref="Add"/>）。</summary>
     internal void ReplaceLast(double x, double y)
     {
+        _tail = null;
         if (_points.Count == 0) { _points.Add(new Point(x, y)); return; }
         _points[^1] = new Point(x, y);
     }
 
     /// <summary>
-    /// 交给画笔之前的点列：≤128 点先做一轮 Chaikin 切角，其余原样返回。
-    /// 与 WG2 的 <c>U.F()</c> 等价（它把结果喂给 <c>GraphicsPath.AddLine</c>）。
+    /// 交给画笔之前的点列。
+    ///
+    /// 先把"笔尖"接在采样点后面（这样线头始终跟着光标，不会卡在 20px 一格上），
+    /// 再按 <paramref name="smooth"/> 决定要不要切角 —— 它就是
+    /// 「手势外观 → 笔画平滑」那个开关：
+    ///   开：≤128 点的笔画做两轮 Chaikin（拐角变圆弧，看得出变化）；
+    ///   关：原样画采样点，锯齿保持原样。
+    /// 识别用的点列一直是未平滑的原始采样点，开关不影响认手势。
     /// </summary>
-    internal List<Point> Build()
+    internal List<Point> Build(bool smooth = true)
     {
-        if (_points.Count == 0) return new List<Point>();
-        if (_points.Count > SmoothPointLimit) return new List<Point>(_points);
-        return Chaikin(_points, 1);
+        var points = new List<Point>(_points.Count + 1);
+        points.AddRange(_points);
+        if (_tail is Point tail)
+        {
+            if (points.Count == 0)
+            {
+                points.Add(tail);
+            }
+            else
+            {
+                Point last = points[^1];
+                double dx = tail.X - last.X;
+                double dy = tail.Y - last.Y;
+                // 笔尖和最后一个采样点几乎重合时不必重复（避免零长度线段）
+                if (dx * dx + dy * dy > 4) points.Add(tail);
+            }
+        }
+        if (points.Count == 0) return points;
+        if (!smooth) return points;
+        if (points.Count > SmoothPointLimit) return points;
+        return Chaikin(points, 2);
     }
 
     /// <summary>

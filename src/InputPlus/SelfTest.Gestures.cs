@@ -115,7 +115,10 @@ public static partial class SelfTest
         }
         """;
 
-        string path = Path.Combine(Path.GetTempPath(), "clp-gestures-selftest.json");
+        /* 临时文件名必须唯一：自检可能和别的实例（部署脚本会再起一个）同时跑，
+         * 固定名字会撞上「文件被独占」→ UnauthorizedAccessException，整轮自检中断。 */
+        string path = Path.Combine(Path.GetTempPath(),
+            $"clp-gestures-selftest-{Environment.ProcessId}-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, json, new UTF8Encoding(false));
 
         var settings = new AppSettings();
@@ -137,6 +140,7 @@ public static partial class SelfTest
 
         var again = WGesturesImporter.ImportFile(path, settings);
         CheckEqual("重复导入不产生重复手势", again.Imported, 0);
+        try { File.Delete(path); } catch { /* 临时文件删不掉不影响结论 */ }
 
         // ---- 应用手势优先于全局手势 ----
         var scopedSettings = new AppSettings();
@@ -693,10 +697,13 @@ public static partial class SelfTest
         CheckEqual("5.10.6：cmd.exe /c taskmgr 改成内置动作",
             cleanup.Gestures.First(g => g.Id == "tm").Action, "openTaskManager");
         Check("5.10.6：任务管理器不再带参数", string.IsNullOrEmpty(cleanup.Gestures.First(g => g.Id == "tm").Arg));
-        CheckEqual("5.10.6：裸 exe 路径改成直达文件",
-            cleanup.Gestures.First(g => g.Id == "weixin").Action, "openFile");
-        CheckEqual("5.10.6：直达文件的参数去掉了外层引号",
-            cleanup.Gestures.First(g => g.Id == "weixin").Arg, @"D:\software\Weixin\Weixin.exe");
+        /* 收窄语义之后：exe 路径是「运行命令」能直接启动的东西，不该再迁去「直达文件」。
+         * 迁过去等于让"打开文件"的入口去干"运行程序"的事 —— 又回到两个功能打架。 */
+        CheckEqual("5.10.6：裸 exe 路径保持「运行命令」",
+            cleanup.Gestures.First(g => g.Id == "weixin").Action, "runProgram");
+        Check("5.10.6：exe 参数原样留着（带引号也能拆）",
+            cleanup.Gestures.First(g => g.Id == "weixin").Arg!.Contains("Weixin.exe", StringComparison.Ordinal),
+            cleanup.Gestures.First(g => g.Id == "weixin").Arg ?? "null");
         CheckEqual("5.10.6：openUrl 改成直达网址",
             cleanup.Gestures.First(g => g.Id == "url").Action, "webPage");
         Check("5.10.6：搜索动作里的网址模板参数被清掉",
@@ -719,8 +726,31 @@ public static partial class SelfTest
             wx2.Action == "swallowKey" || (wx2.Action == "openFile" && System.IO.File.Exists(wx2.Arg)),
             wx2.Action + " " + wx2.Arg);
         var bookx = clobbered.Gestures.First(g => g.Id == "bookx");
-        CheckEqual("带空格的 exe 路径也改成直达文件", bookx.Action, "openFile");
+        CheckEqual("带空格的 exe 路径也保持「运行命令」", bookx.Action, "runProgram");
         CheckEqual("带空格的路径原样保留", bookx.Arg, @"C:\Program Files\Bookx Software\BookxNote Pro\BookxNotePro.exe");
+
+        /* 文档路径才是该迁去「直达文件」的：它以前靠 UseShellExecute 双击打开，
+         * 收窄后的「运行命令」会拒绝它。临时文件保证 File.Exists 这一路真的走到。 */
+        string docPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-migrate-doc.txt");
+        System.IO.File.WriteAllText(docPath, "x");
+        try
+        {
+            var docSettings = new AppSettings();
+            docSettings.GestureOptions.BuiltinsVersion = 8;
+            docSettings.Gestures.Add(new MouseGesture
+            {
+                Id = "doc", Name = "打开文档", Kind = "stroke", Button = "right",
+                Pattern = "↗", Action = "runProgram", Arg = docPath,
+            });
+            GestureDefaults.Ensure(docSettings);
+            var docG = docSettings.Gestures.First(g => g.Id == "doc");
+            CheckEqual("文档路径迁到「直达文件」", docG.Action, "openFile");
+            CheckEqual("文档路径原样带走", docG.Arg, docPath);
+        }
+        finally
+        {
+            try { System.IO.File.Delete(docPath); } catch { }
+        }
 
         // ---- 同一手势只能绑一个动作（去重键） ----
         var dupA = new MouseGesture { Kind = "stroke", Button = "right", Pattern = "↓", Action = "sendKeys", Arg = "ctrl+v" };
@@ -732,6 +762,46 @@ public static partial class SelfTest
         Check("不同作用目标不算重复", GestureIdentity.Find(new[] { dupA }, dupApp, null) == null);
         CheckEqual("启动清理重复保留最早一条",
             GestureIdentity.RemoveDuplicates(new List<MouseGesture> { dupA, dupB, dupChord }), 1);
+
+        /* 用户实拍：画「关闭」（右键 ↓→）却触发了「休眠」。两条方向串一模一样，
+         * 形状只差 0.7%（1000 空间）—— 手画的时候根本分不出来，引擎只能按距离
+         * 随便挑一条，挑错就是"我画的是关闭，它给我休眠"。这种差别必须当成重复
+         * 在启动清理阶段收掉，留排在前面的那条。 */
+        var closeG = new MouseGesture
+        {
+            Id = "g-close", Name = "关闭", Kind = "stroke", Button = "right", Pattern = "↓→",
+            Action = "customKey", Arg = "ctrl+w",
+            Path = new List<int> { 0, 0, -130, 825, 28, 858, 1000, 659 }
+        };
+        var sleepG = new MouseGesture
+        {
+            Id = "g-sleep", Name = "休眠", Kind = "stroke", Button = "right", Pattern = "↓→",
+            Action = "runProgram", Arg = "rundll32.exe powrprof.dll,SetSuspendState",
+            Path = new List<int> { 0, 0, -118, 806, 36, 862, 1000, 650 }
+        };
+        var nearDup = new List<MouseGesture> { closeG, sleepG };
+        CheckEqual("方向串一样、形状只差 0.7% 的两条算重复（关闭/休眠）",
+            GestureIdentity.RemoveDuplicates(nearDup), 1);
+        CheckEqual("收掉重复后留下的是排在前面的「关闭」", nearDup.Count == 1 ? nearDup[0].Name : "?", "关闭");
+
+        /* 反过来：方向串一样但形状差得开（一条直着一拐 vs 一条大 L），
+         * 仍然要各自保留 —— 门槛不能宽到把真手势也吃掉。 */
+        var farShape = new MouseGesture
+        {
+            Id = "g-prev", Name = "换个样", Kind = "stroke", Button = "right", Pattern = "↓→",
+            Action = "customKey", Arg = "ctrl+pageup",
+            Path = new List<int> { 0, 0, 20, 1000, 1000, 1000 }
+        };
+        CheckEqual("方向串一样但形状差得开的两条都留着",
+            GestureIdentity.RemoveDuplicates(new List<MouseGesture> { closeG.Clone(), farShape }), 0);
+
+        // ---- 手势执行期间不再补一条成功提示 ----
+        Check("手势执行期间「已发送 Ctrl+W」这类成功提示被拦下",
+            AppHost.ShouldSuppressToast(1, "已发送 Ctrl+W（未绑定应用，发给当前窗口）"));
+        Check("手势执行期间失败提示照常显示",
+            !AppHost.ShouldSuppressToast(1, "✗ 没能关闭窗口：目标窗口已关闭"));
+        Check("不在手势里时成功提示照常显示",
+            !AppHost.ShouldSuppressToast(0, "已恢复默认设置"));
 
         // ---- 按下拦截：用不到的触发方式不该把右键变成“注入补发” ----
         var defaults = new GestureOptions();
@@ -838,6 +908,24 @@ public static partial class SelfTest
         CheckEqual("首点不动", $"{(int)smoothed[0].X},{(int)smoothed[0].Y}", "0,0");
         CheckEqual("尾点不动",
             $"{(int)smoothed[^1].X},{(int)smoothed[^1].Y}", "100,100");
+
+        /* 笔尖（Tail）：两次采样之间移动鼠标，线头也要跟着走。
+         * 以前 20px 以内直接丢点，线就停在最后一个采样点上，看着一格一格跳。 */
+        var live = new InputPlus.UI.Windows.GestureTrail();
+        live.Add(0, 0);
+        live.Tail(0, 12);
+        var withTail = live.Build(smooth: false);
+        CheckEqual("笔尖接在采样点后面", withTail.Count, 2);
+        CheckEqual("笔尖坐标就是光标坐标", $"{(int)withTail[^1].X},{(int)withTail[^1].Y}", "0,12");
+        live.Add(0, 20);
+        CheckEqual("收下新采样点后笔尖清掉、不重复画", live.Build(smooth: false).Count, 2);
+        live.Add(20, 20);
+        Check("关掉笔画平滑时原样画采样点（不切角）",
+            live.Build(smooth: false).Count == live.Count,
+            $"{live.Count} → {live.Build(smooth: false).Count}");
+        Check("打开笔画平滑时点变多（切角）",
+            live.Build(smooth: true).Count > live.Count,
+            $"{live.Count} → {live.Build(smooth: true).Count}");
 
         // 超过 128 点不平滑（WG2 F() 的 else 分支）
         trail.Clear();

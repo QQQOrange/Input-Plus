@@ -30,6 +30,26 @@ public sealed class HoldDragService : IDisposable
     private bool _applying;
     private bool _disposed;
 
+    /// <summary>全局暂停（标题栏的「暂停」按钮）。</summary>
+    private volatile bool _suspended;
+
+    /// <summary>
+    /// 全局暂停：钩子直接卸掉，连"按住触发键拖窗口"也不再拦。
+    ///
+    /// 暂停不改 <see cref="AppSettings.HoldDragEnabled"/> —— 恢复时按原设置装回来，
+    /// 用户在页面上看到的那颗开关不会因为按了一次暂停就变成关。
+    /// </summary>
+    public bool Suspended
+    {
+        get => _suspended;
+        set
+        {
+            if (_suspended == value) return;
+            _suspended = value;
+            ApplySettings();
+        }
+    }
+
     public HoldDragService(Func<AppSettings> settings, Action<AppSettings>? persist = null)
     {
         _settings = settings;
@@ -41,6 +61,21 @@ public sealed class HoldDragService : IDisposable
 
     /// <summary>最后一次装钩子失败/异常的原因，空串表示没出过问题。</summary>
     public string LastError { get; private set; } = "";
+
+    /// <summary>
+    /// 触发键此刻是不是按着。鼠标手势用它让路：按着触发键说明用户要拖窗口 / 改大小，
+    /// 同一颗鼠标键不该再被当成手势起笔（按住 Enter 点右键 = 改大小，不是手势）。
+    /// </summary>
+    public bool IsTriggerHeld => _sink?.TriggerHeld == true;
+
+    /// <summary>
+    /// v1.6.0：把"这个键是哪台键盘按的"这件事交给内核（AppHost 接的是 KeyboardDeviceTracker）。
+    /// 配置里选了设备时，只有同一台键盘发出的触发键才生效。
+    /// </summary>
+    public Func<int, string?>? DeviceResolver
+    {
+        set => Modules.HoldDrag.AltDragSink.DeviceResolver = value;
+    }
 
     /// <summary>看门狗救回来的次数（钩子被系统摘掉后自动重装）。</summary>
     public int Rescues => _watchdog?.Rescues ?? 0;
@@ -89,7 +124,7 @@ public sealed class HoldDragService : IDisposable
         try
         {
             AppSettings? settings = _settings();
-            if (settings == null || !settings.HoldDragEnabled)
+            if (settings == null || _suspended || !settings.HoldDragEnabled)
             {
                 Stop();
                 return;
@@ -127,7 +162,21 @@ public sealed class HoldDragService : IDisposable
     private void Start()
     {
         LastError = "";
-        var sink = new Modules.HoldDrag.AltDragSink(CurrentConfig);
+        // v1.6.2：生产路径也要初始化 holddrag.log。
+        // 之前只有 --drag-e2e 会 Log.Init，正常运行时 Log.Write 因为 _path 为空直接 return ——
+        // 用户报「按住拖拽没反应」时，日志里一个字都没有，只能靠猜。
+        try
+        {
+            if (string.IsNullOrEmpty(Modules.HoldDrag.Log.Path))
+            {
+                Modules.HoldDrag.Log.Init(Modules.HoldDrag.AppPaths.DataDir);
+            }
+        }
+        catch
+        {
+        }
+
+        var sink = new Modules.HoldDrag.AltDragSink(CurrentConfig, SetMouseHookWanted);
         var hooks = new Modules.HoldDrag.HookEngine(sink);
         // 钩子被看门狗真正重装时，重装缝隙里的按键都丢了：把 sink 的"按下过"状态清掉，
         // 否则会留下一个永远不会收到 up 的触发键，表现为"按住触发键点鼠标没反应"。
@@ -149,13 +198,35 @@ public sealed class HoldDragService : IDisposable
         if (!hooks.Install())
         {
             LastError = "钩子安装失败（可能被安全软件拦下了）";
+            Modules.HoldDrag.Log.Error("按住拖拽：键盘钩子安装失败，Win32 错误码 " + hooks.LastError);
             Stop();
             return;
         }
 
+        // 启动一行把"当前生效的是什么"记下来：现场排障时这一行往往就够定位了。
+        Modules.HoldDrag.Log.Info("按住拖拽已启动：触发键=" + _config.TriggerKey + "（" + Modules.HoldDrag.KeysUtil.DisplayName(_config.TriggerKey) +
+            "） 长按=" + _config.TriggerHoldMs + "ms 设备=" + Modules.HoldDrag.AppConfig.DeviceLabel(_config.Device) +
+            " 左=" + _config.ActionLeft + " 中=" + _config.ActionMiddle + " 右=" + _config.ActionRight);
+
         var watchdog = new Modules.HoldDrag.HookWatchdog(hooks);
         watchdog.Start();
         _watchdog = watchdog;
+    }
+
+    /// <summary>
+    /// 引擎要求装 / 卸鼠标钩子：长按计时一开始就装（兜底路径靠那一下点击），
+    /// 松手、拖完、Esc、钩子重装之后卸掉 —— 和 altdrag 的 HookMouse()/UnhookMouse() 同一套时序。
+    /// </summary>
+    private void SetMouseHookWanted(bool wanted)
+    {
+        try
+        {
+            _hooks?.SetMouseHookWanted(wanted);
+        }
+        catch (Exception ex)
+        {
+            Report(ex, "装卸鼠标钩子");
+        }
     }
 
     /// <summary>引擎每次事件调它取当前配置（引用是原子替换的，返回后不要修改）。</summary>
@@ -166,6 +237,7 @@ public sealed class HoldDragService : IDisposable
 
     private void Stop()
     {
+        Modules.HoldDrag.Log.Info("按住拖拽已停止（开关关闭 / 全局暂停 / 出错）");
         var watchdog = _watchdog;
         _watchdog = null;
         if (watchdog != null)
