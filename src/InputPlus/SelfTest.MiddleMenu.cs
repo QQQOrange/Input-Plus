@@ -97,6 +97,19 @@ public static partial class SelfTest
         CheckEqual("命中测试：iItem=0 判非空白", BlankHit.VerdictOfItemIndex(0), BlankVerdict.Occupied);
         CheckEqual("命中测试：iItem=7 判非空白", BlankHit.VerdictOfItemIndex(7), BlankVerdict.Occupied);
 
+        /* 复核用的矩形包含判断：左闭右开、上闭下开。
+           LVM_HITTEST 报了一个下标之后，还要确认光标真的落在那个图标的包围盒里 ——
+           真机上见过它报 0 而光标在空白处，中键菜单就永远弹不出来。 */
+        var iconRect = new Core.Interop.NativeMethods.RECT { Left = 10, Top = 20, Right = 60, Bottom = 80 };
+        Check("命中测试：图标矩形包含判断（左闭右开 / 上闭下开）",
+            BlankHit.RectContains(iconRect, 10, 20)
+            && BlankHit.RectContains(iconRect, 59, 79)
+            && !BlankHit.RectContains(iconRect, 60, 79)
+            && !BlankHit.RectContains(iconRect, 59, 80)
+            && !BlankHit.RectContains(iconRect, 9, 50)
+            && !BlankHit.RectContains(iconRect, 30, 81),
+            "边界 10,20 / 59,79 算在内，60,79 与 59,80 不算");
+
         // ── 范围存储：字符串 → 枚举，坏值回落 ───────────────────────
         CheckEqual("范围：desktop 解析为仅桌面",
             MiddleMenuScope.ToScope("desktop"), MiddleClickMenuScope.Desktop);

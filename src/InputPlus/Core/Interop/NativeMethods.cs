@@ -837,6 +837,18 @@ public static class NativeMethods
      * 对方解引用到的是垃圾地址。调用方必须先比位数（见 BlankHit.SameBitnessAsTarget）。 */
     public const uint LVM_HITTEST = 0x1000 + 18;
 
+    /// <summary>
+    /// LVM_GETITEMRECT：wParam = 项下标，lParam = RECT*（跨进程时同样要远程分配）。
+    /// 进来之前把 RECT.left 设成要哪种矩形（<see cref="LVIR_BOUNDS"/> = 图标 + 文字的整体包围盒）。
+    ///
+    /// 用处：给 LVM_HITTEST 的结果做一次复核 —— 真机上见过它报 0（"压在第一个图标上"）
+    /// 而光标其实在空白处，那样中键菜单就永远弹不出来。
+    /// </summary>
+    public const uint LVM_GETITEMRECT = 0x1000 + 14;
+
+    /// <summary>LVM_GETITEMRECT 的 RECT.left 取值：整个项的包围盒（图标 + 标签）。</summary>
+    public const int LVIR_BOUNDS = 0;
+
     /// <summary>LVM_HITTEST 的结构：`pt` 是**列表控件的客户区坐标**，不是屏幕坐标。</summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct LVHITTESTINFO

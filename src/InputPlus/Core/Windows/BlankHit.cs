@@ -256,8 +256,26 @@ internal static class BlankHit
 
                 /* 返回值就是 iItem：-1 = 没命中任何图标。 */
                 long index = result.ToInt64();
-                why = index < 0 ? "LVM_HITTEST: -1" : "LVM_HITTEST: " + index;
-                return VerdictOfItemIndex(index);
+                if (index < 0)
+                {
+                    why = "LVM_HITTEST: -1";
+                    return BlankVerdict.Blank;
+                }
+
+                /* 复核一次：真机上出现过 LVM_HITTEST 报 0（"压在第一个图标上"）而光标明明在空白处
+                 * 的情况 —— 结果是中键菜单怎么点都不出来（诊断日志里全是
+                 * "kind=Desktop blank=False why=LVM_HITTEST: 0"）。
+                 * 这里再问这个图标的包围盒，点不在盒子里就按空白处理：
+                 * 宁可多弹一次菜单，也不要"点了没反应"。
+                 * 查询本身失败时（分配/超时/读回失败）保持原来的判定，不误伤真实命中。 */
+                if (PointInsideItem(proc, list, index, info.pt, out string rectWhy))
+                {
+                    why = "LVM_HITTEST: " + index + "（点在图内）" + rectWhy;
+                    return BlankVerdict.Occupied;
+                }
+
+                why = "LVM_HITTEST: " + index + "（点不在该图标矩形内 → 按空白）" + rectWhy;
+                return BlankVerdict.Blank;
             }
             finally
             {
@@ -276,8 +294,71 @@ internal static class BlankHit
         }
     }
 
-    private static bool WriteStruct<T>(IntPtr proc, IntPtr remote, T value, int size) where T : struct
+    /// <summary>
+    /// 这个点（列表控件的客户区坐标）是不是真的落在这个图标的包围盒里。
+    ///
+    /// 返回 false 表示"不在"，调用方会把这次命中降级成空白；
+    /// 查询本身失败时**返回 true**（保持原来的"命中"判定）—— 宁可少弹一次，
+    /// 也不要因为一次分配/超时把压在图标上的点击当成空白，破坏桌面图标的中键语义。
+    /// </summary>
+    private static bool PointInsideItem(IntPtr proc, IntPtr list, long index,
+        NativeMethods.POINT clientPt, out string why)
     {
+        why = "";
+        int size = Marshal.SizeOf<NativeMethods.RECT>();
+        IntPtr remote = NativeMethods.VirtualAllocEx(proc, IntPtr.Zero, (IntPtr)size,
+            NativeMethods.MEM_COMMIT, NativeMethods.PAGE_READWRITE);
+        if (remote == IntPtr.Zero) { why = "（矩形缓冲分配失败，保持命中）"; return true; }
+
+        try
+        {
+            /* RECT.left 进来时是"要哪一种矩形"：0 = LVIR_BOUNDS（图标 + 文字）。 */
+            var seed = new NativeMethods.RECT { Left = NativeMethods.LVIR_BOUNDS };
+            if (!WriteStruct(proc, remote, seed, size)) { why = "（矩形缓冲写入失败，保持命中）"; return true; }
+
+            IntPtr ok = NativeMethods.SendMessageTimeoutW(list, NativeMethods.LVM_GETITEMRECT,
+                (IntPtr)index, remote, NativeMethods.SMTO_ABORTIFHUNG, (uint)DesktopBudgetMs, out _);
+            if (ok == IntPtr.Zero) { why = "（GETITEMRECT 超时，保持命中）"; return true; }
+
+            var bytes = new byte[size];
+            if (!NativeMethods.ReadProcessMemory(proc, remote, bytes, (IntPtr)size, out _))
+            {
+                why = "（矩形读回失败，保持命中）";
+                return true;
+            }
+
+            var rc = BytesToRect(bytes);
+            bool inside = RectContains(rc, clientPt.X, clientPt.Y);
+            why = $" rect={rc.Left},{rc.Top},{rc.Right},{rc.Bottom} pt={clientPt.X},{clientPt.Y}";
+            return inside;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "中键菜单：GETITEMRECT 复核");
+            why = "（复核异常，保持命中）";
+            return true;
+        }
+        finally
+        {
+            NativeMethods.VirtualFreeEx(proc, remote, IntPtr.Zero, NativeMethods.MEM_RELEASE);
+        }
+    }
+
+    /// <summary>RECT 的包含判断。抽出来是为了自检能直接验边界（左闭右开、上闭下开）。</summary>
+    internal static bool RectContains(NativeMethods.RECT rc, int x, int y) =>
+        x >= rc.Left && x < rc.Right && y >= rc.Top && y < rc.Bottom;
+
+    private static NativeMethods.RECT BytesToRect(byte[] bytes)
+    {
+        var rc = new NativeMethods.RECT();
+        rc.Left = BitConverter.ToInt32(bytes, 0);
+        rc.Top = BitConverter.ToInt32(bytes, 4);
+        rc.Right = BitConverter.ToInt32(bytes, 8);
+        rc.Bottom = BitConverter.ToInt32(bytes, 12);
+        return rc;
+    }
+
+    private static bool WriteStruct<T>(IntPtr proc, IntPtr remote, T value, int size) where T : struct    {
         IntPtr local = Marshal.AllocHGlobal(size);
         try
         {
