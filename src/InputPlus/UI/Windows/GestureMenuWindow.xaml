@@ -75,7 +75,7 @@
         </Style>
     </Window.Resources>
 
-    <Border Margin="14" MinWidth="200" MaxWidth="360"
+    <Border Margin="14" MinWidth="176" MaxWidth="288"
             Padding="6" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"
@@ -87,14 +87,14 @@
         <StackPanel>
             <!-- 标题行：只有菜单名。v1.3.17 起不再显示任何说明/介绍文字
                  （用户要求"中键菜单上不能显示中键菜单的相关介绍"），Hint 为空时整块折叠。 -->
-            <StackPanel Margin="10,5,10,0">
+            <StackPanel x:Name="TitleRow" Margin="10,5,10,0">
                 <TextBlock x:Name="MenuTitleText" Style="{StaticResource Text.Body}" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="MenuHintText" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0"
                            TextWrapping="Wrap" Visibility="Collapsed" />
             </StackPanel>
 
-            <Border Style="{StaticResource Divider}" Margin="10,8,10,4" />
+            <Border x:Name="TitleDivider" Style="{StaticResource Divider}" Margin="10,8,10,4" />
 
             <!--
                 行容器用 ListBox + 主题里的 RowItem：Padding 10,7 / 圆角 8 /

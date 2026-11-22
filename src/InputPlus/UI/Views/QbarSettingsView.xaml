@@ -271,13 +271,13 @@
                                             <TextBlock Text="{loc:T '这些程序里连键盘唤出也不弹（鼠标那一路本来只在桌面）。'}"
                                                        Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
-                                            <Button Content="{loc:T '选择程序'}" Style="{StaticResource Button.Ghost}"
-                                                    Padding="8,2" Click="OnAddExceptionFile" />
-                                            <Button Content="{loc:T '点选窗口'}" Style="{StaticResource Button.Ghost}"
-                                                    Margin="4,0,0,0" Padding="8,2" Click="OnAddExceptionWindow" />
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Top">
+                                            <!-- 与「文件搜索 → 命令」「按应用」同一个控件：两个并列入口，别处长什么样这里就什么样 -->
+                                            <controls:AppPickButtons x:Name="ExceptionPicker" MinWidth="230"
+                                                                     PickFile="OnAddExceptionFile" PickWindow="OnAddExceptionWindow" />
                                             <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Ghost}"
-                                                    Margin="4,0,0,0" Padding="8,2" Click="OnRemoveException" />
+                                                    HorizontalAlignment="Right" Margin="0,4,0,0" Padding="8,2"
+                                                    Click="OnRemoveException" />
                                         </StackPanel>
                                     </Grid>
                                     <ListBox x:Name="ExceptionList" Background="{DynamicResource Brush.SurfaceAlt}"
@@ -313,22 +313,6 @@
                                                   VerticalAlignment="Center" Click="OnAttachFullscreenChanged" />
                                     </Grid>
 
-                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
-
-                                    <Grid Margin="0,8,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                                            <TextBlock Text="{loc:T '弹出哪个菜单'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '「内置」= 固定项 + 历史记录 + 命令 + 设置，每次现拼。'}"
-                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
-                                        </StackPanel>
-                                        <ComboBox Grid.Column="1" x:Name="MiddleMenuPickBox" Style="{StaticResource ComboBox.Base}"
-                                                  MinWidth="200" VerticalAlignment="Center"
-                                                  SelectionChanged="OnMiddleMenuPicked" />
-                                    </Grid>
                                 </StackPanel>
                             </Border>
                         </StackPanel>

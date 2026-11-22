@@ -46,8 +46,9 @@ public sealed partial class GestureService
     private bool IsMenuButton(int vk)
     {
         var list = Settings().MiddleMenuMouseButtons;
-        /* 一个都没勾 = 鼠标这一路关掉（不是"默认中键"）：用户把它全部取消，就是不想被鼠标唤出。 */
-        if (list == null || list.Count == 0) return false;
+        /* 空列表按"中键"处理：老配置里这个字段根本不存在，
+         * 而"空 = 全部关闭"会让升级上来的用户直接失去鼠标唤出（实际就发生过一次）。 */
+        if (list == null || list.Count == 0) return vk == MiddleVk;
         foreach (var name in list)
         {
             if (Core.Gestures.GestureButtons.ToVk(name) == vk) return true;

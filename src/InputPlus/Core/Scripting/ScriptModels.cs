@@ -62,11 +62,15 @@ public sealed class GestureMenuDef
 
     public List<GestureMenuItem> Items { get; set; } = new();
 
+    /// <summary>不显示顶部的菜单名（附加菜单用：它弹出时什么都不写）。</summary>
+    public bool HideTitle { get; set; }
+
     public GestureMenuDef Clone() => new()
     {
         Id = Id,
         Name = Name,
         Hint = Hint,
+        HideTitle = HideTitle,
         Items = Items.Select(i => i.Clone()).ToList()
     };
 

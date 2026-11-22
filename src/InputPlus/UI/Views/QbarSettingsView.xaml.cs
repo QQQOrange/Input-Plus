@@ -194,7 +194,7 @@ public partial class QbarSettingsView : UserControl
         UpdateSemanticLabels();
         _suppress = false;
         MarkSelectedSwatch();
-        ShowFilesTab(_tab == "files");
+        ShowFilesTab(_tab == "files" || _tab == "middle");
         LoadEntries();
         RefreshFilterList(rebindEditor: true);
         RefreshRuleList(rebindEditor: true);
@@ -369,8 +369,7 @@ public partial class QbarSettingsView : UserControl
             _tab = tag;
             bool files = tag == "files";
             bool middle = tag == "middle";
-            ShowFilesTab(files);
-            MiddleMenuPanel.Visibility = middle ? Visibility.Visible : Visibility.Collapsed;
+            ShowFilesTab(files || middle);
             if (middle)
             {
                 SyncMiddleMenu();
@@ -429,20 +428,6 @@ public partial class QbarSettingsView : UserControl
             /* 全屏开关和手势页共用一个字段：这里改，手势页那边立刻是同一个值。 */
             AttachFullscreenBox.IsChecked = s.GestureOptions.DisableInFullscreen;
 
-            MiddleMenuPickBox.Items.Clear();
-            MiddleMenuPickBox.Items.Add(new ComboBoxItem { Content = Loc.T("内置（固定项 / 历史记录 / 命令 / 设置）"), Tag = "" });
-            foreach (var menu in s.GestureMenus)
-                MiddleMenuPickBox.Items.Add(new ComboBoxItem { Content = menu.DisplayName, Tag = menu.Id });
-
-            string wanted = (s.MiddleClickMenuId ?? "").Trim();
-            int index = 0;
-            for (int i = 1; i < MiddleMenuPickBox.Items.Count; i++)
-            {
-                if (MiddleMenuPickBox.Items[i] is ComboBoxItem item &&
-                    string.Equals(item.Tag as string, wanted, StringComparison.OrdinalIgnoreCase))
-                { index = i; break; }
-            }
-            MiddleMenuPickBox.SelectedIndex = index;
 
             RefreshExceptionList();
             UpdateMiddleMenuAvailability();
@@ -459,7 +444,6 @@ public partial class QbarSettingsView : UserControl
         MouseX2Box.IsEnabled = on;
         MiddleHotkeyBox.IsEnabled = on;
         AttachFullscreenBox.IsEnabled = on;
-        MiddleMenuPickBox.IsEnabled = on;
         ExceptionList.IsEnabled = on;
     }
 
@@ -480,14 +464,6 @@ public partial class QbarSettingsView : UserControl
         if (MouseX1Box.IsChecked == true) buttons.Add("x1");
         if (MouseX2Box.IsChecked == true) buttons.Add("x2");
         _host.Settings.MiddleMenuMouseButtons = buttons;
-        _host.SaveSettings();
-    }
-
-    private void OnMiddleMenuPicked(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppress || _host == null) return;
-        _host.Settings.MiddleClickMenuId =
-            (MiddleMenuPickBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
         _host.SaveSettings();
     }
 
@@ -1084,20 +1060,26 @@ public partial class QbarSettingsView : UserControl
     private QbarPriorityRule? _ruleEditing;
     private bool _ruleSuppress;
 
-    /// <summary>切到「文件搜」标签时的显隐：右边那栏整块让位，左边占满两列。</summary>
-    private void ShowFilesTab(bool on)
+    /// <summary>
+    /// 切"整页"版式时的显隐：文件搜索与附加菜单都是整页 —— 右边那栏整块让位、左边占满两列。
+    ///
+    /// 为什么必须同时做这两件事：只把面板显示出来、不收右栏也不撑列宽，
+    /// 整页就会挤在左半栏里，右边还杵着一个条目编辑框 —— 看起来像"一个弹窗浮在设置页中间"。
+    /// </summary>
+    private void ShowFilesTab(bool full)
     {
-        FileSearchPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        /* 「中键菜单」是第三种页面：条目的列表/编辑区整块让给它。
-         * 统一在这里收掉，免得两个面板同时可见。 */
-        MiddleMenuPanel.Visibility = Visibility.Collapsed;
-        if (on) SyncTocToScroll();
-        Visibility entryUi = on ? Visibility.Collapsed : Visibility.Visible;
+        bool files = _tab == "files";
+        bool middle = _tab == "middle";
+        FileSearchPanel.Visibility = files ? Visibility.Visible : Visibility.Collapsed;
+        MiddleMenuPanel.Visibility = middle ? Visibility.Visible : Visibility.Collapsed;
+        if (files) SyncTocToScroll();
+
+        Visibility entryUi = full ? Visibility.Collapsed : Visibility.Visible;
         EntriesFilter.Visibility = entryUi;
         EntryList.Visibility = entryUi;
         EntriesActions.Visibility = entryUi;
-        RightScroll.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
-        Grid.SetColumnSpan(EntriesCard, on ? 2 : 1);
+        RightScroll.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetColumnSpan(EntriesCard, full ? 2 : 1);
     }
 
     /* ── 文件搜索的页内目录 ─────────────────────────────────────────────

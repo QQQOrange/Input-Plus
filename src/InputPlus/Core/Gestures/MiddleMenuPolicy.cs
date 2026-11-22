@@ -132,8 +132,9 @@ internal static class MiddleMenuPolicy
         {
             Id = "middle.runtime",
             Name = Loc.T("附加菜单"),
-            /* 不写 Hint：菜单顶上那行小字就是"介绍"，用户要求菜单上不出现它。 */
+            /* 不写 Hint 也不显示标题：菜单顶上什么都不写（用户要求）。 */
             Hint = "",
+            HideTitle = true,
         };
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

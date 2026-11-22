@@ -55,11 +55,14 @@ public partial class GestureMenuWindow : Window
 
         InitializeComponent();
 
+        /* 附加菜单弹出时**什么标题都不写**（用户要求）：整块标题行连同下面那条分隔线一起收掉。 */
         MenuTitleText.Text = menu.DisplayName;
+        TitleRow.Visibility = menu.HideTitle ? Visibility.Collapsed : Visibility.Visible;
+        TitleDivider.Visibility = menu.HideTitle ? Visibility.Collapsed : Visibility.Visible;
 
         string hint = (menu.Hint ?? "").Trim();
         MenuHintText.Text = hint;
-        MenuHintText.Visibility = hint.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        MenuHintText.Visibility = !menu.HideTitle && hint.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // 最多 12 条：再多的部分根本按不到，直接截断
         int count = Math.Min(menu.Items.Count, GestureMenuDef.MaxItems);
