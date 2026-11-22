@@ -251,13 +251,17 @@ public partial class QbarSettingsView : UserControl
         }
         int total = all.Count;
         var items = QEntry.Filter(all, filter)
-            .Select(e => new EntryVm(e, _tab != "run", _tab == "pinned",
+            .Select(e => new EntryVm(e, _tab != "run", _tab is "pinned" or "run" or "web",
                 defaultEngineKey.Length > 0 && string.Equals(e.Key, defaultEngineKey, StringComparison.Ordinal)))
             .ToList();
         EntryGrid.ItemsSource = items;
         _entryItems = items;
-        /* 「附加菜单」这一列只对固定项有意义：搜索指令 / 启动程序 / 常用网址 连列头都不出现。 */
-        MenuColumn.Visibility = _tab == "pinned" ? Visibility.Visible : Visibility.Collapsed;
+        /* 「附加菜单」这一列只在"能加进附加菜单"的三页出现（固定项 / 启动程序 / 常用网址）；
+         * 搜索指令那一页连列头都不该有。DataGridColumn 不是 FrameworkElement，x:Name 拿不到字段，
+         * 所以按下标取（第 4 列）。 */
+        bool canPin = _tab is "pinned" or "run" or "web";
+        if (EntryGrid.Columns.Count > 3)
+            EntryGrid.Columns[3].Visibility = canPin ? Visibility.Visible : Visibility.Collapsed;
         if (items.Count > 0) EntryGrid.SelectedIndex = 0;
         _suppress = false;
         if (items.Count > 0) BindEditor(items[0].Entry);

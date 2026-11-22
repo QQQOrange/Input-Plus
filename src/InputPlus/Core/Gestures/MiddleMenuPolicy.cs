@@ -183,6 +183,44 @@ internal static class MiddleMenuPolicy
             });
         }
 
+        /* 启动程序 / 常用网址：和固定项一样，勾了「附加菜单」就进菜单。
+         * 标题只取备注（为空退回关键字），内容不显示 —— 和固定项同一套规则。 */
+        foreach (var run in (settings.Run ?? new List<QEntry>()).Where(p => p != null && p.ShowInMiddleMenu))
+        {
+            string target = (run.Value ?? "").Trim();
+            if (target.Length == 0) continue;
+            string title = !string.IsNullOrWhiteSpace(run.Comment)
+                ? run.Comment.Trim()
+                : (!string.IsNullOrWhiteSpace(run.Key) ? run.Key.Trim() : LeafOf(target));
+            string quoted = target.Contains(' ') ? "\"" + target + "\"" : target;
+            string args = (run.Arguments ?? "").Trim();
+            AddTop(new GestureMenuItem
+            {
+                Title = title,
+                Note = "",
+                IconPath = ShellIcons.ResolveFilesystemPath(target) ?? target,
+                Action = "runProgram",
+                Arg = args.Length == 0 ? quoted : quoted + " " + args,
+            });
+        }
+
+        foreach (var web in (settings.Web ?? new List<QEntry>()).Where(p => p != null && p.ShowInMiddleMenu))
+        {
+            string target = (web.Value ?? "").Trim();
+            if (target.Length == 0) continue;
+            string title = !string.IsNullOrWhiteSpace(web.Comment)
+                ? web.Comment.Trim()
+                : (!string.IsNullOrWhiteSpace(web.Key) ? web.Key.Trim() : LeafOf(target));
+            AddTop(new GestureMenuItem
+            {
+                Title = title,
+                Note = (urlTitles != null && urlTitles.TryGetValue(target, out string? t) ? t : ""),
+                IconPath = target,
+                Action = "webPage",
+                Arg = target,
+            });
+        }
+
         // ② 历史记录 ▸ 搜索前建议
         var historyChildren = new List<GestureMenuItem>();
         foreach (var h in history ?? Array.Empty<MiddleMenuSuggestion>())
