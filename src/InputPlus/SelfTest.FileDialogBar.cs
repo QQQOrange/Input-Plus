@@ -125,6 +125,16 @@ public static partial class SelfTest
                 Math.Abs(bar.Width - widthBeforeRows) <= 0.5,
                 $"{widthBeforeRows:0.#} → {bar.Width:0.#} DIP");
 
+            /* 推荐文件夹 chip 也不能改宽度：它以前是"内容最小宽度"里最活跃的一项，
+             * 一出现就把浮层撑宽一截 —— 同一个对话框里宽度来回跳的元凶之一。 */
+            double widthBeforeChip = bar.Width;
+            bar.SetFolderChip(@"D:\video");
+            bar.UpdateLayout();
+            Check("跟随：推荐文件夹 chip 不改浮层宽度",
+                Math.Abs(bar.Width - widthBeforeChip) <= 0.5,
+                $"{widthBeforeChip:0.#} → {bar.Width:0.#} DIP");
+            bar.SetFolderChip(null);
+
             /* Ctrl+1..6：一次最多 6 条，行尾编号与按键必须一一对应（看到什么就按什么）。 */
             bar.SetRows(System.Linq.Enumerable.Range(1, 10).Select(i =>
                 new InputPlus.Core.FileDialog.DialogSelection($@"C:\Temp\第{i}个.txt", false, $"第{i}个.txt"))

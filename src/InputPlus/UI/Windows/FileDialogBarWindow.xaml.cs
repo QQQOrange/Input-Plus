@@ -474,32 +474,19 @@ public partial class FileDialogBarWindow : Window
         _inApply = true;
         try
         {
-            int widthPx = Math.Max(1, frame.Width * 3 / 5 + (int)Math.Round(16 * scale));
-            double widthDip = widthPx / scale;
+            /* 宽度**只由"对话框有多宽"决定**，和内容一点关系都没有。
+               以前这里后面还会按内容量一个"最小宽度"：推荐文件夹 chip 一出现、
+               或者某个长路径进来，就把浮层撑宽一截 —— 同一个对话框里宽度来回跳，
+               用户看到的就是"这条横条的宽度一直在变"。
+               现在：对话框宽 × 5/8（原来 3/5，按用户要求整体加宽一档），
+               再夹一个 560 DIP 的地板（小对话框也不至于挤成一条）与"工作区宽 - 16"的上限。
+               同一个对话框宽度不变 ⇒ 浮层宽度自始至终不变。 */
+            const double minWidthDip = 560;
+            double maxWidthDip = Math.Max(minWidthDip, work.Width / scale - 16);
+            double widthDip = Math.Min(maxWidthDip,
+                Math.Max(minWidthDip, frame.Width * 5.0 / 8.0 / scale + 16));
             if (Math.Abs(Width - widthDip) > 0.5) Width = widthDip;
-
-            /* 内容有最小宽度（目录 chip + 输入框 + ★/🕘/≡）。对话框小的时候
-             * 3/5 装不下，右边按钮会被裁到窗口外 —— 量一次最小宽度再撑开。
-             *
-             * ⚠ 只量**输入行**（InputGrid），绝不能再量 OuterGrid：
-             *   结果列表一出来，行里那些长路径会让 OuterGrid.DesiredSize 一路涨，
-             *   于是每搜一次这条浮层就左右撑开一次 —— 用户看到的就是"开始搜索之后宽度剧烈增加"。
-             *   地址列的中间省略与列宽分配已经保证任何长度的路径都塞得进去，
-             *   宽度只该由对话框决定。 */
-            try
-            {
-                if (InputGrid != null)
-                {
-                    InputGrid.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                    /* + 22 InputGrid 左右外边距 + 2 面板描边 + 16 阴影留白 */
-                    double needDip = InputGrid.DesiredSize.Width + 40;
-                    double capDip = work.Width / scale - 16;
-                    if (needDip > Width + 0.5 && capDip > Width)
-                        Width = Math.Min(needDip, capDip);
-                }
-            }
-            catch (Exception ex) { CoreLog.Swallow(ex, "浮条按内容加宽"); }
-            widthPx = (int)Math.Round(Width * scale);
+            int widthPx = (int)Math.Round(Width * scale);
 
             DialogBarAnchor.GetTargetRect(frame, work, widthPx,
                 Math.Max(1, _barHeightPx), out BarPlacement placement);
@@ -1137,9 +1124,11 @@ public partial class FileDialogBarWindow : Window
     /// <summary>推荐文件夹 chip：null = 隐藏；否则显示目录名，tooltip 给全路径。</summary>
     internal void SetFolderChip(string? path)
     {
+        _folderChipPath = string.IsNullOrWhiteSpace(path) ? null : path;
         if (string.IsNullOrWhiteSpace(path))
         {
             FolderChip.Visibility = Visibility.Collapsed;
+            FolderChipClose.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -1151,7 +1140,24 @@ public partial class FileDialogBarWindow : Window
         ChipText.Text = name;
         FolderChip.ToolTip = path + "（Ctrl+G）";
         FolderChip.Visibility = Visibility.Visible;
+        FolderChipClose.Visibility = Visibility.Visible;
     }
+
+    private string? _folderChipPath;
+
+    /// <summary>用户点了推荐文件夹旁边那颗 × —— 服务端要记住"这个目录别再推给我"。</summary>
+    internal event Action<string?>? FolderChipDismissed;
+
+    private void OnFolderChipClose(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        string? dismissed = _folderChipPath;
+        SetFolderChip(null);
+        FolderChipDismissed?.Invoke(dismissed);
+    }
+
+    /// <summary>换了一个对话框 / 重新显示：推荐 chip 从"没推荐过"开始。</summary>
+    internal void ResetFolderChip() => SetFolderChip(null);
 
     internal void ShowFavoritesOverlay(IReadOnlyList<QuickSwitchRow> rows, bool addEntry)
     {

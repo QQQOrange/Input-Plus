@@ -147,6 +147,7 @@ public static class RenderTools
                         Height = 380,
                     };
                     bar.SetRowsForRender();
+                    bar.SetFolderChip(@"D:\video");     // 推荐文件夹 chip（带 × ）
                     bar.Show();
                     Pump(500);
                     Save(bar, Path.Combine(outDir, "filedialog-bar.png"));

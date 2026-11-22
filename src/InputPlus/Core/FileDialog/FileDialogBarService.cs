@@ -334,6 +334,7 @@ public sealed class FileDialogBarService : IDisposable
         bar.HistoryRequested += OnHistoryRequested;
         bar.MenuRequested += OnMenuRequested;
         bar.FolderChipRequested += OnFolderChipRequested;
+        bar.FolderChipDismissed += OnFolderChipDismissed;
         bar.FolderPicked += OnFolderPicked;
         bar.ActionRequested += OnQuickSwitchAction;
         _bar = bar;
@@ -610,6 +611,14 @@ public sealed class FileDialogBarService : IDisposable
 
     private void OnFolderChipRequested() => NavigateToExplorerFolder();
 
+    /* 用户点过推荐 chip 右边那颗 ×：这个目录本次会话不再推荐。
+       为什么不是「只藏当前这一条」：换一个对话框时定时器又会探一遍资源管理器目录，
+       不记下来它就再冒出来 —— 用户遇到的正是「新窗口一打开就挂着 video，怎么都取消不了」。
+       资源管理器换到别的目录时清空（见 RefreshChipNow），新目录照常推荐。 */
+    private string? _chipDismissed;
+
+    private void OnFolderChipDismissed(string? path) => _chipDismissed = path;
+
     private void OnFolderPicked(string path) => NavigateTo(path);
 
     private void OnQuickSwitchAction(QuickSwitchAction action)
@@ -876,7 +885,17 @@ public sealed class FileDialogBarService : IDisposable
                 if (_bar == null || !_bar.IsOpen) return;
                 bool same = explorer != null && current != null
                             && string.Equals(explorer.TrimEnd('\\'), current.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
-                _bar.SetFolderChip(same ? null : explorer);
+
+                /* 资源管理器换到别的目录 → 解除「别再推荐」的封印，新目录照常推荐。 */
+                if (explorer != null && _chipDismissed != null
+                    && !string.Equals(explorer.TrimEnd('\\'), _chipDismissed.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                {
+                    _chipDismissed = null;
+                }
+                bool dismissed = explorer != null && _chipDismissed != null
+                                 && string.Equals(explorer.TrimEnd('\\'), _chipDismissed.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+
+                _bar.SetFolderChip(same || dismissed ? null : explorer);
             }));
         });
     }

@@ -150,24 +150,37 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <!-- 推荐文件夹 chip：资源管理器正在浏览的目录；对话框已在同一目录时隐藏 -->
-                    <Button x:Name="FolderChip" Grid.Column="0"
-                            Style="{StaticResource Button.Ghost}"
-                            Padding="7,3" Margin="0,0,6,0" MinWidth="0"
-                            Focusable="False"
-                            Visibility="Collapsed"
-                            Click="OnFolderChipClick"
-                            ToolTip="导航到资源管理器正在浏览的文件夹（Ctrl+G）">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="13" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                            <TextBlock x:Name="ChipText" FontSize="12" Margin="5,0,0,0"
-                                       MaxWidth="130" TextTrimming="CharacterEllipsis"
-                                       VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                        </StackPanel>
-                    </Button>
+                    <!-- 推荐文件夹 chip：资源管理器正在浏览的目录；对话框已在同一目录时隐藏。
+                         右边那颗 × 是"这次别再推荐它"—— 以前只有"点它跳过去"一条路，
+                         不想去就只能干看着它一直挂在那儿。 -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,0,6,0">
+                        <Button x:Name="FolderChip"
+                                Style="{StaticResource Button.Ghost}"
+                                Padding="7,3" MinWidth="0"
+                                Focusable="False"
+                                Visibility="Collapsed"
+                                Click="OnFolderChipClick"
+                                ToolTip="导航到资源管理器正在浏览的文件夹（Ctrl+G）">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                                <TextBlock x:Name="ChipText" FontSize="12" Margin="5,0,0,0"
+                                           MaxWidth="130" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="FolderChipClose" Style="{StaticResource Button.Ghost}"
+                                Padding="4,3" MinWidth="0" Margin="0,0,4,0"
+                                Focusable="False" Visibility="Collapsed"
+                                Click="OnFolderChipClose"
+                                ToolTip="这个文件夹不再推荐">
+                            <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="9" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                        </Button>
+                    </StackPanel>
 
                     <TextBlock Grid.Column="1"
                                Text="&#xE721;"
