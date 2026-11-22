@@ -130,70 +130,81 @@
                 </Grid>
                 </Grid>
 
-                <ListBox Grid.Row="2" x:Name="EntryList" Background="Transparent" BorderThickness="0"
-                         ItemContainerStyle="{StaticResource RowItem}" Margin="0,10,0,0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         SelectionChanged="OnEntrySelected">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <!-- 图标列：搜索引擎品牌图标 / 程序图标 -->
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="120" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <!-- 「显示在中键菜单」：只有「固定项」标签里可见，其它标签整列折叠 -->
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
+                <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这一张表：
+                     列头来自 GridView，点击列头排序（再点切换升降序），列宽用鼠标拖列头之间的分隔线即可 ——
+                     和资源管理器同一套手感，不自己造。 -->
+                <ListView Grid.Row="2" x:Name="EntryList" Background="Transparent" BorderThickness="0"
+                          Margin="0,10,0,0" SelectionChanged="OnEntrySelected"
+                          GridViewColumnHeader.Click="OnColumnHeaderClick"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          ItemContainerStyle="{StaticResource RowItem}">
+                    <ListView.View>
+                        <GridView AllowsColumnReorder="False">
+                            <GridViewColumn Header="{loc:T '关键字'}" Width="210">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid Grid.Column="0" Width="20" Height="20" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                <Border Background="{Binding LetterBrush}" CornerRadius="5"
+                                                        Visibility="{Binding NoIconVisibility}">
+                                                    <TextBlock Text="{Binding Initial}" FontSize="10" FontWeight="SemiBold"
+                                                               Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <Image Source="{Binding Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                                                       Visibility="{Binding HasIconVisibility}" />
+                                            </Grid>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Key}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource Brush.Accent}" />
+                                                <Border Background="{DynamicResource Brush.AccentSoft}" CornerRadius="4"
+                                                        Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                        Visibility="{Binding DefaultBadgeVisibility}">
+                                                    <TextBlock Text="{loc:T '默认'}" FontSize="10"
+                                                               Foreground="{DynamicResource Brush.Accent}" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
 
-                                <!-- 二选一：有图标只显示图标，没有图标只显示首字母色块。
-                                     两个元素各自由 HasIconVisibility / NoIconVisibility 控制，
-                                     绝不会同时叠在同一个位置。 -->
-                                <Grid Grid.Column="0" Width="20" Height="20" Margin="0,0,8,0"
-                                      VerticalAlignment="Center">
-                                    <Border Background="{Binding LetterBrush}" CornerRadius="5"
-                                            Visibility="{Binding NoIconVisibility}">
-                                        <TextBlock Text="{Binding Initial}" FontSize="10"
-                                                   FontWeight="SemiBold" Foreground="White"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
-                                    </Border>
-                                    <Image Source="{Binding Icon}" Stretch="Uniform"
-                                           Visibility="{Binding HasIconVisibility}"
-                                           RenderOptions.BitmapScalingMode="HighQuality" />
-                                </Grid>
+                            <GridViewColumn Header="{loc:T '内容'}" Width="240">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Value}" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0"
+                                                   Foreground="{DynamicResource Brush.TextSecondary}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
 
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Key}" FontWeight="SemiBold"
-                                               TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource Brush.Accent}" />
-                                    <!-- 「默认」徽标：默认搜索引擎那一行（必应）自带，取代原来单独的一行「默认搜索」 -->
-                                    <Border Background="{DynamicResource Brush.AccentSoft}" CornerRadius="4"
-                                            Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center"
-                                            Visibility="{Binding DefaultBadgeVisibility}">
-                                        <TextBlock Text="{loc:T '默认'}" FontSize="10"
-                                                   Foreground="{DynamicResource Brush.Accent}" />
-                                    </Border>
-                                </StackPanel>
-                                <TextBlock Grid.Column="2" Text="{Binding Value}" VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis" Margin="8,0,8,0"
-                                           Foreground="{DynamicResource Brush.TextSecondary}" />
-                                <TextBlock Grid.Column="3" Text="{Binding Comment}" VerticalAlignment="Center"
-                                           Style="{StaticResource Text.Tertiary}" />
+                            <GridViewColumn Header="{loc:T '备注'}" Width="170">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Comment}" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center" Style="{StaticResource Text.Tertiary}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
 
-                                <!-- 中键菜单开关：勾上这一条就出现在中键菜单里（标题用备注、图标用真实图标）。
-                                     用 ToggleSwitch 是为了和设置页其它开关一致；Click 里落盘。 -->
-                                <CheckBox Grid.Column="4" Content="{loc:T '附加菜单'}" Margin="12,0,0,0"
-                                          VerticalAlignment="Center" FontSize="12"
-                                          Visibility="{Binding MiddleMenuVisibility}"
-                                          IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
-                                          ToolTip="{loc:T '勾上后这一条会出现在附加菜单里（网址会自动取网页标题作备注与网站图标）。'}"
-                                          Click="OnEntryMiddleMenuClick" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                            <GridViewColumn Header="{loc:T '附加菜单'}" Width="96">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{loc:T '附加菜单'}" FontSize="12" VerticalAlignment="Center"
+                                                  Visibility="{Binding MiddleMenuVisibility}"
+                                                  IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
+                                                  ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
+                                                  Click="OnEntryMiddleMenuClick" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
 
                 <StackPanel x:Name="EntriesActions" Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnAddClick" />

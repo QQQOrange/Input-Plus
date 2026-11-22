@@ -227,12 +227,27 @@ public partial class QbarSettingsView : UserControl
          * 改成正牌必应行上的「默认」徽标 —— 同一个引擎没必要占两行。
          * 这个 Key 必须在过滤掉之前取出来。 */
         string defaultEngineKey = "";
+        QEntry? defaultEngineRow = null;
         if (_tab == "search")
         {
-            defaultEngineKey = (all.FirstOrDefault(x =>
-                string.Equals((x.Comment ?? "").Trim(), "默认搜索", StringComparison.Ordinal))?.Key ?? "").Trim();
+            defaultEngineRow = all.FirstOrDefault(x =>
+                string.Equals((x.Comment ?? "").Trim(), "默认搜索", StringComparison.Ordinal));
+            defaultEngineKey = (defaultEngineRow?.Key ?? "").Trim();
             if (defaultEngineKey.Length > 0)
                 all = all.Where(x => !string.Equals((x.Comment ?? "").Trim(), "默认搜索", StringComparison.Ordinal)).ToList();
+
+            /* 必应相关条目换成"默认引擎那一行"的图标：同一个引擎两种图标只会让人以为是两家。
+             * 只改内存里的显示副本，不动用户的设置文件。 */
+            if (defaultEngineRow != null && !string.IsNullOrWhiteSpace(defaultEngineRow.EngineIcon))
+            {
+                string host = HostOf(defaultEngineRow.Value);
+                foreach (var e in all)
+                {
+                    if (ReferenceEquals(e, defaultEngineRow)) continue;
+                    if (host.Length > 0 && string.Equals(HostOf(e.Value), host, StringComparison.OrdinalIgnoreCase))
+                        e.EngineIcon = defaultEngineRow.EngineIcon;
+                }
+            }
         }
         int total = all.Count;
         var items = QEntry.Filter(all, filter)
@@ -240,6 +255,8 @@ public partial class QbarSettingsView : UserControl
                 defaultEngineKey.Length > 0 && string.Equals(e.Key, defaultEngineKey, StringComparison.Ordinal)))
             .ToList();
         EntryList.ItemsSource = items;
+        _entryItems = items;
+        ApplyEntrySort();
         if (items.Count > 0) EntryList.SelectedIndex = 0;
         _suppress = false;
         if (items.Count > 0) BindEditor(items[0].Entry);
@@ -408,6 +425,58 @@ public partial class QbarSettingsView : UserControl
         if (_suppress) return;
         if (EntryList.SelectedItem is not EntryVm vm) return;
         BindEditor(vm.Entry);
+    }
+
+    // ─────────────────── 列表列头：排序 ───────────────────
+
+    private List<EntryVm>? _entryItems;
+    private int _sortColumn = -1;
+    private bool _sortAsc = true;
+
+    /// <summary>
+    /// 点列头排序，再点同列切换升降序 —— 和资源管理器一致。
+    /// 排序只作用于**当前这一屏**（已经过滤过的集合），不改设置里的存储顺序。
+    /// </summary>
+    private void OnColumnHeaderClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not GridViewColumnHeader header) return;
+        if (EntryList.View is not GridView gv || header.Column == null) return;
+        int col = gv.Columns.IndexOf(header.Column);
+        if (col < 0) return;
+
+        if (_sortColumn == col) _sortAsc = !_sortAsc;
+        else { _sortColumn = col; _sortAsc = true; }
+        ApplyEntrySort();
+    }
+
+    private void ApplyEntrySort()
+    {
+        if (_entryItems == null || _sortColumn < 0) return;
+        var sorted = new List<EntryVm>(_entryItems);
+        Comparison<EntryVm> cmp = _sortColumn switch
+        {
+            0 => (a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCultureIgnoreCase),
+            1 => (a, b) => string.Compare(a.Value, b.Value, StringComparison.CurrentCultureIgnoreCase),
+            2 => (a, b) => string.Compare(a.Comment, b.Comment, StringComparison.CurrentCultureIgnoreCase),
+            3 => (a, b) => a.ShowInMiddleMenu.CompareTo(b.ShowInMiddleMenu),
+            _ => (a, b) => 0,
+        };
+        if (!_sortAsc) { var forward = cmp; cmp = (a, b) => forward(b, a); }
+        sorted.Sort(cmp);
+        EntryList.ItemsSource = sorted;
+    }
+
+    /// <summary>取网址的 host（用来判断"是不是同一个搜索引擎"）。不是网址就返回空串。</summary>
+    private static string HostOf(string? value)
+    {
+        string v = (value ?? "").Trim();
+        if (v.Length == 0) return "";
+        try
+        {
+            if (Uri.TryCreate(v, UriKind.Absolute, out var uri)) return uri.Host;
+        }
+        catch { }
+        return "";
     }
 
     // ─────────────────── 附加菜单（v1.3.18） ───────────────────
