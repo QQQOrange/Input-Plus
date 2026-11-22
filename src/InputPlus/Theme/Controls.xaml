@@ -750,6 +750,89 @@
         </Setter>
     </Style>
 
+    <!-- ============ 表格（DataGrid） ============
+         Qbar 设置页那张「条目表」：列头、点击排序、拖列宽都要 DataGrid 的原生能力，
+         但外观必须和别的列表（RowItem / QbarRow）是同一套 —— 圆角 8、悬停 Brush.Hover、
+         选中 Brush.Selected。系统默认模板给不了这个：DataGridRow 选中时铺的是
+         SystemColors.HighlightBrush，也就是一整条直角实心系统蓝，把整行从头盖到尾；
+         DataGridCell 选中时还会再叠一层，结果比系统蓝还深。 -->
+
+    <!-- 行：圆角 8 的底色块，半径与颜色都和 RowItem 一致 -->
+    <Style x:Key="Grid.Row" TargetType="DataGridRow">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridRow">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8" SnapsToDevicePixels="True">
+                        <DataGridCellsPresenter ItemsPanel="{TemplateBinding ItemsPanel}"
+                                                SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <!-- 悬停 / 选中只换这一块底色，字色一律走主题，不做"反白" -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Selected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 单元格：自己不画任何底色，也不画焦点框。
+         默认模板在选中时会再铺一层系统蓝，和行底色叠成更深的蓝；
+         这里把格子彻底让出来，选中色只在行上出现一次。 -->
+    <Style x:Key="Grid.Cell" TargetType="DataGridCell">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridCell">
+                    <Border Background="Transparent" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Left" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 列头：透明底 + 一条下边线，字号字色和 GridView.Header 对齐。
+         模板不动 —— 拖列宽靠默认模板里的 PART_LeftHeaderGripper / PART_RightHeaderGripper，
+         排序箭头也在里面，自己重写会把这两样一起丢掉。 -->
+    <Style x:Key="Grid.Header" TargetType="DataGridColumnHeader">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.TextTertiary}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <!-- 单元格里的文字：四列共用这一份量度（字号、行高、行盒策略都一样）。
+         为什么必须锁死：关键字那列是"图标 + 文字"的 Grid，内容/备注两列只是一个
+         TextBlock，DataGridTextColumn 生成的 TextBlock 还自带一套行盒 ——
+         各自按自己的行盒居中，上下就差出一两个像素，四列看着不在一条线上。 -->
+    <Style x:Key="Grid.CellText" TargetType="TextBlock" BasedOn="{StaticResource Text.Body}">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+
     <!-- ============ 复选框 ============ -->
     <Style x:Key="CheckBox.Text" TargetType="CheckBox">
         <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />

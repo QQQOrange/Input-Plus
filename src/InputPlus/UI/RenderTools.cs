@@ -108,6 +108,51 @@ public static class RenderTools
             Pump(page == "gestures" ? 700 : 220);
             Save(main, Path.Combine(outDir, $"{page}.png"));
 
+            /* 条目表四个标签（搜索指令 / 启动程序 / 常用网址 / 固定项）共用一张表，
+               平时只拍到第一屏。选中态是不是还铺着系统蓝的直角横条、列头挤没挤、
+               「附加菜单」列够不够宽，全在另外三个标签里 —— 逐个切过去拍一张。 */
+            if (page == "qbar" && main.GetPage("qbar") is InputPlus.UI.Views.QbarSettingsView qtab)
+            {
+                try
+                {
+                    foreach (string tag in new[] { "search", "run", "web", "pinned" })
+                    {
+                        qtab.SelectTabForRender(tag);
+                        Pump(260);
+                        /* 选第二行：搜索指令页第一行自带「默认」徽标，看选中态不如第二行干净。 */
+                        qtab.SelectEntryForRender(1);
+                        Pump(120);
+                        Save(main, Path.Combine(outDir, $"qbar-entries-{tag}.png"));
+                    }
+                    qtab.SelectTabForRender("search");
+                    Pump(160);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染 Qbar 条目表四个标签失败：" + ex.Message); }
+            }
+
+            /* 附加菜单（中键唤出）：宽度、行距、圆角都是照着眼睛调出来的，
+               不留下离屏截图，下次改坏了没人看得见。 */
+            if (page == "qbar")
+            {
+                try
+                {
+                    var attachDef = InputPlus.Core.Gestures.MiddleMenuPolicy.Build(host.Settings);
+                    var attach = new GestureMenuWindow(attachDef, InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -32000,
+                        Top = -32000,
+                    };
+                    attach.Show();
+                    Pump(300);
+                    Save(attach, Path.Combine(outDir, "attach-menu.png"));
+                    attach.Close();
+                    Pump(120);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染附加菜单失败：" + ex.Message); }
+            }
+
             /* 平滑滚动的「程序例外」空表时只有一行提示，模板里的名字、状态、
                禁用/恢复按钮一个都看不到 —— 塞两条假数据专门拍一张。 */
             if (page == "scroll" && main.GetPage("scroll") is InputPlus.UI.Views.ScrollView scrollPage)

@@ -130,103 +130,113 @@
                 </Grid>
                 </Grid>
 
-                <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这一张表：
-                     列头来自 GridView，点击列头排序（再点切换升降序），列宽用鼠标拖列头之间的分隔线即可 ——
-                     和资源管理器同一套手感，不自己造。 -->
-                <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这一张表：
-                     列头来自 GridView，点击列头排序（再点切换升降序），列宽拖列头分隔线即可。
-                     单元格里的文字全部用主题样式（Text.Body / Text.Secondary / Text.Tertiary），
-                     纵向内边距和左栏其它列表一致，不再是一副"外挂表格"的样子。 -->
                 <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这张表。
-                     用 DataGrid 而不是 ListView+GridView：列头、点击排序、列宽拖动都是原生能力，
-                     上一版 GridView 的 CellTemplate 在运行时不生效（每行显示成 EntryVm 的类名）。 -->
-                <DataGrid Grid.Row="2" x:Name="EntryGrid" Margin="0,10,0,0"
-                          Background="Transparent" BorderThickness="0" RowHeaderWidth="0"
-                          HeadersVisibility="Column" GridLinesVisibility="None"
-                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
-                          CanUserResizeRows="False" CanUserSortColumns="True"
-                          SelectionMode="Single" SelectionUnit="FullRow"
-                          FontFamily="{StaticResource Font.Ui}" FontSize="12"
-                          RowHeight="30" ColumnHeaderHeight="28"
-                          VerticalContentAlignment="Center" HorizontalContentAlignment="Stretch"
-                          HorizontalScrollBarVisibility="Disabled"
-                          SelectionChanged="OnEntrySelected"
-                          Sorting="OnEntryGridSorting">
-                    <DataGrid.Resources>
-                        <!-- 表头 / 行 / 单元格全部走主题画刷，昼夜一致；行高与文字比默认更紧凑 -->
-                        <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
-                            <Setter Property="Background" Value="{DynamicResource Brush.SurfaceAlt}" />
-                            <Setter Property="Foreground" Value="{DynamicResource Brush.TextTertiary}" />
-                            <Setter Property="FontSize" Value="11" />
-                            <Setter Property="FontWeight" Value="Normal" />
-                            <Setter Property="Padding" Value="8,0" />
-                            <Setter Property="BorderThickness" Value="0,0,0,1" />
-                            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
-                        </Style>
-                        <Style TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
-                            <Setter Property="BorderThickness" Value="0" />
-                            <Setter Property="Padding" Value="8,0" />
-                            <Setter Property="VerticalContentAlignment" Value="Center" />
-                            <Setter Property="HorizontalContentAlignment" Value="Left" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
-                        </Style>
-                        <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
-                            <Setter Property="Background" Value="Transparent" />
-                        </Style>
-                    </DataGrid.Resources>
-
-                    <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="{loc:T '关键字'}" Width="72" CanUserSort="True"
-                                                SortMemberPath="Key">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <Grid VerticalAlignment="Center">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Grid Grid.Column="0" Width="14" Height="14" Margin="0,0,5,0"
-                                              VerticalAlignment="Center">
-                                            <Border Background="{Binding LetterBrush}" CornerRadius="4"
-                                                    Visibility="{Binding NoIconVisibility}">
-                                                <TextBlock Text="{Binding Initial}" FontSize="9" FontWeight="SemiBold"
-                                                           Foreground="White" HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center" />
-                                            </Border>
-                                            <Image Source="{Binding Icon}" Stretch="Uniform"
-                                                   RenderOptions.BitmapScalingMode="HighQuality"
-                                                   Visibility="{Binding HasIconVisibility}" />
+                     用 DataGrid 而不是 ListView+GridView：列头、点击排序、列宽拖动都是原生能力。
+                     外面套一层圆角 8 的 SurfaceAlt —— 和本页「过滤器」「优先级」两张表格同一个底色，
+                     左栏里就不会只有这张表是直角的"外挂表格"。
+                     行 / 格 / 列头三套样式都在 Theme\Controls.xaml（Grid.Row / Grid.Cell / Grid.Header）：
+                     系统默认选中是"直角 + 实心系统蓝 + 整行盖满"，那里换成了和 RowItem
+                     同一套的圆角选中块（悬停 Brush.Hover、选中 Brush.Selected）。 -->
+                <Border x:Name="EntryGridHost" Grid.Row="2" Margin="0,10,0,0"
+                        Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8" Padding="0,2">
+                    <DataGrid x:Name="EntryGrid"
+                              Background="Transparent" BorderThickness="0" RowHeaderWidth="0"
+                              HeadersVisibility="Column" GridLinesVisibility="None"
+                              AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                              CanUserResizeRows="False" CanUserSortColumns="True"
+                              SelectionMode="Single" SelectionUnit="FullRow"
+                              FontFamily="{StaticResource Font.Ui}" FontSize="12"
+                              RowHeight="30" ColumnHeaderHeight="28"
+                              HorizontalScrollBarVisibility="Disabled"
+                              RowStyle="{StaticResource Grid.Row}"
+                              CellStyle="{StaticResource Grid.Cell}"
+                              ColumnHeaderStyle="{StaticResource Grid.Header}"
+                              PreviewMouseLeftButtonDown="OnEntryRowPressDown"
+                              PreviewMouseMove="OnEntryRowMouseMove"
+                              PreviewMouseLeftButtonUp="OnEntryRowMouseUp"
+                              LostMouseCapture="OnEntryLostCapture"
+                              SelectionChanged="OnEntrySelected"
+                              Sorting="OnEntryGridSorting">
+                        <DataGrid.Columns>
+                            <!-- 关键字：72 → 96。
+                                 72 的时候 8 个字母（deepseek / github 这类）就显示成 "deepse…"，
+                                 关键字这一列一眼看不出是哪一条。96 能让常见英文关键字整词显示，
+                                 更长的靠省略号；用户自己拖过的宽度由 ColumnWidthChanged 记下来。 -->
+                            <DataGridTemplateColumn Header="{loc:T '关键字'}" Width="96" CanUserSort="True"
+                                                    SortMemberPath="Key">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Grid VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid Grid.Column="0" Width="14" Height="14" Margin="0,0,5,0"
+                                                  VerticalAlignment="Center">
+                                                <Border Background="{Binding LetterBrush}" CornerRadius="4"
+                                                        Visibility="{Binding NoIconVisibility}">
+                                                    <TextBlock Text="{Binding Initial}" FontSize="9" FontWeight="SemiBold"
+                                                               Foreground="White" HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Border>
+                                                <Image Source="{Binding Icon}" Stretch="Uniform"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                                       Visibility="{Binding HasIconVisibility}" />
+                                            </Grid>
+                                            <TextBlock Grid.Column="1" Text="{Binding Key}"
+                                                       Style="{StaticResource Grid.CellText}" FontWeight="SemiBold"
+                                                       ToolTip="{Binding Key}"
+                                                       Foreground="{DynamicResource Brush.Accent}" />
                                         </Grid>
-                                        <TextBlock Grid.Column="1" Text="{Binding Key}" FontWeight="SemiBold"
-                                                   TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                                                   VerticalAlignment="Center" ToolTip="{Binding Key}"
-                                                   Foreground="{DynamicResource Brush.Accent}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="{loc:T '内容'}" Binding="{Binding Value}" Width="*"
-                                            CanUserSort="True" />
+                            <!-- 内容 / 备注用模板列，不用 DataGridTextColumn。
+                                 DataGridTextColumn 生成的 TextBlock 自带一套行盒，和关键字那列
+                                 （图标 + 文字的 Grid）各按各的行盒居中，上下就差一两个像素 ——
+                                 用户看到的就是"关键字、内容、备注不在一条水平线上"。
+                                 模板列里四列共用 Grid.CellText 的字号 / 行高 / 行盒策略，偏差归零。 -->
+                            <DataGridTemplateColumn Header="{loc:T '内容'}" Width="*" CanUserSort="True"
+                                                    SortMemberPath="Value">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Value}" Style="{StaticResource Grid.CellText}"
+                                                   ToolTip="{Binding Value}"
+                                                   Foreground="{DynamicResource Brush.TextPrimary}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTextColumn Header="{loc:T '备注'}" Binding="{Binding Comment}" Width="140"
-                                            CanUserSort="True" />
+                            <DataGridTemplateColumn Header="{loc:T '备注'}" Width="140" CanUserSort="True"
+                                                    SortMemberPath="Comment">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Comment}" Style="{StaticResource Grid.CellText}"
+                                                   ToolTip="{Binding Comment}"
+                                                   Foreground="{DynamicResource Brush.TextSecondary}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
 
-                        <DataGridTemplateColumn Header="{loc:T '附加菜单'}" Width="46"
-                                                CanUserSort="True" SortMemberPath="ShowInMiddleMenu">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <CheckBox VerticalAlignment="Center" HorizontalAlignment="Center"
-                                              Visibility="{Binding MiddleMenuVisibility}"
-                                              IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
-                                              ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
-                                              Click="OnEntryMiddleMenuClick" />
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                    </DataGrid.Columns>
-                </DataGrid>
+                            <!-- 附加菜单：84 → 70，刚好放得下四个字。
+                                 "附加菜单" 11.5px 约 46 + 左右内边距 16 = 62，留 8 给拖动把手；
+                                 再宽就是白占「内容」那列的地方。 -->
+                            <DataGridTemplateColumn Header="{loc:T '附加菜单'}" Width="70"
+                                                    CanUserSort="True" SortMemberPath="ShowInMiddleMenu">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                  Visibility="{Binding MiddleMenuVisibility}"
+                                                  IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
+                                                  ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
+                                                  Click="OnEntryMiddleMenuClick" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
 
                 <StackPanel x:Name="EntriesActions" Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnAddClick" />
@@ -1125,8 +1135,10 @@
 
                 <!-- 搜索联想：Qbar 里「已选定搜索引擎 + 有关键词」时，在输入框下方列出候选词。
                      这张卡只管联想请求本身；关掉它不影响任何搜索路径，回车照旧搜原文。
-                     联想只走一次 HTTP，失败/超时就静默不显示，所以这里不需要“重试”按钮。 -->
-                <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                     联想只走一次 HTTP，失败/超时就静默不显示，所以这里不需要“重试”按钮。
+                     **只在「搜索指令」那一页出现**：联想是"选中搜索引擎之后打关键词"才有的事，
+                     启动程序 / 常用网址 / 固定项 三页里它一个控件都用不上，摆在那儿只会碍事。 -->
+                <Border x:Name="SuggestCard" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
                     <StackPanel>
                         <TextBlock Text="{loc:T '搜索联想'}" Style="{StaticResource Text.H3}" />
                         <TextBlock Text="{loc:T '选定搜索引擎后，边打字边列出候选词；↑↓ 选择，Enter 用当前引擎搜索。'}"

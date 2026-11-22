@@ -50,7 +50,13 @@
                 </Grid>
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <!-- 标题必须自己给前景色。
+                         夜间模式下原来是**黑字压黑底**：ListBox 的默认样式把 Foreground 设成了
+                         系统 ControlText（浅色系统主题 = 黑），而样式设置比"从窗口继承"优先，
+                         窗口上那句 Foreground 根本轮不到模板里的文字。
+                         这里写死主题画刷，白天夜间都跟着走。 -->
                     <TextBlock Text="{Binding Title}" FontSize="12"
+                               Foreground="{DynamicResource Brush.TextPrimary}"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <!-- 备注：网址显示网页标题、文件显示路径。空的时候整行折叠，行高不变。 -->
                     <TextBlock Text="{Binding Note}" FontSize="10" Margin="0,0,0,0"
@@ -68,18 +74,43 @@
             </Grid>
         </DataTemplate>
 
-        <!-- 行容器：沿用主题的 RowItem（悬停 / 选中 / 圆角），只额外挂"悬停展开二级菜单" -->
-        <!-- 行高收窄：主题的 RowItem 是给设置页列表用的，菜单要更紧凑（上下 3px 内边距、最小 28）。 -->
-        <Style x:Key="MenuRow" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
+        <!-- 行容器：和主题的 RowItem 同一套观感（圆角、悬停 Brush.Hover、选中 Brush.Selected），
+             但内边距更紧（8,2）—— 菜单是一行一行扫的，RowItem 的 10,7 太肥。
+             模板自己给、而不是只改 Padding：RowItem 模板里的 Padding 是写死的，
+             在继承它的样式上改 Padding 不会生效，行高会一直按 10,7 算。 -->
+        <Style x:Key="MenuRow" TargetType="ListBoxItem">
             <Setter Property="Padding" Value="8,2" />
+            <Setter Property="Margin" Value="0,1" />
             <Setter Property="MinHeight" Value="24" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="8,2">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Selected}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <EventSetter Event="MouseEnter" Handler="OnRowMouseEnter" />
             <EventSetter Event="MouseLeave" Handler="OnRowMouseLeave" />
         </Style>
     </Window.Resources>
 
-    <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求），288 是"标题 + 备注 + 箭头"能放下又不显宽的值。 -->
-    <Border Margin="14" Width="192"
+    <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求）。
+         v1.3.31：192 → 128，用户点名"左右宽度还是太宽，再少 1/3"。
+         192 × 2/3 = 128。宽了字放不下就靠省略号截，菜单不跟着内容变宽。
+         二级菜单（SubPopup）另给 MinWidth，不受这一条约束。 -->
+    <Border Margin="14" Width="128"
             Padding="6" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"
@@ -109,6 +140,7 @@
             -->
             <ListBox x:Name="ItemList"
                      Background="Transparent" BorderThickness="0" Padding="0"
+                     Foreground="{DynamicResource Brush.TextPrimary}"
                      Focusable="True" FocusVisualStyle="{x:Null}"
                      ItemContainerStyle="{StaticResource MenuRow}"
                      ItemTemplate="{StaticResource EntryTemplate}"
@@ -124,13 +156,17 @@
                  放在 StackPanel 里是因为 Window 只能有一个子级；Popup 本身不占布局。 -->
             <Popup x:Name="SubPopup" AllowsTransparency="True" StaysOpen="True"
                    PopupAnimation="None" Placement="Right" HorizontalOffset="2" VerticalOffset="-8">
+                <!-- Popup 是独立的一棵视觉树：Foreground 这类可继承属性**不会**从主窗口传进来，
+                     不在这里再写一遍，二级菜单在夜间模式下就是黑字压黑底。 -->
                 <Border Padding="6" CornerRadius="12" Margin="12"
+                        TextElement.Foreground="{DynamicResource Brush.TextPrimary}"
                         Background="{DynamicResource Brush.Surface}"
                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.18" Color="Black" />
                     </Border.Effect>
                     <ListBox x:Name="SubList" Background="Transparent" BorderThickness="0" Padding="0"
+                             Foreground="{DynamicResource Brush.TextPrimary}"
                              Focusable="False" FocusVisualStyle="{x:Null}"
                              ItemContainerStyle="{StaticResource RowItem}"
                              ItemTemplate="{StaticResource EntryTemplate}"

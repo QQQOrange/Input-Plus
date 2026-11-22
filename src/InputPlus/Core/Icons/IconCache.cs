@@ -171,7 +171,12 @@ public static class IconCache
     /// 异步取网站 favicon。先试站点自己的 /favicon.ico，再试常用图标服务；
     /// 结果按 host 缓存（内存 + 磁盘），失败也只请求一次，不阻塞 Qbar 的查询线程。
     /// </summary>
-    public static void LoadWebIconAsync(string? url, Action<ImageSource?> done)
+    /// <param name="force">
+    /// true = 无视"最近刚失败"的冷却，再试一次。给「固定项」这种用户亲手挑出来的短名单用：
+    /// 一次网络抖动留下的 .miss 会把图标按住 30 分钟，用户看到的就是"有时候有、有时候没有"。
+    /// 仍然走 WebPending 去重和并发闸门，不会把同一个站连打好几次。
+    /// </param>
+    public static void LoadWebIconAsync(string? url, Action<ImageSource?> done, bool force = false)
     {
         string host = HostOf(url);
         if (host.Length == 0)
@@ -195,8 +200,8 @@ public static class IconCache
             return;
         }
 
-        /* 最近刚失败过：TTL 内不再联网，也不假装有图标。 */
-        if (WebHasFreshMiss(host))
+        /* 最近刚失败过：TTL 内不再联网，也不假装有图标（force 时不给它这个面子）。 */
+        if (!force && WebHasFreshMiss(host))
         {
             done(null);
             return;

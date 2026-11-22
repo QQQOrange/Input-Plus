@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using InputPlus.Core.Icons;
 using InputPlus.Core.Qbar;
@@ -97,6 +98,20 @@ public partial class QbarSettingsView : UserControl
         UpdateLayout();
     }
 
+    /// <summary>
+    /// 渲染用：选中条目表里的第 N 行（0 起），用来拍"选中态"到底长什么样。
+    /// 选中样式是非交互的、只能靠眼睛看的东西：换个圆角/换个底色，截图是唯一证据。
+    /// </summary>
+    internal void SelectEntryForRender(int index)
+    {
+        if (EntryGrid == null) return;
+        if (index < 0 || index >= EntryGrid.Items.Count) return;
+        EntryGrid.SelectedIndex = index;
+        if (EntryGrid.SelectedItem != null)
+            EntryGrid.ScrollIntoView(EntryGrid.SelectedItem);
+        UpdateLayout();
+    }
+
     /// <summary>渲染用：把右栏滚到底，「文件搜索」那张卡在下面。</summary>
     internal void ScrollRightToEndForRender()
     {
@@ -108,8 +123,19 @@ public partial class QbarSettingsView : UserControl
     {
         _host = host;
         BuildSwatches();
+        /* 列宽拖动把手只挂一次：Initialize 会随页面切换反复调用，
+           同一个事件挂两遍会让每次拖动都排两条保存。 */
+        if (!_widthHookInstalled)
+        {
+            _widthHookInstalled = true;
+            EntryGrid.AddHandler(
+                System.Windows.Controls.Primitives.Thumb.DragCompletedEvent,
+                new System.Windows.Controls.Primitives.DragCompletedEventHandler(OnColumnGripperDragCompleted),
+                handledEventsToo: true);
+        }
         Tabs.SelectedIndex = 0;
         _tab = "search";        // 重新进设置页一律从「搜索指令」开始，别停在上次的标签
+        ApplyEntryColumnWidths();   // 用户拖过的列宽先摆回去，再灌数据
         Refresh();
     }
 
@@ -256,6 +282,18 @@ public partial class QbarSettingsView : UserControl
             .ToList();
         EntryGrid.ItemsSource = items;
         _entryItems = items;
+        /* 数据换了 → 显示顺序已经回到原始顺序，列头的排序箭头也要跟着灭掉，
+           否则箭头还指着"按备注降序"，底下却是原顺序。 */
+        ClearEntrySortArrows();
+
+        /* 搜索联想的参数卡只在「搜索指令」这一页出现：联想是"选定搜索引擎之后打关键词"
+           才有的事，其余三页（启动程序/常用网址/固定项）里它一个控件都用不上。 */
+        if (SuggestCard != null)
+            SuggestCard.Visibility = _tab == "search" ? Visibility.Visible : Visibility.Collapsed;
+
+        /* 固定项里填的是网址、备注还空着：后台把网页标题抓回来当备注。
+           和「直达链接」页填完网址自动预填备注是同一条逻辑，这里补上同样的行为。 */
+        if (_tab == "pinned") FillPinnedWebTitles(items);
         /* 「附加菜单」这一列只在"能加进附加菜单"的三页出现（固定项 / 启动程序 / 常用网址）；
          * 搜索指令那一页连列头都不该有。DataGridColumn 不是 FrameworkElement，x:Name 拿不到字段，
          * 所以按下标取（第 4 列）。 */
@@ -298,6 +336,41 @@ public partial class QbarSettingsView : UserControl
             "pinned" => Loc.T("Qbar 空面板会优先列出固定项，也可以直接搜索名称"),
             _ => "",
         };
+    }
+
+    /// <summary>
+    /// 固定项里"值是网址、备注还空着"的条目，后台补上网页标题当备注。
+    ///
+    /// 写回 QEntry.Comment 并落盘：下次进页面不用再联网，附加菜单里那一行也会显示网页名
+    /// 而不是光秃秃的关键字。WebTitleFetcher.FetchCached 自带会话缓存，
+    /// 切标签、敲过滤词来回刷不会重复请求。
+    ///
+    /// 只处理**备注为空**的：用户自己写过的备注一个字都不动。
+    /// </summary>
+    private void FillPinnedWebTitles(IReadOnlyList<EntryVm> items)
+    {
+        foreach (var vm in items.ToList())
+        {
+            var entry = vm.Entry;
+            string url = (entry.Value ?? "").Trim();
+            if (!IsWebUrl(url)) continue;
+            if (!string.IsNullOrWhiteSpace(entry.Comment)) continue;
+
+            Task.Run(() => Core.Actions.WebTitleFetcher.FetchCached(url))
+                .ContinueWith(t =>
+                {
+                    string? title = t.IsCompletedSuccessfully ? t.Result : null;
+                    if (string.IsNullOrWhiteSpace(title)) return;
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        /* 等待期间用户可能自己写了备注：那就保留他的。 */
+                        if (!string.IsNullOrWhiteSpace(entry.Comment)) return;
+                        entry.Comment = title!.Trim();
+                        vm.RaiseCommentChanged();
+                        _host?.SaveSettings();
+                    }));
+                });
+        }
     }
 
     /// <summary>把某条记录回填到右侧编辑框。</summary>
@@ -426,28 +499,51 @@ public partial class QbarSettingsView : UserControl
     }
 
     /// <summary>
-    /// 点列头排序：方向由 DataGrid 自己翻（它会给 SortDirection 赋值），
-    /// 这里只负责按该列把当前视图重排一次。排序只作用于当前过滤后的列表，不动存储顺序。
+    /// 点列头排序。两种玩法：
+    ///
+    /// · **「附加菜单」列是两态**：点一下把勾选的全排到最上面，再点一下回到原始顺序。
+    ///   这一列只有"勾了 / 没勾"两种值，翻升降序只会让人看花 ——
+    ///   用户要的就是"点一下看勾了哪些，再点一下还回去"。
+    /// · 其它列还是升序 ↔ 降序，但每次都从**原始顺序**重新排，不叠加上一次的排序结果
+    ///   （否则按备注排完再按内容排，两列相等的行会保留上一种排序的次序）。
+    ///
+    /// 排序只改显示顺序，不动设置文件里的存储顺序。
     /// </summary>
     private void OnEntryGridSorting(object sender, DataGridSortingEventArgs e)
     {
-        string path = e.Column?.SortMemberPath ?? "";
+        if (e.Column == null) return;
+        string path = e.Column.SortMemberPath ?? "";
         if (path.Length == 0) return;
         e.Handled = true;
 
-        var dir = e.Column!.SortDirection == System.ComponentModel.ListSortDirection.Ascending
+        var original = _entryItems ?? new List<EntryVm>();
+
+        if (path == "ShowInMiddleMenu")
+        {
+            /* 当前没按这列排（箭头空 / 降序）→ 置顶；已经在按它升序排 → 回原始顺序。 */
+            bool checkedFirst = e.Column.SortDirection != System.ComponentModel.ListSortDirection.Ascending;
+            ClearEntrySortArrows();
+            e.Column.SortDirection = checkedFirst
+                ? System.ComponentModel.ListSortDirection.Ascending
+                : null;
+            BindEntryView(checkedFirst
+                ? original.OrderByDescending(x => x.ShowInMiddleMenu).ToList()
+                : original);
+            return;
+        }
+
+        var dir = e.Column.SortDirection == System.ComponentModel.ListSortDirection.Ascending
             ? System.ComponentModel.ListSortDirection.Descending
             : System.ComponentModel.ListSortDirection.Ascending;
+        ClearEntrySortArrows();
         e.Column.SortDirection = dir;
 
-        if (EntryGrid.ItemsSource is not IEnumerable<EntryVm> src) return;
-        var list = src.ToList();
+        var list = original.ToList();
         Comparison<EntryVm> cmp = path switch
         {
             "Key" => (a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCultureIgnoreCase),
             "Value" => (a, b) => string.Compare(a.Value, b.Value, StringComparison.CurrentCultureIgnoreCase),
             "Comment" => (a, b) => string.Compare(a.Comment, b.Comment, StringComparison.CurrentCultureIgnoreCase),
-            "ShowInMiddleMenu" => (a, b) => a.ShowInMiddleMenu.CompareTo(b.ShowInMiddleMenu),
             _ => (a, b) => 0,
         };
         if (dir == System.ComponentModel.ListSortDirection.Descending)
@@ -456,8 +552,29 @@ public partial class QbarSettingsView : UserControl
             cmp = (a, b) => forward(b, a);
         }
         list.Sort(cmp);
-        EntryGrid.ItemsSource = list;
+        BindEntryView(list);
     }
+
+    /// <summary>
+    /// 换一份显示顺序，并保住当前选中的那一条 —— 换 ItemsSource 会把选中清掉，
+    /// 不清回来右侧编辑框会跟着跳走。
+    /// </summary>
+    private void BindEntryView(IReadOnlyList<EntryVm> items)
+    {
+        var keep = EntryGrid.SelectedItem as EntryVm;
+        _suppress = true;
+        EntryGrid.ItemsSource = items;
+        _suppress = false;
+        if (keep != null && items.Contains(keep)) EntryGrid.SelectedItem = keep;
+        else if (items.Count > 0) EntryGrid.SelectedIndex = 0;
+    }
+
+    /// <summary>四列的排序箭头一起清掉：排序是我们手写的，DataGrid 不会替我们清别的列。</summary>
+    private void ClearEntrySortArrows()
+    {
+        foreach (var col in EntryGrid.Columns) col.SortDirection = null;
+    }
+
     private void OnEntrySelected(object sender, SelectionChangedEventArgs e)
     {
         if (_suppress) return;
@@ -467,8 +584,280 @@ public partial class QbarSettingsView : UserControl
 
     // ─────────────────── 列表列头：排序与列宽 ───────────────────
 
-
+    /// <summary>当前标签过滤后的**原始顺序**。排序、置顶都从这份重算，不在排好的结果上再排。</summary>
     private List<EntryVm>? _entryItems;
+
+    /* ── 列宽记忆 ─────────────────────────────────────────────
+       用户把「备注」拖宽过一次，下次进这一页又变回原样，等于每次都在跟它对打。
+       这里把四列宽度存进设置（Qbar.EntryColumnWidths），下次进页面照原样摆回去。
+
+       两个细节：
+       · DataGrid 没有"拖完了"的事件，ColumnWidthChanged 是一像素一次，
+         所以攒到 600ms 没有新变化才落盘 —— 拖动过程里不写设置；
+       · 星号宽度（默认的「内容」列）记 0：它要跟着面板伸缩，
+         真记成像素就把它钉死了，窗口一放大右边就空一截。 */
+
+    private System.Windows.Threading.DispatcherTimer? _widthSaveTimer;
+    private bool _applyingColumnWidths;
+    private bool _widthHookInstalled;
+
+    /// <summary>
+    /// 列宽拖动结束 → 记一笔。
+    ///
+    /// 为什么挂在 Thumb.DragCompleted 上：WPF 的 DataGrid **没有** ColumnWidthChanged 事件
+    /// （那是 WinUI Toolkit 才有的），列宽变化的唯一可靠信号是"表头上的拖动把手拖完了"。
+    /// handledEventsToo=true 是必须的 —— 把手自己会把事件标成已处理，不接冒泡就永远收不到。
+    /// </summary>
+    private void OnColumnGripperDragCompleted(object sender,
+        System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+    {
+        if (_host == null || _applyingColumnWidths) return;
+        if (e.OriginalSource is not System.Windows.Controls.Primitives.Thumb thumb) return;
+        if (thumb.TemplatedParent is not System.Windows.Controls.Primitives.DataGridColumnHeader) return;
+        if (_widthSaveTimer == null)
+        {
+            _widthSaveTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(600),
+            };
+            _widthSaveTimer.Tick += (_, _) =>
+            {
+                _widthSaveTimer!.Stop();
+                PersistEntryColumnWidths();
+            };
+        }
+        _widthSaveTimer.Stop();
+        _widthSaveTimer.Start();
+    }
+
+    private void PersistEntryColumnWidths()
+    {
+        if (_host == null || EntryGrid.Columns.Count < 4) return;
+        var widths = new List<double>(4);
+        foreach (var col in EntryGrid.Columns)
+        {
+            widths.Add(col.Width.IsStar
+                ? 0
+                : Math.Round(col.ActualWidth, 1));
+        }
+        _host.Settings.Qbar.EntryColumnWidths = widths;
+        _host.SaveSettings();
+    }
+
+    /// <summary>把设置里记的列宽摆回去。0 = 保持默认（自适应列继续自适应）。</summary>
+    private void ApplyEntryColumnWidths()
+    {
+        if (EntryGrid == null || EntryGrid.Columns.Count < 4) return;
+        var saved = _host?.Settings.Qbar.EntryColumnWidths;
+        if (saved == null || saved.Count < 4) return;
+        _applyingColumnWidths = true;
+        try
+        {
+            for (int i = 0; i < 4 && i < EntryGrid.Columns.Count; i++)
+            {
+                double w = saved[i];
+                if (w <= 0) continue;
+                /* 设置文件可能被手改成 3 像素这种，夹一下 —— 夹完还拖得回来。 */
+                if (w < 40) w = 40;
+                EntryGrid.Columns[i].Width = new System.Windows.Controls.DataGridLength(w);
+            }
+        }
+        finally { _applyingColumnWidths = false; }
+    }
+
+    /* ─────────────────── 固定项：长按拖动排序 ───────────────────
+       固定项的顺序就是**附加菜单里的顺序**（MiddleMenuPolicy 按列表顺序取固定项），
+       所以在这里拖一下，中键菜单跟着变，不用再单独排一次。
+
+       起手式照抄「鼠标手势」页（GesturesView）：按住 400ms，或者按住后纵向挪过 8px，
+       就认定"要拖"而不是"要看"；松手落位。区别是这里落位后还会回弹一下。 */
+
+    private const int DragHoldMs = 400;
+    private const double DragStartDy = 8;
+
+    private System.Windows.Threading.DispatcherTimer? _dragHoldTimer;
+    private Point _dragOrigin;
+    private EntryVm? _dragVm;
+    private bool _dragActive;
+    private DragChipAdorner? _dragAdorner;
+    private int _dropIndex = -1;
+
+    /// <summary>能不能拖：只有「固定项」页、没有过滤词、也没有按列头排序时，行序 == 列表序。</summary>
+    private bool CanDragEntries =>
+        _tab == "pinned" && (FilterBox?.Text?.Trim().Length ?? 0) == 0;
+
+    private void OnEntryRowPressDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (!CanDragEntries) return;
+        var source = e.OriginalSource as DependencyObject;
+        /* 勾选框、滚动条、列头拖动把手都不是"抓这一行"：点它们照旧走原来的功能。 */
+        if (FindAncestor<System.Windows.Controls.Primitives.ButtonBase>(source) != null) return;
+        if (FindAncestor<System.Windows.Controls.Primitives.ScrollBar>(source) != null) return;
+
+        var row = ItemsControl.ContainerFromElement(EntryGrid, source) as DataGridRow;
+        if (row?.Item is not EntryVm vm) return;
+
+        _dragVm = vm;
+        _dragOrigin = e.GetPosition(EntryGrid);
+        _dragActive = false;
+        _dropIndex = EntryGrid.Items.IndexOf(vm);
+
+        if (_dragHoldTimer == null)
+        {
+            _dragHoldTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(DragHoldMs),
+            };
+            _dragHoldTimer.Tick += (_, _) =>
+            {
+                _dragHoldTimer!.Stop();
+                if (_dragVm != null && !_dragActive) StartRowDrag();
+            };
+        }
+        _dragHoldTimer.Stop();
+        _dragHoldTimer.Start();
+    }
+
+    private void OnEntryRowMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_dragVm == null) return;
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+        {
+            EndRowDrag(commit: false);
+            return;
+        }
+
+        var p = e.GetPosition(EntryGrid);
+        if (!_dragActive)
+        {
+            /* 按住就在往上/下挪 = 想拖，不用等那 400ms 到点。 */
+            if (Math.Abs(p.Y - _dragOrigin.Y) < DragStartDy) return;
+            _dragHoldTimer?.Stop();
+            StartRowDrag();
+            if (!_dragActive) return;
+        }
+
+        _dragAdorner?.MoveTo(DragChipAdorner.CursorIn(EntryGrid));
+        UpdateDropTarget(p);
+    }
+
+    private void OnEntryRowMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        => EndRowDrag(commit: true);
+
+    private void OnEntryLostCapture(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        /* 捕获丢了（切窗口、被别的控件抢走）：这次拖动作废，别落位到一半。
+           但抬手把捕获"让给表格"这一下也会冒泡到这里（行先捕获、我们再 CaptureMouse），
+           此时表格自己还握着捕获，不能当成真的丢了 —— 否则刚拎起来就被收掉。 */
+        if (EntryGrid.IsMouseCaptured) return;
+        if (_dragActive) EndRowDrag(commit: false);
+        _dragHoldTimer?.Stop();
+        _dragVm = null;
+    }
+
+    private void StartRowDrag()
+    {
+        if (_dragVm == null) return;
+        _dragActive = true;
+        EntryGrid.CaptureMouse();
+        EntryGrid.Cursor = System.Windows.Input.Cursors.SizeAll;
+        _dragAdorner = DragChipAdorner.Show(EntryGrid, _dragVm.Comment, DragChipAdorner.CursorIn(EntryGrid));
+        LiftRow(_dragVm, lifting: true);
+    }
+
+    /// <summary>按指针的纵向位置找最近的一行，作为落点。</summary>
+    private void UpdateDropTarget(Point p)
+    {
+        int best = _dropIndex;
+        double bestDist = double.MaxValue;
+        for (int i = 0; i < EntryGrid.Items.Count; i++)
+        {
+            if (EntryGrid.ItemContainerGenerator.ContainerFromIndex(i) is not DataGridRow row) continue;
+            if (!row.IsVisible) continue;
+            Point top;
+            try { top = row.TranslatePoint(new Point(0, 0), EntryGrid); }
+            catch { continue; }
+            double center = top.Y + row.ActualHeight / 2;
+            double d = Math.Abs(p.Y - center);
+            if (d < bestDist) { bestDist = d; best = i; }
+        }
+        if (best >= 0) _dropIndex = best;
+    }
+
+    private void EndRowDrag(bool commit)
+    {
+        _dragHoldTimer?.Stop();
+        bool wasActive = _dragActive;
+        var vm = _dragVm;
+        int to = _dropIndex;
+        _dragActive = false;
+        _dragVm = null;
+        if (EntryGrid.IsMouseCaptured) EntryGrid.ReleaseMouseCapture();
+        EntryGrid.Cursor = null;
+        _dragAdorner?.Remove();
+        _dragAdorner = null;
+        if (wasActive && vm != null) LiftRow(vm, lifting: false);
+        if (!wasActive || !commit || vm == null || _host == null) return;
+
+        var list = _host.Settings.Qbar.Pinned;
+        var entry = vm.Entry;
+        int from = list.IndexOf(entry);
+        if (from < 0 || to < 0 || to == from) return;
+
+        list.RemoveAt(from);
+        int insert = Math.Clamp(to, 0, list.Count);
+        if (insert > from) insert--;      // 先删后插，索引要跟着挪一格
+        list.Insert(insert, entry);
+
+        /* 固定项的顺序 = 附加菜单的顺序：存盘即可，菜单下次弹出就按新顺序。
+           面板里则把这一行"落"下去，别让它凭空跳一格。 */
+        _host.SaveSettings();
+        if (_entryItems != null)
+        {
+            var ordered = _entryItems
+                .OrderBy(x => list.IndexOf(x.Entry))
+                .ThenBy(x => _entryItems.IndexOf(x))
+                .ToList();
+            _entryItems = ordered;
+        }
+        BindEntryView(_entryItems ?? new List<EntryVm>());
+        EntryGrid.UpdateLayout();
+        SettleRow(vm);
+    }
+
+    /// <summary>拖起来的那一行抬高一点、淡一点；松手还原。140ms，够看出"拿起来了"。</summary>
+    private void LiftRow(EntryVm vm, bool lifting)
+    {
+        if (EntryGrid.ItemContainerGenerator.ContainerFromItem(vm) is not DataGridRow row) return;
+        var scale = row.RenderTransform as ScaleTransform;
+        if (scale == null)
+        {
+            scale = new ScaleTransform(1, 1);
+            row.RenderTransformOrigin = new Point(0.5, 0.5);
+            row.RenderTransform = scale;
+        }
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        double target = lifting ? 1.03 : 1.0;
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(target, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease });
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty,
+            new DoubleAnimation(target, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease });
+        row.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(lifting ? 0.72 : 1.0, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease });
+    }
+
+    /// <summary>落位：从落点上方 10px 滑进来 + 淡入，220ms 缓出。</summary>
+    private void SettleRow(EntryVm vm)
+    {
+        if (EntryGrid.ItemContainerGenerator.ContainerFromItem(vm) is not DataGridRow row) return;
+        var slide = new TranslateTransform(0, 10);
+        row.RenderTransform = slide;
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        slide.BeginAnimation(TranslateTransform.YProperty,
+            new DoubleAnimation(0, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease });
+        row.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease });
+    }
 
 
 
@@ -1165,7 +1554,9 @@ public partial class QbarSettingsView : UserControl
 
         Visibility entryUi = full ? Visibility.Collapsed : Visibility.Visible;
         EntriesFilter.Visibility = entryUi;
-        EntryGrid.Visibility = entryUi;
+        /* 收的是外面那层圆角底（EntryGridHost），不是表格本身：
+           表格背景是透明的，只藏表格会留下一个空的圆角灰块。 */
+        EntryGridHost.Visibility = entryUi;
         EntriesActions.Visibility = entryUi;
         RightScroll.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
         Grid.SetColumnSpan(EntriesCard, full ? 2 : 1);
@@ -3122,7 +3513,12 @@ public partial class QbarSettingsView : UserControl
             if (Icon == null && (entry.Value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                                  || entry.Value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
             {
-                IconCache.LoadWebIconAsync(entry.Value, image => Application.Current?.Dispatcher.BeginInvoke(() => ApplyIcon(image)));
+                /* 固定项里的网址要"一定"去拿 favicon：这一列就是用户自己挑出来的几条，
+                 * 不能让上次的失败记录（.miss，30 分钟）把它连图标一起按住 ——
+                 * 用户看到的就是"有时候有图标、有时候只有个首字"。 */
+                IconCache.LoadWebIconAsync(entry.Value,
+                    image => Application.Current?.Dispatcher.BeginInvoke(() => ApplyIcon(image)),
+                    force: pinned);
             }
         }
 
@@ -3150,6 +3546,13 @@ public partial class QbarSettingsView : UserControl
         public string Key => Entry.Key;
         public string Value => Entry.Value;
         public string Comment => Entry.DisplayName;   // 默认引擎那条的备注要跟着语言走
+
+        /// <summary>
+        /// 备注被后台补成网页标题之后，通知这一格重画。
+        /// 备注是"计算属性"（Comment 空时退回关键字），所以只能靠外面喊一声。
+        /// </summary>
+        internal void RaiseCommentChanged() => PropertyChanged?.Invoke(
+            this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Comment)));
 
         /// <summary>图标（可能为 null）。</summary>
         public System.Windows.Media.ImageSource? Icon { get; private set; }

@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 
@@ -31,6 +31,26 @@ public static class WebTitleFetcher
         // 共享实例：HttpClient 每次 new 会耗尽 socket
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(3) };
     }
+
+    /// <summary>
+    /// 带会话级缓存的取标题：同一个网址只联网一次。
+    ///
+    /// 为什么要它：设置页切标签、敲过滤词都会重建列表行，
+    /// 没有缓存的话一条固定项会在几分钟里被抓好几次。
+    /// **只缓存成功的结果** —— 抓失败下次还试，不把"这次没网"记成"这个站没标题"。
+    /// </summary>
+    public static string? FetchCached(string? url)
+    {
+        string? target = UrlUtil.Normalize(url);
+        if (target == null) return null;
+        if (TitleCache.TryGetValue(target, out string? cached)) return cached;
+        string? title = Fetch(target);
+        if (title != null) TitleCache[target] = title;
+        return title;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> TitleCache
+        = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 取网页标题。失败（网络错误、超时、非 HTML、没有 title）返回 null。
