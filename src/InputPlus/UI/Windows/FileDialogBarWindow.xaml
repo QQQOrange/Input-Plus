@@ -29,7 +29,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Margin="6,1">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Margin="6,1">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -127,7 +127,7 @@
          拖动时只 SetWindowPos 改位置（尺寸恒定），不做整窗重合成。 -->
     <Grid x:Name="OuterGrid" Margin="8">
         <Border x:Name="Panel"
-                CornerRadius="12"
+                CornerRadius="14"
                 BorderThickness="1"
                 BorderBrush="{DynamicResource Brush.OverlayBorder}"
                 Background="{DynamicResource Brush.OverlayCard}">
@@ -191,7 +191,7 @@
                              InputMethod.IsInputMethodEnabled="True" />
                     <Border x:Name="ScopeChip"
                             Grid.Column="3"
-                            CornerRadius="4"
+                            CornerRadius="8"
                             Padding="6,2"
                             Margin="8,0,0,0"
                             VerticalAlignment="Center"

@@ -135,6 +135,12 @@ public partial class QbarSettingsView : UserControl
         }
         Tabs.SelectedIndex = 0;
         _tab = "search";        // 重新进设置页一律从「搜索指令」开始，别停在上次的标签
+        /* 顶部说明卡的右边距 = 系统纵向滚动条宽度。
+           右栏是一个常驻滚动条的 ScrollViewer，卡片因此比整栏窄一条滚动条的宽度；
+           说明卡跟着让出同样的宽度，两张卡的右边缘才落在同一条竖线上（以前差 17px，
+           看着就是"上面那张比下面宽一截"）。用系统值而不是写死数字：换 DPI / 换主题都不跑偏。 */
+        if (IntroCard != null)
+            IntroCard.Margin = new Thickness(0, 0, SystemParameters.VerticalScrollBarWidth, 14);
         ApplyEntryColumnWidths();   // 用户拖过的列宽先摆回去，再灌数据
         Refresh();
     }
@@ -2866,6 +2872,7 @@ public partial class QbarSettingsView : UserControl
         o.ShowOnHotkey = FdShowOnHotkeyBox.IsChecked == true;
         o.UiaBackfill = FdUiaBox.IsChecked == true;
         o.MaxResults = (int)Math.Round(FdMaxSlider.Value);
+        o.RowLimit = (int)Math.Round(FdRowSlider.Value);
         o.BarHeight = (int)Math.Round(FdHeightSlider.Value);
         o.PollFallbackMs = (int)Math.Round(FdPollSlider.Value);
         o.FollowMetrics = FdFollowMetricsBox.IsChecked == true;
@@ -2949,7 +2956,11 @@ public partial class QbarSettingsView : UserControl
         if (_host == null) return;
         // 每次换一份 List：设置里的集合是普通 List<string>，没有变更通知。
         FdProcessList.ItemsSource = null;
-        FdProcessList.ItemsSource = _host.Settings.FileDialogBar.DisabledProcesses.ToList();
+        var processes = _host.Settings.FileDialogBar.DisabledProcesses.ToList();
+        FdProcessList.ItemsSource = processes;
+        /* 一条都没有的时候只留空态提示，别让那块圆角底色孤零零地杵在那儿。 */
+        if (FdProcessEmpty != null)
+            FdProcessEmpty.Visibility = processes.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
@@ -2996,6 +3007,7 @@ public partial class QbarSettingsView : UserControl
         FdTypeFileBox.IsChecked = !o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.FileDialog, out bool f) || f;
         FdTypeFolderBox.IsChecked = !o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.FolderDialog, out bool d) || d;
         FdTypeExplorerBox.IsChecked = o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.ExplorerWindow, out bool x) && x;
+        FdRowSlider.Value = Math.Clamp(o.RowLimit, 1, 9);
         FdMaxSlider.Value = Math.Clamp(o.MaxResults, 20, 500);
         FdHeightSlider.Value = Math.Clamp(o.BarHeight, 40, 48);
         FdPollSlider.Value = Math.Clamp(o.PollFallbackMs, 0, 2000);
@@ -3007,6 +3019,7 @@ public partial class QbarSettingsView : UserControl
     private void UpdateFileDialogLabels()
     {
         if (FdMaxValue == null) return;
+        FdRowValue.Text = Loc.F("{0} 条", (int)Math.Round(FdRowSlider.Value));
         FdMaxValue.Text = Loc.F("{0} 条", (int)Math.Round(FdMaxSlider.Value));
         FdHeightValue.Text = Loc.F("{0} px", (int)Math.Round(FdHeightSlider.Value));
         int poll = (int)Math.Round(FdPollSlider.Value);

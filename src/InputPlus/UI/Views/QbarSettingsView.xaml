@@ -15,7 +15,7 @@
         </Grid.RowDefinitions>
 
         <!-- 顶部说明 -->
-        <Border Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="16,13" Margin="0,0,0,14">
+        <Border x:Name="IntroCard" Grid.Row="0" Grid.ColumnSpan="2" Style="{StaticResource Card}" Padding="16,13" Margin="0,0,0,14">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -950,13 +950,34 @@
                                         <Button Content="{loc:T '添加'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Click="OnFileDialogAddProcess" />
                                         <Button Content="{loc:T '删除选中'}" Style="{StaticResource Button.Ghost}" Margin="4,0,0,0" Click="OnFileDialogRemoveProcess" />
                                     </StackPanel>
-                                    <ListBox x:Name="FdProcessList" Height="84" Margin="0,8,0,0" Background="Transparent" BorderThickness="0" />
+                                    <!-- 这个列表以前是「透明底 + 无边框 + 写死 84 高」：一条排除项都没有的时候，
+                                         它就是一整块空白，看着像"文本框下面空了一大片"。
+                                         现在换成和别处一样的圆角底色，没有内容时只留一行空态提示。 -->
+                                    <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8"
+                                            Padding="6,3" Margin="0,8,0,0">
+                                        <Grid>
+                                            <ListBox x:Name="FdProcessList" MinHeight="26" MaxHeight="120"
+                                                     Background="Transparent" BorderThickness="0"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                                            <TextBlock x:Name="FdProcessEmpty" Text="{loc:T '还没有排除任何程序'}"
+                                                       Style="{StaticResource Text.Tertiary}" Margin="8,4,0,0"
+                                                       VerticalAlignment="Top" IsHitTestVisible="False" />
+                                        </Grid>
+                                    </Border>
                                     <TextBlock Text="{loc:T '列在这里的程序弹对话框时不会浮出搜索栏；别的程序不受影响。'}"
                                                Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" TextWrapping="Wrap" />
 
                                     <TextBlock Text="{loc:T '回填方式'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
                                     <CheckBox x:Name="FdUiaBox" Content="{loc:T '优先用 UI Automation 写入文件名框（失败自动退回键盘 + 剪贴板）'}"
                                               Style="{StaticResource CheckBox.Text}" Click="OnFileDialogBarChanged" />
+
+                                    <!-- 一次呈现几条 = 快捷键 Ctrl+1..N 的 N。默认 6，可调 1..9。 -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
+                                        <TextBlock Text="{loc:T '一次呈现几条（Ctrl+1..N）'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FdRowValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="FdRowSlider" Minimum="1" Maximum="9" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnFileDialogBarChanged" />
 
                                     <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
                                         <TextBlock Text="{loc:T '最多显示条数'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
@@ -995,8 +1016,13 @@
             </Grid>
         </Border>
 
-        <!-- 右：编辑 + 外观 -->
-        <ScrollViewer x:Name="RightScroll" Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <!-- 右：编辑 + 外观。
+             纵向滚动条自己占 10px（见 Theme 里的 ScrollBar 宽度），右栏的卡片因此比
+             顶部那张说明卡窄 10px —— 看着就是"上面那张比下面宽一截"。
+             处理：说明卡也留出这 10px（Margin 右边距），两边右边缘就落在同一条竖线上；
+             这一栏内容永远比视口高，滚动条是常驻的，所以这个补偿不会时有时无。 -->
+        <ScrollViewer x:Name="RightScroll" Grid.Row="1" Grid.Column="1"
+                      VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <Border Style="{StaticResource Card}" Padding="18,16" Margin="0,0,0,14">
                     <StackPanel>

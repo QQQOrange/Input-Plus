@@ -12,7 +12,7 @@
         <!-- CornerRadius 只是"内容裁切"的半径；真正画圆角的是 DWM（Win11），
              构造函数里 WindowChrome.AttachTo 会设 DWMWCP_ROUND 顺带把标题栏切深色。 -->
         <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0"
-                      CornerRadius="12" UseAeroCaptionButtons="False" />
+                      CornerRadius="14" UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
     <Grid>

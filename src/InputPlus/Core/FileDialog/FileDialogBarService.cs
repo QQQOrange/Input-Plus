@@ -387,6 +387,7 @@ public sealed class FileDialogBarService : IDisposable
 
             var sw = Stopwatch.StartNew();
             var rows = _search.Search(query, Math.Max(5, Math.Min(options.MaxResults, 200)));
+            _bar.RowLimit = options.RowLimit;
             sw.Stop();
             NoteQueryTime(sw.Elapsed.TotalMilliseconds);
 

@@ -125,6 +125,20 @@ public static partial class SelfTest
                 Math.Abs(bar.Width - widthBeforeRows) <= 0.5,
                 $"{widthBeforeRows:0.#} → {bar.Width:0.#} DIP");
 
+            /* Ctrl+1..6：一次最多 6 条，行尾编号与按键必须一一对应（看到什么就按什么）。 */
+            bar.SetRows(System.Linq.Enumerable.Range(1, 10).Select(i =>
+                new InputPlus.Core.FileDialog.DialogSelection($@"C:\Temp\第{i}个.txt", false, $"第{i}个.txt"))
+                .ToList());
+            bar.UpdateLayout();
+            Check("浮层：一次最多 6 条结果", bar.ResultRowCountForTest == 6, $"{bar.ResultRowCountForTest} 条");
+            string badges = string.Join(",", bar.RowBadgesForTest);
+            Check("浮层：行尾快捷键就是 Ctrl+1..6", badges == "Ctrl+1,Ctrl+2,Ctrl+3,Ctrl+4,Ctrl+5,Ctrl+6", badges);
+            Check("浮层：Ctrl+数字解析（主键盘 / 小键盘 / 非数字）",
+                UI.Windows.FileDialogBarWindow.DigitSlotForTest(System.Windows.Input.Key.D3) == 3
+                && UI.Windows.FileDialogBarWindow.DigitSlotForTest(System.Windows.Input.Key.NumPad5) == 5
+                && UI.Windows.FileDialogBarWindow.DigitSlotForTest(System.Windows.Input.Key.A) == 0,
+                "D3→3 NumPad5→5 A→0");
+
             /* 把数字写进日志（PASS 行不带明细），交付报告直接引用这几行。 */
             double p50 = bar.LatencyP50Us, p99 = bar.LatencyP99Us;
             InputPlus.Core.CoreLog.Info($"[跟随度量] 新路径：{moves} 次移动 p50={p50:0}µs p99={p99:0}µs "

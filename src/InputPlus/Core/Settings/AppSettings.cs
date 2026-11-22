@@ -1356,6 +1356,14 @@ public sealed class FileDialogBarOptions
     /// <summary>结果上限（本地重排后展示）。</summary>
     public int MaxResults { get; set; } = 200;
 
+    /// <summary>
+    /// 浮层一次呈现几条结果（1..9，默认 6）。
+    ///
+    /// 它同时是快捷键的上限：行尾的 Ctrl+1..N 就是按位置发的，所以数字键最多到 9。
+    /// 条数再多只会把脚注和下面的地址面包屑挤掉，而且超过 9 也没有键可按。
+    /// </summary>
+    public int RowLimit { get; set; } = 6;
+
     /// <summary>浮层输入行高度（DIP）。</summary>
     public double BarHeight { get; set; } = 44;
 

@@ -87,7 +87,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="8,2">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="8,2">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -158,7 +158,7 @@
                    PopupAnimation="None" Placement="Right" HorizontalOffset="2" VerticalOffset="-8">
                 <!-- Popup 是独立的一棵视觉树：Foreground 这类可继承属性**不会**从主窗口传进来，
                      不在这里再写一遍，二级菜单在夜间模式下就是黑字压黑底。 -->
-                <Border Padding="6" CornerRadius="12" Margin="12"
+                <Border Padding="6" CornerRadius="14" Margin="12"
                         TextElement.Foreground="{DynamicResource Brush.TextPrimary}"
                         Background="{DynamicResource Brush.Surface}"
                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">

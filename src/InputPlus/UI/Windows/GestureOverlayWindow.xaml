@@ -63,7 +63,7 @@
                 Padding="24,14,24,16"
                 MinWidth="120"
                 MinHeight="52"
-                CornerRadius="16"
+                CornerRadius="14"
                 Background="#55000000"
                 BorderBrush="#FFFFFFFF"
                 BorderThickness="2"

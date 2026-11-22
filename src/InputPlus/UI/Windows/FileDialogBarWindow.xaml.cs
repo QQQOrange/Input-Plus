@@ -893,13 +893,33 @@ public partial class FileDialogBarWindow : Window
 
     // ---------------- 结果 ----------------
 
+    /// <summary>数字键最多到 9：Ctrl+1..9 是按位置对应的，条数再多也没有键可按。</summary>
+    internal const int MaxRowLimit = 9;
+
+    private int _rowLimit = 6;
+
+    /// <summary>
+    /// 一次呈现几条（1..9，设置页可调，默认 6）。
+    /// 行尾的 Ctrl+N 与 Ctrl+数字按键都以它为准 —— "看到几个号就能按几个号"。
+    /// </summary>
+    internal int RowLimit
+    {
+        get => _rowLimit;
+        set => _rowLimit = Math.Clamp(value, 1, MaxRowLimit);
+    }
+
     public void SetRows(IReadOnlyList<DialogSelection> items, string? emptyHint = null)
     {
         _rows.Clear();
-        foreach (var item in items) _rows.Add(ToRow(item));
+        int index = 0;
+        foreach (var item in items)
+        {
+            if (_rows.Count >= _rowLimit) break;
+            index++;
+            _rows.Add(ToRow(item, index));
+        }
 
-        /* 真实文件图标：只给前 60 行排队，避免一次搜索 200 个结果把 shell
-         * 图标线程打满；前几屏够用，后面的行保留通用字形。 */
+        /* 真实文件图标：最多 6 行，逐个排队即可（以前是 60 行，现在上限就是 6）。 */
         for (int i = 0; i < _rows.Count; i++) LoadIcon(_rows[i]);
 
         bool any = _rows.Count > 0;
@@ -1091,7 +1111,7 @@ public partial class FileDialogBarWindow : Window
         return list;
     }
 
-    private static BarRow ToRow(DialogSelection item)
+    private BarRow ToRow(DialogSelection item, int shortcutIndex = 0)
     {
         string dir = "";
         try
@@ -1108,7 +1128,9 @@ public partial class FileDialogBarWindow : Window
             Glyph = item.IsFolder ? "\uE8B7" : "\uE7C3",
             Title = item.DisplayName,
             Subtitle = dir,
-            Badge = item.Source,
+            /* 行尾的快捷键 = 这一行的位置：Ctrl+1 永远是第一条。
+             * 不用 DialogSelection.Source —— 那是"这条从哪来的"，不是给用户按的键。 */
+            Badge = shortcutIndex >= 1 && shortcutIndex <= _rowLimit ? "Ctrl+" + shortcutIndex : "",
         };
     }
 
@@ -1404,6 +1426,19 @@ public partial class FileDialogBarWindow : Window
         QueryChanged?.Invoke(text, Scope);
     }
 
+    /// <summary>Ctrl+数字：主键盘 D1..D9 与小键盘 NumPad1..9 都认；其它键返回 0。</summary>
+    private static int DigitSlot(Key key)
+    {
+        if (key >= Key.D1 && key <= Key.D9) return (int)key - (int)Key.D0;
+        if (key >= Key.NumPad1 && key <= Key.NumPad9) return (int)key - (int)Key.NumPad0;
+        return 0;
+    }
+
+    /* 自检用：行数与行尾编号是"看到什么就按什么"的契约，必须能直接断言。 */
+    internal int ResultRowCountForTest => _rows.Count;
+    internal IReadOnlyList<string> RowBadgesForTest => _rows.Select(r => r.Badge).ToList();
+    internal static int DigitSlotForTest(Key key) => DigitSlot(key);
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (_overlayOpen)
@@ -1418,6 +1453,25 @@ public partial class FileDialogBarWindow : Window
             e.Handled = true;
             FolderChipRequested?.Invoke();
             return;
+        }
+
+        /* Ctrl+1..6：直接提交第 N 条，和用鼠标点它一下完全等价。
+           行尾那个 Ctrl+N 徽标就是这里的编号（见 SetRows / ToRow），
+           所以"看到的号"和"按下去的号"永远是同一个。
+           没有第 N 条时不吞键，把这次按键原样留给下面的对话框。 */
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            int slot = DigitSlot(e.Key);
+            if (slot >= 1 && slot <= _rowLimit)
+            {
+                e.Handled = true;
+                if (slot <= _rows.Count)
+                {
+                    ResultList.SelectedIndex = slot - 1;
+                    CommitCurrent();
+                }
+                return;
+            }
         }
 
         switch (e.Key)
@@ -1473,8 +1527,7 @@ public partial class FileDialogBarWindow : Window
         }
     }
 
-    private void MoveSelection(int delta)
-    {
+    private void MoveSelection(int delta)    {
         if (_rows.Count == 0) return;
         int index = Math.Clamp(ResultList.SelectedIndex + delta, 0, _rows.Count - 1);
         ResultList.SelectedIndex = index;

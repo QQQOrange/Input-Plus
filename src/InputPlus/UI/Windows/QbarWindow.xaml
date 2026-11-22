@@ -19,7 +19,7 @@
              窗口留白（Margin 18）不动，面板本身的尺寸和排版跟以前完全一样。 -->
 
         <!-- 面板 -->
-        <Border x:Name="Panel" CornerRadius="18" BorderThickness="1.5"
+        <Border x:Name="Panel" CornerRadius="14" BorderThickness="1.5"
                 Background="Transparent"
                 BorderBrush="{DynamicResource Brush.OverlayBorder}">
             <Border.RenderTransform>
@@ -38,9 +38,9 @@
                 <!-- 毛玻璃底衬。BackdropFill 垫"抓到的背后屏幕 + 模糊"，TintFill 是主题色的一层薄纱；
                      两块都铺满整个面板、不吃鼠标，原来的输入行/结果列表仍在上面，层级不变。
                      没有模糊图时 BackdropFill 是空的，看起来就跟以前一样是纯色面板。 -->
-                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="16.5"
+                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12.5"
                         IsHitTestVisible="False" />
-                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="16.5"
+                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12.5"
                         IsHitTestVisible="False" Background="{DynamicResource Brush.OverlayCard}" />
 
                 <!-- 输入行：标签 + 输入框 -->

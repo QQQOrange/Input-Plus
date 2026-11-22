@@ -26,7 +26,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- 品牌卡（横跨两列，本身就是一条通栏） -->
-            <Border Grid.Row="0" Grid.ColumnSpan="2" CornerRadius="18" Padding="26,24" Margin="0,0,0,16">
+            <Border Grid.Row="0" Grid.ColumnSpan="2" CornerRadius="14" Padding="26,24" Margin="0,0,0,16">
                 <Border.Background>
                     <!-- 与引导页、帮助页同一块品牌渐变（Controls.xaml / Brush.BrandHero） -->
                     <StaticResource ResourceKey="Brush.BrandHero" />
@@ -40,7 +40,7 @@
 
                     <!-- 与侧栏、exe 用同一张应用图标。
                          图标自己的蓝底和这条蓝色横幅撞色，加一圈很淡的白边把轮廓勾出来。 -->
-                    <Border Grid.Column="0" CornerRadius="16" BorderThickness="1"
+                    <Border Grid.Column="0" CornerRadius="14" BorderThickness="1"
                             BorderBrush="{StaticResource Brush.BrandHairline}" VerticalAlignment="Center">
                         <Image Width="64" Height="64"
                                RenderOptions.BitmapScalingMode="HighQuality"

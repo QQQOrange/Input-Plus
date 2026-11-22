@@ -1543,6 +1543,7 @@ public static class SettingsStore
             s.FileDialogBar.DefaultsVersion = FileDialogBarOptions.DefaultsVersionCurrent;
         }
         s.FileDialogBar.MaxResults = Math.Clamp(s.FileDialogBar.MaxResults, 20, 500);
+        s.FileDialogBar.RowLimit = Math.Clamp(s.FileDialogBar.RowLimit, 1, 9);
         s.FileDialogBar.BarHeight = Math.Clamp(s.FileDialogBar.BarHeight, 40, 48);
         s.FileDialogBar.PollFallbackMs = Math.Clamp(s.FileDialogBar.PollFallbackMs, 0, 2000);
         s.FileDialogBar.Types ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
