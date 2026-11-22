@@ -50,10 +50,10 @@
                 </Grid>
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Title}" Style="{StaticResource Text.Body}"
+                    <TextBlock Text="{Binding Title}" FontSize="12"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     <!-- 备注：网址显示网页标题、文件显示路径。空的时候整行折叠，行高不变。 -->
-                    <TextBlock Text="{Binding Note}" FontSize="11" Margin="0,1,0,0"
+                    <TextBlock Text="{Binding Note}" FontSize="10" Margin="0,0,0,0"
                                Foreground="{DynamicResource Brush.TextTertiary}"
                                TextTrimming="CharacterEllipsis"
                                Visibility="{Binding NoteVisibility}" />
@@ -71,8 +71,8 @@
         <!-- 行容器：沿用主题的 RowItem（悬停 / 选中 / 圆角），只额外挂"悬停展开二级菜单" -->
         <!-- 行高收窄：主题的 RowItem 是给设置页列表用的，菜单要更紧凑（上下 3px 内边距、最小 28）。 -->
         <Style x:Key="MenuRow" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
-            <Setter Property="Padding" Value="10,3" />
-            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="MinHeight" Value="24" />
             <EventSetter Event="MouseEnter" Handler="OnRowMouseEnter" />
             <EventSetter Event="MouseLeave" Handler="OnRowMouseLeave" />
         </Style>

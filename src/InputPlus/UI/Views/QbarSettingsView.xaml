@@ -137,85 +137,92 @@
                      列头来自 GridView，点击列头排序（再点切换升降序），列宽拖列头分隔线即可。
                      单元格里的文字全部用主题样式（Text.Body / Text.Secondary / Text.Tertiary），
                      纵向内边距和左栏其它列表一致，不再是一副"外挂表格"的样子。 -->
-                <ListView Grid.Row="2" x:Name="EntryList" Background="Transparent" BorderThickness="0"
-                          Margin="0,10,0,0" SelectionChanged="OnEntrySelected"
-                          GridViewColumnHeader.Click="OnColumnHeaderClick"
-                          FontFamily="{StaticResource Font.Ui}"
-                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                          SizeChanged="OnEntryListSizeChanged"
-                          ItemContainerStyle="{StaticResource RowItem}">
-                    <ListView.View>
-                        <GridView AllowsColumnReorder="False">
-                            <GridViewColumn x:Name="KeyColumn" Header="{loc:T '关键字'}" Width="140">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="0,3" VerticalAlignment="Center">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <Grid Grid.Column="0" Width="20" Height="20" Margin="0,0,8,0"
-                                                  VerticalAlignment="Center">
-                                                <Border Background="{Binding LetterBrush}" CornerRadius="5"
-                                                        Visibility="{Binding NoIconVisibility}">
-                                                    <TextBlock Text="{Binding Initial}" FontSize="10" FontWeight="SemiBold"
-                                                               Foreground="White" HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" />
-                                                </Border>
-                                                <Image Source="{Binding Icon}" Stretch="Uniform"
-                                                       RenderOptions.BitmapScalingMode="HighQuality"
-                                                       Visibility="{Binding HasIconVisibility}" />
-                                            </Grid>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Key}" FontWeight="SemiBold"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource Brush.Accent}" />
-                                                <Border Background="{DynamicResource Brush.AccentSoft}" CornerRadius="4"
-                                                        Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center"
-                                                        Visibility="{Binding DefaultBadgeVisibility}">
-                                                    <TextBlock Text="{loc:T '默认'}" FontSize="10"
-                                                               Foreground="{DynamicResource Brush.Accent}" />
-                                                </Border>
-                                            </StackPanel>
+                <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这张表。
+                     用 DataGrid 而不是 ListView+GridView：列头、点击排序、列宽拖动都是原生能力，
+                     上一版 GridView 的 CellTemplate 在运行时不生效（每行显示成 EntryVm 的类名）。 -->
+                <DataGrid Grid.Row="2" x:Name="EntryGrid" Margin="0,10,0,0"
+                          Background="Transparent" BorderThickness="0" RowHeaderWidth="0"
+                          HeadersVisibility="Column" GridLinesVisibility="None"
+                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                          CanUserResizeRows="False" CanUserSortColumns="True"
+                          SelectionMode="Single" SelectionUnit="FullRow"
+                          FontFamily="{StaticResource Font.Ui}" FontSize="12"
+                          RowHeight="30" ColumnHeaderHeight="28"
+                          HorizontalScrollBarVisibility="Disabled"
+                          SelectionChanged="OnEntrySelected"
+                          Sorting="OnEntryGridSorting">
+                    <DataGrid.Resources>
+                        <!-- 表头 / 行 / 单元格全部走主题画刷，昼夜一致；行高与文字比默认更紧凑 -->
+                        <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                            <Setter Property="Background" Value="{DynamicResource Brush.SurfaceAlt}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Brush.TextTertiary}" />
+                            <Setter Property="FontSize" Value="11" />
+                            <Setter Property="FontWeight" Value="Normal" />
+                            <Setter Property="Padding" Value="8,0" />
+                            <Setter Property="BorderThickness" Value="0,0,0,1" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource Brush.Border}" />
+                        </Style>
+                        <Style TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
+                            <Setter Property="BorderThickness" Value="0" />
+                            <Setter Property="Padding" Value="8,0" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
+                        </Style>
+                        <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                    </DataGrid.Resources>
+
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="{loc:T '关键字'}" Width="72" CanUserSort="True"
+                                                SortMemberPath="Key">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Grid.Column="0" Width="16" Height="16" Margin="0,0,6,0"
+                                              VerticalAlignment="Center">
+                                            <Border Background="{Binding LetterBrush}" CornerRadius="4"
+                                                    Visibility="{Binding NoIconVisibility}">
+                                                <TextBlock Text="{Binding Initial}" FontSize="9" FontWeight="SemiBold"
+                                                           Foreground="White" HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center" />
+                                            </Border>
+                                            <Image Source="{Binding Icon}" Stretch="Uniform"
+                                                   RenderOptions.BitmapScalingMode="HighQuality"
+                                                   Visibility="{Binding HasIconVisibility}" />
                                         </Grid>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
+                                        <TextBlock Grid.Column="1" Text="{Binding Key}" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Brush.Accent}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
 
-                            <GridViewColumn x:Name="ValueColumn" Header="{loc:T '内容'}" Width="380">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Value}" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" Margin="0,3"
-                                                   Style="{StaticResource Text.Body}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
+                        <DataGridTextColumn Header="{loc:T '内容'}" Binding="{Binding Value}" Width="*"
+                                            CanUserSort="True" />
 
-                            <GridViewColumn x:Name="NoteColumn" Header="{loc:T '备注'}" Width="150">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Comment}" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" Margin="0,3"
-                                                   Style="{StaticResource Text.Tertiary}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
+                        <DataGridTextColumn Header="{loc:T '备注'}" Binding="{Binding Comment}" Width="140"
+                                            CanUserSort="True" />
 
-                            <GridViewColumn x:Name="MenuColumn" Header="{loc:T '附加菜单'}" Width="92">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox FontSize="12" VerticalAlignment="Center" Margin="0,3"
-                                                  Visibility="{Binding MiddleMenuVisibility}"
-                                                  IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
-                                                  ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
-                                                  Click="OnEntryMiddleMenuClick" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                        <DataGridTemplateColumn Header="{loc:T '附加菜单'}" Width="46"
+                                                CanUserSort="True" SortMemberPath="ShowInMiddleMenu">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox VerticalAlignment="Center" HorizontalAlignment="Center"
+                                              Visibility="{Binding MiddleMenuVisibility}"
+                                              IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
+                                              ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
+                                              Click="OnEntryMiddleMenuClick" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
 
                 <StackPanel x:Name="EntriesActions" Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
                     <Button Content="{loc:T '新增'}" Style="{StaticResource Button.Primary}" Click="OnAddClick" />

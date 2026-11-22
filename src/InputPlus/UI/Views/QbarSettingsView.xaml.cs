@@ -216,7 +216,7 @@ public partial class QbarSettingsView : UserControl
         if (_tab == "files") return;
         _editing = null;
         _suppress = true;
-        EntryList.ItemsSource = null;
+        EntryGrid.ItemsSource = null;
 
         // 过滤：按关键字 / 备注 / 内容模糊匹配，大小写不敏感。
         // 这样内置 300 多个引擎也能很快找到想要的那个。
@@ -254,10 +254,9 @@ public partial class QbarSettingsView : UserControl
             .Select(e => new EntryVm(e, _tab != "run", _tab == "pinned",
                 defaultEngineKey.Length > 0 && string.Equals(e.Key, defaultEngineKey, StringComparison.Ordinal)))
             .ToList();
-        EntryList.ItemsSource = items;
+        EntryGrid.ItemsSource = items;
         _entryItems = items;
-        ApplyEntrySort();
-        if (items.Count > 0) EntryList.SelectedIndex = 0;
+        if (items.Count > 0) EntryGrid.SelectedIndex = 0;
         _suppress = false;
         if (items.Count > 0) BindEditor(items[0].Entry);
         else ClearEditor();
@@ -367,7 +366,7 @@ public partial class QbarSettingsView : UserControl
         _editing.IconPath = dlg.FileName;
         _host.SaveSettings();
         UpdateIconPreview(_editing);
-        EntryList.Items.Refresh();
+        EntryGrid.Items.Refresh();
     }
 
     private void ClearEditor()
@@ -420,64 +419,52 @@ public partial class QbarSettingsView : UserControl
         }
     }
 
+    /// <summary>
+    /// 点列头排序：方向由 DataGrid 自己翻（它会给 SortDirection 赋值），
+    /// 这里只负责按该列把当前视图重排一次。排序只作用于当前过滤后的列表，不动存储顺序。
+    /// </summary>
+    private void OnEntryGridSorting(object sender, DataGridSortingEventArgs e)
+    {
+        string path = e.Column?.SortMemberPath ?? "";
+        if (path.Length == 0) return;
+        e.Handled = true;
+
+        var dir = e.Column!.SortDirection == System.ComponentModel.ListSortDirection.Ascending
+            ? System.ComponentModel.ListSortDirection.Descending
+            : System.ComponentModel.ListSortDirection.Ascending;
+        e.Column.SortDirection = dir;
+
+        if (EntryGrid.ItemsSource is not IEnumerable<EntryVm> src) return;
+        var list = src.ToList();
+        Comparison<EntryVm> cmp = path switch
+        {
+            "Key" => (a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCultureIgnoreCase),
+            "Value" => (a, b) => string.Compare(a.Value, b.Value, StringComparison.CurrentCultureIgnoreCase),
+            "Comment" => (a, b) => string.Compare(a.Comment, b.Comment, StringComparison.CurrentCultureIgnoreCase),
+            "ShowInMiddleMenu" => (a, b) => a.ShowInMiddleMenu.CompareTo(b.ShowInMiddleMenu),
+            _ => (a, b) => 0,
+        };
+        if (dir == System.ComponentModel.ListSortDirection.Descending)
+        {
+            var forward = cmp;
+            cmp = (a, b) => forward(b, a);
+        }
+        list.Sort(cmp);
+        EntryGrid.ItemsSource = list;
+    }
     private void OnEntrySelected(object sender, SelectionChangedEventArgs e)
     {
         if (_suppress) return;
-        if (EntryList.SelectedItem is not EntryVm vm) return;
+        if (EntryGrid.SelectedItem is not EntryVm vm) return;
         BindEditor(vm.Entry);
     }
 
     // ─────────────────── 列表列头：排序与列宽 ───────────────────
 
-    /// <summary>
-    /// 四列要在一屏里放下：关键字最窄、内容吃掉剩下的宽度（备注与附加菜单固定）。
-    /// 只在列表宽度变化时重算内容列，用户手动拖过的其它列宽保持不动。
-    /// </summary>
-    private void OnEntryListSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        double key = KeyColumn.Width;
-        double note = NoteColumn.Width;
-        double menu = MenuColumn.Width;
-        double rest = e.NewSize.Width - key - note - menu - 26;   // 26 ≈ 内边距 + 竖向滚动条
-        ValueColumn.Width = Math.Max(160, rest);
-    }
 
     private List<EntryVm>? _entryItems;
-    private int _sortColumn = -1;
-    private bool _sortAsc = true;
 
-    /// <summary>
-    /// 点列头排序，再点同列切换升降序 —— 和资源管理器一致。
-    /// 排序只作用于**当前这一屏**（已经过滤过的集合），不改设置里的存储顺序。
-    /// </summary>
-    private void OnColumnHeaderClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is not GridViewColumnHeader header) return;
-        if (EntryList.View is not GridView gv || header.Column == null) return;
-        int col = gv.Columns.IndexOf(header.Column);
-        if (col < 0) return;
 
-        if (_sortColumn == col) _sortAsc = !_sortAsc;
-        else { _sortColumn = col; _sortAsc = true; }
-        ApplyEntrySort();
-    }
-
-    private void ApplyEntrySort()
-    {
-        if (_entryItems == null || _sortColumn < 0) return;
-        var sorted = new List<EntryVm>(_entryItems);
-        Comparison<EntryVm> cmp = _sortColumn switch
-        {
-            0 => (a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCultureIgnoreCase),
-            1 => (a, b) => string.Compare(a.Value, b.Value, StringComparison.CurrentCultureIgnoreCase),
-            2 => (a, b) => string.Compare(a.Comment, b.Comment, StringComparison.CurrentCultureIgnoreCase),
-            3 => (a, b) => a.ShowInMiddleMenu.CompareTo(b.ShowInMiddleMenu),
-            _ => (a, b) => 0,
-        };
-        if (!_sortAsc) { var forward = cmp; cmp = (a, b) => forward(b, a); }
-        sorted.Sort(cmp);
-        EntryList.ItemsSource = sorted;
-    }
 
     /// <summary>取网址的 host（用来判断"是不是同一个搜索引擎"）。不是网址就返回空串。</summary>
     private static string HostOf(string? value)
@@ -681,10 +668,10 @@ public partial class QbarSettingsView : UserControl
         CurrentList().Add(entry);
         _host.SaveSettings();
         _suppress = true;
-        EntryList.ItemsSource = null;
+        EntryGrid.ItemsSource = null;
         var items = CurrentList().Select(x => new EntryVm(x, _tab != "run", _tab=="pinned")).ToList();
-        EntryList.ItemsSource = items;
-        EntryList.SelectedIndex = items.Count - 1;
+        EntryGrid.ItemsSource = items;
+        EntryGrid.SelectedIndex = items.Count - 1;
         _suppress = false;
         BindEditor(entry);
         KeyBox.Focus();
@@ -693,7 +680,7 @@ public partial class QbarSettingsView : UserControl
 
     private void OnDeleteClick(object sender, RoutedEventArgs e)
     {
-        if (_host == null || EntryList.SelectedItem is not EntryVm vm) return;
+        if (_host == null || EntryGrid.SelectedItem is not EntryVm vm) return;
         if (vm.Entry.Key == "default")
         {
             _host.Notify(Loc.T("默认搜索不能删除，只能修改"));
@@ -716,7 +703,7 @@ public partial class QbarSettingsView : UserControl
         _editing.RunAsAdmin = AdminBox.IsChecked == true;
         _host.SaveSettings();
         // 同步刷新左侧列表的显示（保持当前选择与编辑焦点）
-        EntryList.Items.Refresh();
+        EntryGrid.Items.Refresh();
         UpdateIconPreview(_editing);
 
         /* 新建网址：用户往往只粘贴链接，不想再手动写标题。
@@ -767,7 +754,7 @@ public partial class QbarSettingsView : UserControl
             CommentBox.Text = title!;
             _suppress = false;
             _host.SaveSettings();
-            EntryList.Items.Refresh();
+            EntryGrid.Items.Refresh();
         });
     }
 
@@ -1172,7 +1159,7 @@ public partial class QbarSettingsView : UserControl
 
         Visibility entryUi = full ? Visibility.Collapsed : Visibility.Visible;
         EntriesFilter.Visibility = entryUi;
-        EntryList.Visibility = entryUi;
+        EntryGrid.Visibility = entryUi;
         EntriesActions.Visibility = entryUi;
         RightScroll.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
         Grid.SetColumnSpan(EntriesCard, full ? 2 : 1);
