@@ -256,6 +256,8 @@ public partial class QbarSettingsView : UserControl
             .ToList();
         EntryGrid.ItemsSource = items;
         _entryItems = items;
+        /* 「附加菜单」这一列只对固定项有意义：搜索指令 / 启动程序 / 常用网址 连列头都不出现。 */
+        MenuColumn.Visibility = _tab == "pinned" ? Visibility.Visible : Visibility.Collapsed;
         if (items.Count > 0) EntryGrid.SelectedIndex = 0;
         _suppress = false;
         if (items.Count > 0) BindEditor(items[0].Entry);
