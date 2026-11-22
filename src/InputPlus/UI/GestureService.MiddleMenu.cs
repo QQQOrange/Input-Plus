@@ -34,6 +34,60 @@ public sealed partial class GestureService
     /// <summary>中键的虚拟键码。KeyboardHook 已经把 WM_MBUTTONDOWN/UP 折成 0x04 送进来。</summary>
     private const int MiddleVk = 0x04;
 
+    /// <summary>键盘唤出的热键 id（和手势总开关那颗错开）。</summary>
+    private const int MiddleHotkeyId = 0x4B48;
+
+    /// <summary>
+    /// 这一下按键是不是「鼠标唤出附加菜单」的键。
+    ///
+    /// v1.3.18 起可选中键 / 侧键 1 / 侧键 2（设置里多选），出厂只开中键。
+    /// 鼠标这一路**只在系统桌面**算数：别的窗口里中键是自动滚动、侧键是前进后退。
+    /// </summary>
+    private bool IsMenuButton(int vk)
+    {
+        var list = Settings().MiddleMenuMouseButtons;
+        if (list == null || list.Count == 0) return vk == MiddleVk;
+        foreach (var name in list)
+        {
+            if (Core.Gestures.GestureButtons.ToVk(name) == vk) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 「全屏程序里不接管」—— 和鼠标手势里那个开关是**同一个设置**
+    /// （<see cref="GestureOptions.DisableInFullscreen"/>），逻辑也一样：
+    /// 只有用户打开了它、且前台是真正的全屏程序才拦。附加菜单直接复用，不另立一份。
+    /// </summary>
+    private bool FullscreenBlocksMiddleMenu()
+    {
+        try
+        {
+            return Settings().GestureOptions.DisableInFullscreen && ForegroundIsFullscreen();
+        }
+        catch { return false; }
+    }
+
+    /// <summary>前台程序是不是用户在「例外程序」里加过的那几个。</summary>
+    private bool IsMiddleMenuException(string exe)
+    {
+        if (string.IsNullOrWhiteSpace(exe)) return false;
+        try
+        {
+            foreach (var raw in Settings().MiddleMenuExceptions ?? new List<string>())
+            {
+                string item = (raw ?? "").Trim();
+                if (item.Length == 0) continue;
+                if (string.Equals(item, exe, StringComparison.OrdinalIgnoreCase)) return true;
+                // 只写了 exe 名（没有路径）也认：用户从「点选窗口」加进来的常常只是名字
+                if (string.Equals(Path.GetFileName(item), Path.GetFileName(exe), StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     /// <summary>
     /// 按下时记下的"这一次中键点击"。
     ///
@@ -63,7 +117,7 @@ public sealed partial class GestureService
     /// </summary>
     internal bool MiddleMenuSwallowWhileOpen(int vk, bool down, bool injected)
     {
-        if (vk != MiddleVk || injected) return false;
+        if (injected || !IsMenuButton(vk)) return false;
         if (_middleMenu == null) return false;
 
         if (down)
@@ -80,7 +134,7 @@ public sealed partial class GestureService
     /// </summary>
     private bool MiddleMenuTryPlainDown(int vk, AppSettings settings, bool hasMiddleGesture)
     {
-        if (vk != MiddleVk) return false;
+        if (!IsMenuButton(vk)) return false;
         if (!MiddleMenuArm(vk, settings, hasMiddleGesture)) return false;
         Interlocked.Exchange(ref _swallowUpVk, vk);
         return true;
@@ -92,7 +146,7 @@ public sealed partial class GestureService
     /// </summary>
     private bool MiddleMenuArm(int vk, AppSettings settings, bool hasMiddleGesture)
     {
-        if (vk != MiddleVk) return false;
+        if (!IsMenuButton(vk)) return false;
 
         /* 先无条件清掉上一笔留下的记录：手势画成功后 Finish 不会再读它，
          * 留着的话下一笔"没成笔"会读到上一次的命中结论（在文件上弹出菜单）。
@@ -102,7 +156,8 @@ public sealed partial class GestureService
         if (settings == null || !settings.MiddleClickMenuEnabled) return false;
 
         var (px, py) = CursorPos();
-        var scope = MiddleMenuScope.ToScope(settings.MiddleClickMenuScope);
+        // 鼠标唤出只在系统桌面：资源管理器里中键/侧键有它自己的用途，不接管。
+        var scope = MiddleClickMenuScope.Desktop;
         var probe = BlankHit.AtPoint(new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)), scope);
 
         /* 范围判断用的是"命中的是哪种壳"，不是设置里的字面值：
@@ -121,7 +176,7 @@ public sealed partial class GestureService
              * 全屏要自己再判一次 —— 手势那个开关（DisableInFullscreen）出厂是关的，
              * 而"全屏不弹菜单"是这一条功能的硬要求，不能跟着它走。 */
             Taskbar: false,
-            Fullscreen: ForegroundIsFullscreen(),
+            Fullscreen: FullscreenBlocksMiddleMenu(),
             Blank: probe.IsBlank,
             HasMiddleGesture: hasMiddleGesture));
 
@@ -146,7 +201,7 @@ public sealed partial class GestureService
     /// </summary>
     private void MiddleMenuOnSwallowedUp(int vk)
     {
-        if (vk != MiddleVk) return;
+        if (!IsMenuButton(vk)) return;
 
         MiddleTap pending;
         lock (_gate)
@@ -175,10 +230,11 @@ public sealed partial class GestureService
     /// </summary>
     private bool MiddleMenuInterceptsTap(int vk, double px, double py, bool injectedStart, MiddleTap pending)
     {
-        if (vk != MiddleVk) return false;
+        if (!IsMenuButton(vk)) return false;
 
         var settings = Settings();
-        var scope = MiddleMenuScope.ToScope(settings.MiddleClickMenuScope);
+        // 鼠标唤出只在系统桌面：资源管理器里中键/侧键有它自己的用途，不接管。
+        var scope = MiddleClickMenuScope.Desktop;
         bool inScope = pending.Armed && (pending.Probe.Kind == HitKind.Desktop
             || (pending.Probe.Kind == HitKind.ExplorerItems && MiddleMenuScope.IncludesExplorer(scope)));
 
@@ -190,7 +246,7 @@ public sealed partial class GestureService
             Enabled: settings.MiddleClickMenuEnabled,
             InScope: inScope,
             Taskbar: false,
-            Fullscreen: ForegroundIsFullscreen(),
+            Fullscreen: FullscreenBlocksMiddleMenu(),
             Blank: pending.Armed && pending.Probe.IsBlank,
             HasMiddleGesture: true));
 
@@ -207,7 +263,7 @@ public sealed partial class GestureService
     /// </summary>
     private void MiddleMenuOnSilentCancel(int vk, double px, double py)
     {
-        if (vk != MiddleVk) return;
+        if (!IsMenuButton(vk)) return;
 
         MiddleTap pending;
         lock (_gate)
@@ -271,6 +327,87 @@ public sealed partial class GestureService
                 CoreLog.Error("中键菜单弹出失败", ex);
             }
         });
+    }
+
+    // ───────────────────────── 键盘唤出 ─────────────────────────
+
+    private System.Windows.Interop.HwndSource? _middleHotkeySource;
+
+    /* 已经注册过的组合键。初值故意不是空串，让首次 ApplyMiddleHotkey 一定走一遍注册。 */
+    private string _middleHotkeyApplied = "\u0001";
+
+    /// <summary>
+    /// 按设置注册 / 注销「键盘唤出」的全局热键。
+    ///
+    /// 为什么用 RegisterHotKey 而不是再装一颗键盘钩子：钩子已经由主引擎占着，
+    /// 手势服务再装一颗会重复收键；热键不抢输入、也不要管理员权限。
+    /// 组合键解析失败或被人占用时只记日志 —— 附加菜单还有鼠标那一路能用。
+    /// </summary>
+    internal void ApplyMiddleHotkey()
+    {
+        string combo = (Settings().MiddleMenuHotkey ?? "").Trim();
+        if (string.Equals(combo, _middleHotkeyApplied, StringComparison.Ordinal)) return;
+
+        if (_middleHotkeySource == null)
+        {
+            var p = new System.Windows.Interop.HwndSourceParameters("InputPlusAttachMenuHotkey")
+            {
+                Width = 0,
+                Height = 0,
+                WindowStyle = 0,
+            };
+            _middleHotkeySource = new System.Windows.Interop.HwndSource(p);
+            _middleHotkeySource.AddHook(MiddleHotkeyWndProc);
+        }
+
+        UnregisterHotKey(_middleHotkeySource.Handle, MiddleHotkeyId);
+        _middleHotkeyApplied = combo;
+        if (combo.Length == 0) return;
+
+        var parsed = HotkeyCombo.Parse(combo);
+        if (parsed == null)
+        {
+            CoreLog.Warn("[附加菜单] 键盘唤出组合键解析失败：" + combo);
+            return;
+        }
+        if (!RegisterHotKey(_middleHotkeySource.Handle, MiddleHotkeyId, parsed.Value.Mods, (uint)parsed.Value.Vk))
+            CoreLog.Warn("[附加菜单] 键盘唤出注册失败（组合键被别的程序占了？）：" + combo);
+    }
+
+    /// <summary>退出时把热键与隐藏窗口一起卸掉，不留孤儿注册。</summary>
+    internal void ReleaseMiddleHotkey()
+    {
+        try
+        {
+            if (_middleHotkeySource == null) return;
+            UnregisterHotKey(_middleHotkeySource.Handle, MiddleHotkeyId);
+            _middleHotkeySource.Dispose();
+            _middleHotkeySource = null;
+            _middleHotkeyApplied = "\u0001";
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "附加菜单：卸热键"); }
+    }
+
+    private IntPtr MiddleHotkeyWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_HOTKEY || wParam.ToInt32() != MiddleHotkeyId) return IntPtr.Zero;
+        handled = true;
+        try { MiddleMenuOpenFromKeyboard(); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "附加菜单：键盘唤出"); }
+        return IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// 键盘唤出：**所有场景**都能弹（不受"只在桌面"限制），但全屏程序与例外程序除外。
+    /// 位置仍然是鼠标处 —— 由 <c>PlaceAtCursor</c> 统一决定。
+    /// </summary>
+    private void MiddleMenuOpenFromKeyboard()
+    {
+        var s = Settings();
+        if (!s.MiddleClickMenuEnabled) return;
+        if (FullscreenBlocksMiddleMenu()) return;
+        if (IsMiddleMenuException(ForegroundExe())) return;
+        MiddleMenuOpen(s);
     }
 
     // ── 历史记录（= 搜索前建议）与网址标题 ─────────────────────────

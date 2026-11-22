@@ -117,8 +117,10 @@ public static partial class SelfTest
         catch (Exception ex) { oldOk = false; Check("老配置：反序列化不抛", false, ex.Message); }
         if (oldOk && old != null)
         {
-            Check("老配置：中键菜单默认关闭", !old.MiddleClickMenuEnabled);
+            Check("老配置：附加菜单默认开启（用户要求桌面上中键就能唤出）", old.MiddleClickMenuEnabled);
             CheckEqual("老配置：菜单 id 默认空", old.MiddleClickMenuId, "");
+            CheckEqual("老配置：鼠标唤出默认只有中键",
+                string.Join(",", old.MiddleMenuMouseButtons ?? new List<string>()), "middle");
             CheckEqual("老配置：范围默认桌面+资源管理器",
                 MiddleMenuScope.ToScope(old.MiddleClickMenuScope), MiddleClickMenuScope.DesktopAndExplorer);
 

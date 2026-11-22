@@ -200,6 +200,10 @@ public sealed partial class GestureService : IDisposable
     public GestureService(AppHost host)
     {
         _host = host;
+        /* 附加菜单的键盘唤出：设置一变就重注册（用户改完组合键立刻生效），
+         * 启动时先按当前设置注册一次。 */
+        _host.SettingsChanged += ApplyMiddleHotkey;
+        ApplyMiddleHotkey();
     }
 
     /// <summary>是否正在等用户画一笔（设置页的「录制」按钮）。</summary>
@@ -320,6 +324,8 @@ public sealed partial class GestureService : IDisposable
 
     public void Dispose()
     {
+        try { _host.SettingsChanged -= ApplyMiddleHotkey; } catch { }
+        ReleaseMiddleHotkey();
         try
         {
             if (_gestureHook != null)
@@ -663,7 +669,7 @@ public sealed partial class GestureService : IDisposable
             /* 路径 B：中键真要开始一笔手势了。趁按下这一刻把"空白命中"算好记下来 ——
              * 松手时才知道这一笔算不算"没成笔"，而那时不能再等跨进程查询（用户要求点了就出来）。
              * 放在 lock 外面：命中判定最长可能等 UIA 90ms，不能抱着 _gate 等。 */
-            if (vk == MiddleVk) MiddleMenuArm(vk, settings, hasMiddleGesture: true);
+            MiddleMenuArm(vk, settings, hasMiddleGesture: true);
 
             lock (_gate)
             {

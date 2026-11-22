@@ -1540,7 +1540,26 @@ public sealed class AppSettings
     ///   ② 菜单内容是"收藏 / 最近 / 自定义命令"，新装用户点开是一片空，先给开关更诚实；
     ///   ③ 关着的时候行为与升级前**完全一致**，老配置读进来不需要任何迁移。
     /// </summary>
-    public bool MiddleClickMenuEnabled { get; set; }
+    public bool MiddleClickMenuEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 鼠标唤出用的键：middle / x1 / x2（可多选，出厂只开中键）。
+    /// 鼠标这一路**只在系统桌面**生效 —— 别的窗口里中键/侧键各有用途（浏览器自动滚动、
+    /// 资源管理器前进后退），接管了就是抢键。
+    /// </summary>
+    public List<string> MiddleMenuMouseButtons { get; set; } = new() { "middle" };
+
+    /// <summary>
+    /// 键盘唤出的组合键（例如 <c>ctrl+alt+d</c>）。空 = 不注册。
+    /// 键盘这一路在**所有场景**都能唤出（全屏程序与例外程序除外），位置仍在鼠标处。
+    /// </summary>
+    public string MiddleMenuHotkey { get; set; } = "";
+
+    /// <summary>
+    /// 例外程序：这些 exe 里连键盘唤出都不弹（存全路径，比较时也允许只比文件名）。
+    /// 用「选择程序 / 点选窗口」两个选择器加进来，和本程序其它地方的口径一致。
+    /// </summary>
+    public List<string> MiddleMenuExceptions { get; set; } = new();
 
     /// <summary>
     /// 中键菜单用哪一份：空 = 内置动态菜单（收藏文件夹 / 最近打开 / 自定义命令 / 打开设置，

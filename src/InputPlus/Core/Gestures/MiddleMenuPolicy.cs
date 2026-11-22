@@ -131,7 +131,7 @@ internal static class MiddleMenuPolicy
         var def = new GestureMenuDef
         {
             Id = "middle.runtime",
-            Name = Loc.T("中键菜单"),
+            Name = Loc.T("附加菜单"),
             /* 不写 Hint：菜单顶上那行小字就是"介绍"，用户要求菜单上不出现它。 */
             Hint = "",
         };

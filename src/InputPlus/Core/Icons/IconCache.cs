@@ -77,6 +77,17 @@ public static class IconCache
                 return imageSource3;
             }
         }
+
+        /* 固定项里的**文件 / 文件夹**：走资源管理器那套 shell 图标（SHGetFileInfo），
+         * 和双击打开时看到的是同一张图。少了这一步，Qbar 面板里一个固定文件夹只会
+         * 显示首字母色块 —— 用户要的是"和资源管理器一致"。
+         * 放在可执行文件之后：exe 有自己更精确的图标提取路径。 */
+        string? fs = ShellIcons.ResolveFilesystemPath(entry.Value);
+        if (fs != null)
+        {
+            ImageSource? shellIcon = FromFile(fs);
+            if (shellIcon != null) return shellIcon;
+        }
         return null;
     }
 
