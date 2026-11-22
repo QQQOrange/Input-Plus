@@ -46,7 +46,8 @@ public sealed partial class GestureService
     private bool IsMenuButton(int vk)
     {
         var list = Settings().MiddleMenuMouseButtons;
-        if (list == null || list.Count == 0) return vk == MiddleVk;
+        /* 一个都没勾 = 鼠标这一路关掉（不是"默认中键"）：用户把它全部取消，就是不想被鼠标唤出。 */
+        if (list == null || list.Count == 0) return false;
         foreach (var name in list)
         {
             if (Core.Gestures.GestureButtons.ToVk(name) == vk) return true;

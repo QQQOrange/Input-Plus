@@ -195,73 +195,145 @@
                 </StackPanel>
 
                 <!-- 中键菜单：三个开关 + 一句说明（说明只在设置页里出现，菜单本身不显示任何介绍）。 -->
+                <!-- 附加菜单：一整页。鼠标唤出只认中键/侧键且只在桌面；键盘唤出所有场景可用；
+                     例外程序用「选择程序 / 点选窗口」加；全屏不接管直接复用鼠标手势那个开关。
+                     版式紧凑：每组一行，行距 6，说明用 11px 三级字。 -->
                 <Grid x:Name="MiddleMenuPanel" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel Margin="0,4,10,10">
-                            <Border Style="{StaticResource Card}" Padding="18,16">
-                                <StackPanel>
-                                    <TextBlock Text="{loc:T '中键菜单'}" Style="{StaticResource Text.H2}" Margin="0,0,0,4" />
-                                    <TextBlock Text="{loc:T '在桌面或资源管理器文件夹的空白处单击中键，弹出一个可点的小菜单。内容是：勾了「中键」的固定项、历史记录（= 搜索前建议）、勾了「中键」的命令，最后是打开设置。点在图标、文件或别的程序上不会弹。'}"
-                                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
+                        <StackPanel Margin="0,2,10,10">
 
-                                    <Grid Margin="0,18,0,0">
+                            <Border Style="{StaticResource Card}" Padding="16,14">
+                                <StackPanel>
+                                    <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                                            <TextBlock Text="{loc:T '启用中键菜单'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '出厂是关的：中键在浏览器里是自动滚动、在资源管理器里能开新标签，默认接管等于改掉一颗常用的键。'}"
-                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                            <TextBlock Text="{loc:T '启用附加菜单'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '在桌面空白处按下面勾选的鼠标键即可唤出；键盘组合键在任何程序里都能唤出。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
                                         <CheckBox Grid.Column="1" x:Name="MiddleMenuEnabledBox" Style="{StaticResource ToggleSwitch}"
                                                   VerticalAlignment="Center" Click="OnMiddleMenuToggleChanged" />
                                     </Grid>
 
-                                    <Border Style="{StaticResource Divider}" Margin="0,14,0,0" />
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
 
-                                    <Grid Margin="0,14,0,0">
+                                    <!-- 鼠标唤出 -->
+                                    <StackPanel Margin="0,8,0,0">
+                                        <TextBlock Text="{loc:T '鼠标唤出'}" Style="{StaticResource Text.Body}" />
+                                        <TextBlock Text="{loc:T '只在系统桌面空白处生效；别的窗口里这几颗键各有用途，不接管。'}"
+                                                   Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        <WrapPanel Margin="0,6,0,0">
+                                            <CheckBox x:Name="MouseMiddleBox" Content="{loc:T '中键'}" Margin="0,0,16,0"
+                                                      Click="OnMouseButtonChanged" />
+                                            <CheckBox x:Name="MouseX1Box" Content="{loc:T '侧键 1'}" Margin="0,0,16,0"
+                                                      Click="OnMouseButtonChanged" />
+                                            <CheckBox x:Name="MouseX2Box" Content="{loc:T '侧键 2'}"
+                                                      Click="OnMouseButtonChanged" />
+                                        </WrapPanel>
+                                    </StackPanel>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
+
+                                    <!-- 键盘唤出 -->
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '键盘唤出'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '任何程序里都能唤出（全屏程序与例外程序除外），弹出位置仍在鼠标处。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBox x:Name="MiddleHotkeyBox" Style="{StaticResource TextBox.Base}" Width="112"
+                                                     MinHeight="28" Padding="8,2" IsReadOnly="True" VerticalContentAlignment="Center" />
+                                            <Button Content="{loc:T '录制'}" Style="{StaticResource Button.Ghost}"
+                                                    Margin="4,0,0,0" Padding="8,2" Click="OnCaptureAttachHotkey" />
+                                            <Button Content="{loc:T '清除'}" Style="{StaticResource Button.Ghost}"
+                                                    Margin="2,0,0,0" Padding="8,2" Click="OnClearAttachHotkey" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
+
+                                    <!-- 例外程序 -->
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '例外程序'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '这些程序里连键盘唤出也不弹（鼠标那一路本来只在桌面）。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                                            <Button Content="{loc:T '选择程序'}" Style="{StaticResource Button.Ghost}"
+                                                    Padding="8,2" Click="OnAddExceptionFile" />
+                                            <Button Content="{loc:T '点选窗口'}" Style="{StaticResource Button.Ghost}"
+                                                    Margin="4,0,0,0" Padding="8,2" Click="OnAddExceptionWindow" />
+                                            <Button Content="{loc:T '删除'}" Style="{StaticResource Button.Ghost}"
+                                                    Margin="4,0,0,0" Padding="8,2" Click="OnRemoveException" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <ListBox x:Name="ExceptionList" Background="{DynamicResource Brush.SurfaceAlt}"
+                                             BorderThickness="0" Margin="0,6,0,0"
+                                             MaxHeight="108" Padding="4"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" Style="{StaticResource Text.Body}"
+                                                               TextTrimming="CharacterEllipsis" Margin="0,0,8,0" />
+                                                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Text.Tertiary}"
+                                                               FontSize="11" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
+
+                                    <!-- 全屏 + 用哪份菜单 -->
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '全屏程序里不接管'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '和「鼠标手势 → 手势设置」里那一条是同一个开关：真全屏（游戏 / 播放器 / F11）时不弹。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <CheckBox Grid.Column="1" x:Name="AttachFullscreenBox" Style="{StaticResource ToggleSwitch}"
+                                                  VerticalAlignment="Center" Click="OnAttachFullscreenChanged" />
+                                    </Grid>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
+
+                                    <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,16,0">
                                             <TextBlock Text="{loc:T '弹出哪个菜单'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '「内置」= 上面那句说的结构，每次现拼；也可以直接用「菜单管理」里配好的那一份。'}"
-                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                            <TextBlock Text="{loc:T '「内置」= 固定项 + 历史记录 + 命令 + 设置，每次现拼。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
                                         <ComboBox Grid.Column="1" x:Name="MiddleMenuPickBox" Style="{StaticResource ComboBox.Base}"
-                                                  MinWidth="220" VerticalAlignment="Center"
+                                                  MinWidth="200" VerticalAlignment="Center"
                                                   SelectionChanged="OnMiddleMenuPicked" />
-                                    </Grid>
-
-                                    <Border Style="{StaticResource Divider}" Margin="0,14,0,0" />
-
-                                    <Grid Margin="0,14,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                                            <TextBlock Text="{loc:T '生效范围'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '只在桌面，还是桌面 + 资源管理器文件夹窗口。别的程序里中键永远不被接管。'}"
-                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <RadioButton x:Name="MiddleMenuScopeDesktopRadio" GroupName="MiddleMenuScope"
-                                                         Content="{loc:T '仅桌面'}"
-                                                         Checked="OnMiddleMenuScopeChanged" />
-                                            <RadioButton x:Name="MiddleMenuScopeAllRadio" GroupName="MiddleMenuScope" Margin="0,6,0,0"
-                                                         Content="{loc:T '桌面 + 资源管理器'}"
-                                                         Checked="OnMiddleMenuScopeChanged" />
-                                        </StackPanel>
                                     </Grid>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
-
                 <!-- 文件搜：Qbar 文件搜索的全部设置都在这一页。
                      为什么单独一页：过滤器和优先级规则是「列表 + 逐条编辑」型数据，
                      360px 的右栏连一张扩展名表都塞不下一行；而且它们改的是「搜什么、怎么排」，

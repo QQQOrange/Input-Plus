@@ -217,7 +217,10 @@
              而左侧栏是纯色 #FBFCFE —— 一条 1px 竖线两边两套底，看着像两块 UI 拼起来的
              （用户原话「顶部那一栏颜色和整体 UI 不一致，很割裂」）。
              现在右侧整块（含标题栏）共用 WindowGradient，圆角与描边统一收在 ContentCard 上。 -->
-        <Border Grid.Column="1" x:Name="ContentCard" Margin="8" CornerRadius="16"
+        <!-- 圆角与窗口外框对齐：Win11 由 DWM 把窗口四角裁成 8（100% 下），
+             内层卡片原来用 16，两条弧线在右上/右下各走各的 —— 看起来就是"两层圆角"。
+             现在统一成 8：卡片离边 8px，弧线曲率与外框一致，缝里只有侧栏底色，不再多出一个弧。 -->
+        <Border Grid.Column="1" x:Name="ContentCard" Margin="8" CornerRadius="8"
                 Background="{DynamicResource Brush.WindowGradient}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
         <Grid>

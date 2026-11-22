@@ -397,13 +397,13 @@ public partial class QbarSettingsView : UserControl
         BindEditor(vm.Entry);
     }
 
-    // ─────────────────── 中键菜单（v1.3.17） ───────────────────
+    // ─────────────────── 附加菜单（v1.3.18） ───────────────────
 
     /// <summary>
-    /// 把中键菜单那三个控件灌成当前配置。只读配置，不触发保存。
+    /// 把附加菜单那一页的控件灌成当前配置。只读配置，不触发保存。
     ///
-    /// 这一页原来在「鼠标手势 → 手势设置」里，用户要求搬到 Qbar 面板 ——
-    /// 中键菜单的内容（固定项 / 建议 / 命令）本来就全在 Qbar 里配，放一起才找得到。
+    /// 这一页原来在「鼠标手势 → 手势设置」里，v1.3.17 搬到 Qbar 面板；
+    /// v1.3.18 起内容也从"三个开关"扩成"鼠标唤出 / 键盘唤出 / 例外程序 / 全屏"。
     /// </summary>
     private void SyncMiddleMenu()
     {
@@ -414,7 +414,21 @@ public partial class QbarSettingsView : UserControl
         {
             MiddleMenuEnabledBox.IsChecked = s.MiddleClickMenuEnabled;
 
-            /* 下拉每次重建：菜单管理里加了/删了菜单，回到这一页就该看到最新的。 */
+            /* 鼠标键：设置里存的是 middle / x1 / x2，界面上是三个勾选框。
+             * 一个都不勾 = 鼠标这一路关掉（代码里空列表就是"没有触发键"）。 */
+            var buttons = s.MiddleMenuMouseButtons ?? new List<string>();
+            MouseMiddleBox.IsChecked = buttons.Any(b => string.Equals(b, "middle", StringComparison.OrdinalIgnoreCase));
+            MouseX1Box.IsChecked = buttons.Any(b => string.Equals(b, "x1", StringComparison.OrdinalIgnoreCase));
+            MouseX2Box.IsChecked = buttons.Any(b => string.Equals(b, "x2", StringComparison.OrdinalIgnoreCase));
+
+            string hotkey = (s.MiddleMenuHotkey ?? "").Trim();
+            MiddleHotkeyBox.Text = hotkey.Length > 0 ? hotkey : Loc.T("未设置");
+            if (TryFindResource(hotkey.Length > 0 ? "Brush.TextPrimary" : "Brush.TextTertiary") is Brush hb)
+                MiddleHotkeyBox.Foreground = hb;
+
+            /* 全屏开关和手势页共用一个字段：这里改，手势页那边立刻是同一个值。 */
+            AttachFullscreenBox.IsChecked = s.GestureOptions.DisableInFullscreen;
+
             MiddleMenuPickBox.Items.Clear();
             MiddleMenuPickBox.Items.Add(new ComboBoxItem { Content = Loc.T("内置（固定项 / 历史记录 / 命令 / 设置）"), Tag = "" });
             foreach (var menu in s.GestureMenus)
@@ -430,20 +444,23 @@ public partial class QbarSettingsView : UserControl
             }
             MiddleMenuPickBox.SelectedIndex = index;
 
-            var scope = MiddleMenuScope.ToScope(s.MiddleClickMenuScope);
-            MiddleMenuScopeDesktopRadio.IsChecked = scope == MiddleClickMenuScope.Desktop;
-            MiddleMenuScopeAllRadio.IsChecked = scope == MiddleClickMenuScope.DesktopAndExplorer;
+            RefreshExceptionList();
             UpdateMiddleMenuAvailability();
         }
         finally { _suppress = false; }
     }
 
+    /// <summary>总开关关着时，下面几组都变灰 —— 免得用户以为"勾了却没反应"。</summary>
     private void UpdateMiddleMenuAvailability()
     {
         bool on = MiddleMenuEnabledBox.IsChecked == true;
+        MouseMiddleBox.IsEnabled = on;
+        MouseX1Box.IsEnabled = on;
+        MouseX2Box.IsEnabled = on;
+        MiddleHotkeyBox.IsEnabled = on;
+        AttachFullscreenBox.IsEnabled = on;
         MiddleMenuPickBox.IsEnabled = on;
-        MiddleMenuScopeDesktopRadio.IsEnabled = on;
-        MiddleMenuScopeAllRadio.IsEnabled = on;
+        ExceptionList.IsEnabled = on;
     }
 
     private void OnMiddleMenuToggleChanged(object sender, RoutedEventArgs e)
@@ -451,6 +468,18 @@ public partial class QbarSettingsView : UserControl
         if (_suppress || _host == null) return;
         _host.Settings.MiddleClickMenuEnabled = MiddleMenuEnabledBox.IsChecked == true;
         UpdateMiddleMenuAvailability();
+        _host.SaveSettings();
+    }
+
+    /// <summary>中键 / 侧键 1 / 侧键 2 三个勾选框共用：整表重建再落盘。</summary>
+    private void OnMouseButtonChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        var buttons = new List<string>();
+        if (MouseMiddleBox.IsChecked == true) buttons.Add("middle");
+        if (MouseX1Box.IsChecked == true) buttons.Add("x1");
+        if (MouseX2Box.IsChecked == true) buttons.Add("x2");
+        _host.Settings.MiddleMenuMouseButtons = buttons;
         _host.SaveSettings();
     }
 
@@ -462,16 +491,107 @@ public partial class QbarSettingsView : UserControl
         _host.SaveSettings();
     }
 
-    private void OnMiddleMenuScopeChanged(object sender, RoutedEventArgs e)
+    /// <summary>键盘唤出：录制一个组合键（和手势总开关那颗用同一个捕获窗）。</summary>
+    private void OnCaptureAttachHotkey(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        KeyCaptureWindow.Capture(result =>
+        {
+            if (string.IsNullOrWhiteSpace(result.Combo)) return;
+            _host.Settings.MiddleMenuHotkey = result.Combo;
+            _host.SaveSettings();                 // 触发 SettingsChanged → 重新注册热键
+            MiddleHotkeyBox.Text = result.Combo;
+            if (TryFindResource("Brush.TextPrimary") is Brush brush) MiddleHotkeyBox.Foreground = brush;
+            _host.Notify(Loc.F("附加菜单唤出键已设为 {0}", result.Combo));
+        }, title: Loc.T("按下附加菜单的唤出组合键"));
+    }
+
+    private void OnClearAttachHotkey(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        _host.Settings.MiddleMenuHotkey = "";
+        _host.SaveSettings();
+        MiddleHotkeyBox.Text = Loc.T("未设置");
+        if (TryFindResource("Brush.TextTertiary") is Brush brush) MiddleHotkeyBox.Foreground = brush;
+    }
+
+    /// <summary>全屏不接管：直接写手势那一份设置，两处永远同一个值。</summary>
+    private void OnAttachFullscreenChanged(object sender, RoutedEventArgs e)
     {
         if (_suppress || _host == null) return;
-        _host.Settings.MiddleClickMenuScope = MiddleMenuScope.ToStorage(
-            MiddleMenuScopeDesktopRadio.IsChecked == true
-                ? MiddleClickMenuScope.Desktop
-                : MiddleClickMenuScope.DesktopAndExplorer);
+        _host.Settings.GestureOptions.DisableInFullscreen = AttachFullscreenBox.IsChecked == true;
         _host.SaveSettings();
     }
 
+    private void OnAddExceptionFile(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Loc.T("选择要加入例外的程序"),
+            Filter = "程序 (*.exe)|*.exe|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog() != true) return;
+        AddException(dlg.FileName);
+    }
+
+    /// <summary>「点选窗口」：用仓库现成的窗口选择器，选完按进程号反查 exe 路径。</summary>
+    private void OnAddExceptionWindow(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var picker = new InputPlus.UI.Windows.WindowPickerWindow();
+        var owner = Window.GetWindow(this);
+        if (owner != null) picker.Owner = owner;
+        picker.ShowDialog();
+        nint hwnd = picker.PickedWindow;
+        if (hwnd == 0) return;
+
+        InputPlus.Core.Windows.WindowService.GetWindowThreadProcessIdForTest(hwnd, out uint pid);
+        string path = pid == 0 ? "" : InputPlus.Core.Windows.WindowService.GetProcessPath(pid);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _host.Notify(Loc.T("读不到这个窗口对应的程序路径"));
+            return;
+        }
+        AddException(path);
+    }
+
+    private void AddException(string path)
+    {
+        if (_host == null || string.IsNullOrWhiteSpace(path)) return;
+        var list = _host.Settings.MiddleMenuExceptions ??= new List<string>();
+        if (!list.Any(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase)))
+            list.Add(path);
+        _host.SaveSettings();
+        RefreshExceptionList();
+    }
+
+    private void OnRemoveException(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || ExceptionList.SelectedItem is not AttachExceptionRow row) return;
+        _host.Settings.MiddleMenuExceptions?.RemoveAll(x =>
+            string.Equals(x, row.FullPath, StringComparison.OrdinalIgnoreCase));
+        _host.SaveSettings();
+        RefreshExceptionList();
+    }
+
+    private void RefreshExceptionList()
+    {
+        if (_host == null) return;
+        var rows = new List<AttachExceptionRow>();
+        foreach (var path in _host.Settings.MiddleMenuExceptions ?? new List<string>())
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            rows.Add(new AttachExceptionRow
+            {
+                FullPath = path,
+                Name = System.IO.Path.GetFileName(path),
+                Detail = path,
+            });
+        }
+        ExceptionList.ItemsSource = rows;
+    }
     /// <summary>固定项行尾那个「中键」勾选框：改的是条目自己的 ShowInMiddleMenu。</summary>
     private void OnEntryMiddleMenuClick(object sender, RoutedEventArgs e)
     {
@@ -2990,4 +3110,11 @@ public partial class QbarSettingsView : UserControl
             }
         }
     }
+}
+/// <summary>例外程序列表里的一行。单独一个公开属性类型是给 WPF 绑定用的（匿名类型绑不上）。</summary>
+public sealed class AttachExceptionRow
+{
+    public string FullPath { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Detail { get; set; } = "";
 }
