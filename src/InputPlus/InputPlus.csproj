@@ -25,9 +25,9 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.3.2</Version>
-    <FileVersion>1.3.2.0</FileVersion>
-    <AssemblyVersion>1.3.2.0</AssemblyVersion>
+    <Version>1.3.16</Version>
+    <FileVersion>1.3.16.0</FileVersion>
+    <AssemblyVersion>1.3.16.0</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -101,6 +101,10 @@
     <!-- 内置引擎图标（由 QuickSearch 的图标库转换而来，见 tools/qs_gen.py）。
          以 Resource 形式打包进程序，运行时不依赖磁盘或网络。 -->
     <Resource Include="Assets\engine-icons\*.png" />
+    <!-- 拖动 Qbar 面板用的鼠标指针：张开手（可拖）/ 握拳（正在拖）。
+         用 Resource 而不是系统 Cursors.Hand —— Windows 没有内置的"抓手"指针，
+         只有指向用的 Link 手形；抓取手势得自己画。 -->
+    <Resource Include="Assets\cursors\*.cur" />
     <!-- 内置手势库（1.0 起）：一套调好的 59 条鼠标手势，新装即用。
          用 EmbeddedResource 而不是 content 文件 —— 单文件发布后磁盘上没有这个
          文件，只有嵌进程序集才读得到。LogicalName 写死，避免 RID 构建时

@@ -93,6 +93,39 @@ public static partial class SelfTest
         var exact = Core.Windows.ScreenPlacement.ComputePoint(
             Core.Windows.ScreenPlacement.Anchor.BottomRight, work, 1920, 1040, 0, 0);
         CheckEqual("刚好占满：落在工作区原点", (exact.X, exact.Y), (0, 0));
+
+        /* ⑤ Qbar 拖动定位：比例说的是窗口**左上角**落在工作区的百分之几，
+         *    分母是工作区本身（不是工作区减窗口）。Qbar 是 SizeToContent 的，
+         *    每次唤出高度都不同；用"可用空间"当分母的话，同一比例配不同高度会
+         *    算出不同的纵坐标，用户拖到哪下次就偏了。越界仍然夹回工作区内。 */
+        var atOrigin = Core.Windows.ScreenPlacement.ComputeFractionXY(work, 760, 400, 0.0, 0.0);
+        CheckEqual("比例 0/0：贴工作区左上角", (atOrigin.X, atOrigin.Y), (0, 0));
+
+        var atEnd = Core.Windows.ScreenPlacement.ComputeFractionXY(work, 760, 400, 1.0, 1.0);
+        CheckEqual("比例 1/1：贴右下角但不出屏", (atEnd.X, atEnd.Y), (1920 - 760, 1040 - 400));
+
+        var atCenter = Core.Windows.ScreenPlacement.ComputeFractionXY(work, 760, 400, 0.5, 0.5);
+        CheckEqual("比例 0.5/0.5：工作区正中（左上角）", (atCenter.X, atCenter.Y),
+            (960, 520));
+
+        /* 高度变了位置不能变：这是换掉"可用空间"分母的直接理由 */
+        var shortPanel = Core.Windows.ScreenPlacement.ComputeFractionXY(work, 760, 240, 0.5, 0.5);
+        CheckEqual("同一比例、面板变矮：纵向位置不动", shortPanel.Y, atCenter.Y);
+
+        var clampFraction = Core.Windows.ScreenPlacement.ComputeFractionXY(work, 760, 400, 5, -5);
+        CheckEqual("比例越界：夹回 0..1", (clampFraction.X, clampFraction.Y), (1920 - 760, 0));
+
+        CheckEqual("反算比例：拖到工作区一半就是 0.5",
+            Core.Windows.ScreenPlacement.FractionOf(960, 1920), 0.5);
+        CheckEqual("反算比例：拖出工作区给 0（不返回负数）",
+            Core.Windows.ScreenPlacement.FractionOf(-40, 640), 0.0);
+        CheckEqual("反算比例：拿不到显示器尺寸时给 0（不除零）",
+            Core.Windows.ScreenPlacement.FractionOf(120, 0), 0.0);
+
+        /* ⑥ 位置设置的默认值：没拖过就不能带自定义位置，否则每次唤出都钉在一个死点上 */
+        var qbarDefault = new QbarOptions();
+        Check("位置默认走自动摆位（没拖过）", !qbarDefault.CustomPosition);
+        CheckEqual("位置默认比例是居中偏上", (qbarDefault.PositionX, qbarDefault.PositionY), (0.5, 0.3));
     }
 
     /// <summary>

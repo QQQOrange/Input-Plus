@@ -699,30 +699,6 @@
                                         ToolTip="{loc:T '回放这一笔'}"
                                         AutomationProperties.Name="{loc:T '回放这一笔'}" />
                             </WrapPanel>
-
-                            <!-- 美化模板（任务四）：框里画的是「存下来之后的样子」。
-                                 右边两颗按钮只改编辑器里的副本，点保存才落盘。 -->
-                            <Grid Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="BeautyStatus" Grid.Column="0"
-                                           Style="{StaticResource Text.Tertiary}"
-                                           VerticalAlignment="Center"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="{loc:T '美化只改形状与显示，识别仍按同一套语义特征比对；整理后若会认成别的手势，就自动保留原始轨迹。'}" />
-                                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Button x:Name="RebuildBeautyButton" Style="{StaticResource Button.Base}"
-                                            Padding="12,6" Margin="8,0,0,0" Click="OnRebuildBeautyClick"
-                                            Content="{loc:T '重新美化'}"
-                                            ToolTip="{loc:T '按「手势设置」里的美化强度，把这一笔重新整理成标准图形'}" />
-                                    <Button x:Name="UseRawButton" Style="{StaticResource Button.Base}"
-                                            Padding="12,6" Margin="8,0,0,0" Click="OnUseRawClick"
-                                            Content="{loc:T '恢复原始轨迹'}"
-                                            ToolTip="{loc:T '丢掉美化模板，恢复录制时手画的那一笔'}" />
-                                </StackPanel>
-                            </Grid>
                         </StackPanel>
 
                         <!-- 多步手势：一步接一步，按住起始键一路做下来（v1.5.0） -->

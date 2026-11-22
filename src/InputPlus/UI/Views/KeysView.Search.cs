@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using InputPlus.Core.Input;
 
 namespace InputPlus.UI.Views;
@@ -34,6 +35,26 @@ public partial class KeysView
     private List<BindingSearchHit> _bindingHits = new();
 
     /// <summary>
+    /// 弹层因为"搜索框还没排好版"被推迟了几次。
+    ///
+    /// 为什么要计数而不是无限重试：推迟是靠 Dispatcher.BeginInvoke 再排一帧，
+    /// 万一搜索框始终没进视觉树（宿主被折叠、窗口关掉了），无上限地排下去
+    /// 就是一条自我唤醒的死循环，UI 线程会被它占满。
+    /// </summary>
+    private int _bindingPopupRetries;
+
+    private const int MaxPopupRetries = 3;
+
+    /// <summary>
+    /// 上一次真正弹开时那批候选的指纹（条数 + 每条的组合键与标题）。
+    ///
+    /// 用来判断"内容变了没有"：Popup 只在**打开那一刻**放一次位置，
+    /// 之后条目从 8 条缩到 2 条，它不会自己挪回搜索框下面，
+    /// 被夹到屏幕边的位置也可能随内容变高而重新出界。
+    /// </summary>
+    private string _bindingPopupSignature = "";
+
+    /// <summary>
     /// 一条候选。<see cref="ActionId"/> 非空表示这是"功能"而不是"已绑定的键"：
     /// 前者点中直接应用到当前键，后者点中跳到那条绑定。
     /// </summary>
@@ -42,7 +63,12 @@ public partial class KeysView
         public bool IsAction => ActionId != null;
     }
 
-    private void OnBindingSearchChanged(object sender, TextChangedEventArgs e) => RefreshBindingSearch();
+    private void OnBindingSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        /* 用户改了关键词：推迟预算重新给满（上一次那几帧的失败跟这次输入无关）。 */
+        _bindingPopupRetries = 0;
+        RefreshBindingSearch();
+    }
 
     private void OnBindingSearchKeyDown(object sender, KeyEventArgs e)
     {
@@ -199,7 +225,59 @@ public partial class KeysView
         }
 
         BindingSearchList.ItemsSource = _bindingHits;
-        BindingSearchPopup.IsOpen = _bindingHits.Count > 0;
+
+        if (_bindingHits.Count == 0)
+        {
+            BindingSearchPopup.IsOpen = false;
+            return;
+        }
+
+        /* 打开之前必须确认搜索框已经**排过版** —— 这是"结果弹到屏幕左上角"的根因。
+         *
+         * Popup 只在打开那一刻按 PlacementTarget 算一次位置，之后再改什么都不管。
+         * 如果那一刻搜索框还没进视觉树（ActualHeight=0、PointToScreen 还是 (0,0)），
+         * Custom 回调拿到的是 0 尺寸目标，第一个候选 (0, 0+4) 相对屏幕原点就落成
+         * 左上角那一条，并且用户接着往下敲也不会自己回到正确位置。
+         *
+         * 所以宁可晚一帧：等布局真的出来了再开。重试有上限，见 _bindingPopupRetries。
+         * 实在开不了就干脆不弹（下一次按键会重新触发），也绝不在错误位置画一个框。 */
+        if (!BindingSearchTargetReady())
+        {
+            if (_bindingPopupRetries < MaxPopupRetries)
+            {
+                _bindingPopupRetries++;
+                Core.CoreLog.Info($"[绑定搜索] 搜索框还没排好版（{DescribeBindingTarget()}），推迟一帧再弹");
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    /* 这一帧里用户可能已经清空输入 / 关掉了搜索：
+                     * 那时 _bindingHits 已经为空，RefreshBindingSearch 会直接不弹。 */
+                    if (_bindingHits.Count > 0) RefreshBindingSearch();
+                }), DispatcherPriority.Loaded);
+            }
+            else
+            {
+                Core.CoreLog.Warn($"[绑定搜索] 搜索框始终没有排好版（{DescribeBindingTarget()}），这次不弹");
+            }
+
+            BindingSearchPopup.IsOpen = false;
+            return;
+        }
+
+        _bindingPopupRetries = 0;
+
+        /* 内容变了就重放一次：WPF 不会为**已经打开**的 Popup 重跑放置回调，
+         * 条目从 8 条缩到 2 条之后它还停在"翻到上方"那个位置。
+         * 关一下再开（同一帧内），放置逻辑就会按新的弹层尺寸重算；
+         * 键盘焦点在搜索框里，这一下不抢焦点、也不闪。 */
+        string signature = _bindingHits.Count + "|"
+                         + string.Join(",", _bindingHits.Select(h => h.Combo + "\u0001" + h.Key));
+        if (BindingSearchPopup.IsOpen && signature != _bindingPopupSignature)
+        {
+            BindingSearchPopup.IsOpen = false;
+        }
+
+        BindingSearchPopup.IsOpen = true;
+        _bindingPopupSignature = signature;
     }
 
     /// <summary>收起下拉。clear=true 时连输入一起清掉（跳转、Esc 之后）。</summary>
@@ -212,18 +290,131 @@ public partial class KeysView
     {
         const double gap = 4;
 
-        return new[]
+        /* 目标尺寸为 0 说明还没排版。正常路径在打开前就被 BindingSearchTargetReady()
+         * 挡掉了，这里再兜一层：真拿 0 去算，结果就是屏幕左上角那一条。 */
+        double targetH = target.Height > 1 ? target.Height : Math.Max(BindingSearchBox.ActualHeight, 0);
+        double targetW = target.Width > 1 ? target.Width : Math.Max(BindingSearchBox.ActualWidth, 0);
+        double popupW = Math.Max(popup.Width, 1);
+        double popupH = Math.Max(popup.Height, 1);
+
+        var candidates = new List<CustomPopupPlacement>
         {
-            new CustomPopupPlacement(new Point(0, target.Height + gap), PopupPrimaryAxis.Horizontal),
-            new CustomPopupPlacement(new Point(0, -popup.Height - gap), PopupPrimaryAxis.Horizontal),
-            new CustomPopupPlacement(new Point(target.Width - popup.Width, target.Height + gap), PopupPrimaryAxis.Horizontal),
-            new CustomPopupPlacement(new Point(target.Width - popup.Width, -popup.Height - gap), PopupPrimaryAxis.Horizontal),
+            // 正路：贴搜索框左边缘、往下 4px
+            new(new Point(0, targetH + gap), PopupPrimaryAxis.Horizontal),
+            // 下面放不下：整块翻到框上方
+            new(new Point(0, -popupH - gap), PopupPrimaryAxis.Horizontal),
+            // 窗口贴右边：改成右边缘对齐
+            new(new Point(targetW - popupW, targetH + gap), PopupPrimaryAxis.Horizontal),
+            new(new Point(targetW - popupW, -popupH - gap), PopupPrimaryAxis.Horizontal),
         };
+
+        return ClampPopupCandidates(candidates, popupW, popupH).ToArray();
+    }
+
+    /// <summary>
+    /// 搜索框是否已经排好版 —— 弹层定位的唯一前提。
+    /// 三条都得满足：进过视觉树（IsLoaded）、量到了真实尺寸、挂在一个 PresentationSource 上
+    /// （最后一条才是 PointToScreen 能有意义的前提，光 IsLoaded 还不够）。
+    /// </summary>
+    private bool BindingSearchTargetReady()
+        => BindingSearchBox.IsLoaded
+           && BindingSearchBox.IsVisible
+           && BindingSearchBox.ActualWidth > 1
+           && BindingSearchBox.ActualHeight > 1
+           && PresentationSource.FromVisual(BindingSearchBox) != null;
+
+    /// <summary>把搜索框的就绪状态写成一行，进日志/诊断用。</summary>
+    private string DescribeBindingTarget()
+        => $"IsLoaded={BindingSearchBox.IsLoaded} IsVisible={BindingSearchBox.IsVisible} "
+         + $"尺寸={BindingSearchBox.ActualWidth:0.#}x{BindingSearchBox.ActualHeight:0.#} "
+         + $"源={(PresentationSource.FromVisual(BindingSearchBox) == null ? "null" : "ok")}";
+
+    /// <summary>
+    /// 把候选偏移夹进搜索框所在显示器的工作区。
+    ///
+    /// Custom 放位的候选点是**相对目标**的偏移，WPF 照给的点摆，不会帮你避让屏幕边缘：
+    /// 设置页拉满屏、结果又有很多条时，"往下 4px"会让弹层下半截直接出屏。
+    /// 四个候选本身覆盖了"下 / 上 / 右对齐"，但窗口又贴顶又贴底时四个都放不下，
+    /// 夹一下至少保证它落在能看见的地方；被夹过的候选排到没被夹的后面，
+    /// 这样"该在的位置"永远是优先项。
+    /// </summary>
+    private List<CustomPopupPlacement> ClampPopupCandidates(
+        List<CustomPopupPlacement> candidates, double popupW, double popupH)
+    {
+        if (!TryGetSearchBoxScreenDip(out Point origin, out Rect work))
+        {
+            // 量不到工作区（句柄还没建好）：保持原样，靠上面的就绪判断兜底
+            return candidates;
+        }
+
+        var exact = new List<CustomPopupPlacement>();
+        var nudged = new List<CustomPopupPlacement>();
+
+        foreach (var candidate in candidates)
+        {
+            double left = origin.X + candidate.Point.X;
+            double top = origin.Y + candidate.Point.Y;
+
+            double maxLeft = Math.Max(work.Left, work.Right - popupW);
+            double maxTop = Math.Max(work.Top, work.Bottom - popupH);
+            double fitLeft = Math.Clamp(left, work.Left, maxLeft);
+            double fitTop = Math.Clamp(top, work.Top, maxTop);
+
+            var adjusted = new CustomPopupPlacement(
+                new Point(fitLeft - origin.X, fitTop - origin.Y), PopupPrimaryAxis.Horizontal);
+
+            bool moved = Math.Abs(adjusted.Point.X - candidate.Point.X) >= 0.5
+                      || Math.Abs(adjusted.Point.Y - candidate.Point.Y) >= 0.5;
+            (moved ? nudged : exact).Add(adjusted);
+        }
+
+        exact.AddRange(nudged);
+        return exact;
+    }
+
+    /// <summary>
+    /// 搜索框左上角的屏幕坐标（DIP）+ 它所在显示器的工作区（DIP）。
+    /// PointToScreen 给物理像素，用该视觉自己的 CompositionTarget 转回 DIP ——
+    /// 200% 缩放的主屏和 100% 的副屏混用时，这一步不做就会差一倍。
+    /// </summary>
+    private bool TryGetSearchBoxScreenDip(out Point origin, out Rect work)
+    {
+        origin = default;
+        work = Rect.Empty;
+
+        PresentationSource? source = PresentationSource.FromVisual(BindingSearchBox);
+        if (source?.CompositionTarget == null) return false;
+
+        try
+        {
+            Point screenPx = BindingSearchBox.PointToScreen(new Point(0, 0));
+            origin = source.CompositionTarget.TransformFromDevice.Transform(screenPx);
+        }
+        catch
+        {
+            return false;
+        }
+
+        Window? owner = Window.GetWindow(BindingSearchBox);
+        if (owner != null
+            && Core.Windows.ScreenPlacement.TryGetWorkAreaDip(owner, out Rect area)
+            && !area.IsEmpty)
+        {
+            work = area;
+        }
+        else
+        {
+            // 兜底：主屏工作区（老系统、窗口句柄还没建立时只有这条路）
+            work = SystemParameters.WorkArea;
+        }
+
+        return true;
     }
 
     private void CloseBindingSearch(bool clear)
     {
         BindingSearchPopup.IsOpen = false;
+        _bindingPopupSignature = "";
         _bindingHits = new List<BindingSearchHit>();
         BindingSearchList.ItemsSource = null;
 
@@ -243,6 +434,33 @@ public partial class KeysView
         RefreshBindingSearch();
         BindingSearchPopup.UpdateLayout();
         return BindingSearchPopup.IsOpen ? BindingSearchPopup.Child as FrameworkElement : null;
+    }
+
+    /// <summary>
+    /// 渲染用：拿"目标尺寸 0、弹层 310x320"这个**退化输入**走一遍放置逻辑。
+    ///
+    /// 这就是用户报的"结果弹到屏幕左上角"的现场数学：搜索框还没排版时
+    /// Custom 回调拿到的目标尺寸就是 0x0，旧实现老老实实返回 (0, 0+4)，
+    /// 相对屏幕原点正好是左上角。现在这一步已经不靠目标尺寸了 ——
+    /// 会退回用搜索框自己的实际尺寸，并且夹进工作区。
+    /// 输出落进 keys-binding-search-placement.txt，出图时顺手回归。
+    /// </summary>
+    internal string DescribeDegeneratePlacement()
+    {
+        CustomPopupPlacement[] candidates =
+            PlaceBindingSearchPopup(new Size(310, 320), new Size(0, 0), new Point());
+
+        if (candidates.Length == 0) return "退化场景：一个候选都没有（异常）";
+
+        Point first = candidates[0].Point;
+        if (!TryGetSearchBoxScreenDip(out Point origin, out Rect work))
+        {
+            return $"退化场景：首个候选=({first.X:0.#},{first.Y:0.#}) 量不到工作区";
+        }
+
+        var rect = new Rect(origin.X + first.X, origin.Y + first.Y, 310, 320);
+        string verdict = work.Contains(rect) ? "落进工作区" : $"越界（{rect} 不在 {work}）";
+        return $"退化场景：首个候选=({first.X:0.#},{first.Y:0.#}) 绝对位置=({rect.X:0},{rect.Y:0}) {verdict}";
     }
 
     /// <summary>
@@ -271,11 +489,28 @@ public partial class KeysView
         Point childAbs = BindingSearchPopup.Child is FrameworkElement c2 && c2.IsVisible
             ? c2.PointToScreen(new Point(0, 0))
             : new Point(double.NaN, double.NaN);
+        /* 判读新增两项：
+         *   就绪 —— 搜索框排过版没有。no 说明这次弹层的位置不可信（也正是
+         *          "弹到屏幕左上角"那个 bug 的现场），必须先修布局时机再看坐标。
+         *   弹层工作区 —— 弹层整块落在当前显示器工作区里没有。外 = 用户会看到半截框。 */
+        string ready = BindingSearchTargetReady() ? "yes" : "no";
+        string inside = "量不到";
+        if (!double.IsNaN(childAbs.X)
+            && BindingSearchPopup.Child is FrameworkElement childEl
+            && TryGetSearchBoxScreenDip(out _, out Rect work)
+            && PresentationSource.FromVisual(BindingSearchBox)?.CompositionTarget is CompositionTarget ct)
+        {
+            Point popupDip = ct.TransformFromDevice.Transform(childAbs);
+            var popupRect = new Rect(popupDip.X, popupDip.Y, childEl.RenderSize.Width, childEl.RenderSize.Height);
+            inside = work.Contains(popupRect) ? "内" : $"外（工作区 {work}）";
+        }
+
         return $"PlacementTarget={(BindingSearchPopup.PlacementTarget == null ? "null（绑定没生效）" : "ok")} "
              + $"框={target.RenderSize.Width:0.#}x{target.RenderSize.Height:0.#} "
              + $"{where} Placement={BindingSearchPopup.Placement} 命中={_bindingHits.Count}\n"
              + $"框屏幕=({targetOrigin.X:0},{targetOrigin.Y:0}) 弹层屏幕=({childAbs.X:0},{childAbs.Y:0}) "
-             + $"DPI={scale:0.##} 工作区={SystemParameters.WorkArea}";
+             + $"DPI={scale:0.##} 工作区={SystemParameters.WorkArea}\n"
+             + $"就绪={ready} 弹层工作区={inside} 目标状态={DescribeBindingTarget()}";
     }
 
     /// <summary>

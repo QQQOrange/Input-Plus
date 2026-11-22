@@ -143,6 +143,18 @@ public sealed class KeyboardHook : IDisposable
     public long KeyEventCount => Interlocked.Read(ref _keyEvents);
     private long _keyEvents;
 
+    /// <summary>累计收到的滚轮事件数（垂直 + 水平，含注入；诊断用）。</summary>
+    public long WheelEventCount => Interlocked.Read(ref _wheelEvents);
+    private long _wheelEvents;
+    private long _physicalWheelEvents;
+    private long _injectedWheelEvents;
+
+    /// <summary>其中"不带本程序标记"的滚轮数（真正的手拨；诊断用）。</summary>
+    public long PhysicalWheelEventCount => Interlocked.Read(ref _physicalWheelEvents);
+
+    /// <summary>其中"带本程序注入标记"的滚轮数（平滑滚动自己发的；诊断用）。</summary>
+    public long InjectedWheelEventCount => Interlocked.Read(ref _injectedWheelEvents);
+
     public KeyboardHook()
     {
         _proc = HookCallback;
@@ -408,8 +420,11 @@ public sealed class KeyboardHook : IDisposable
             if (msg == WM_MOUSEWHEEL)
             {
                 var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                Interlocked.Increment(ref _wheelEvents);
                 // 与键盘钩子保持一致：只忽略本程序自己发的滚轮事件。
                 bool injectedByUs = data.dwExtraInfo == InputSender.InjectionTag;
+                if (injectedByUs) Interlocked.Increment(ref _injectedWheelEvents);
+                else Interlocked.Increment(ref _physicalWheelEvents);
                 if (!injectedByUs)
                 {
                     int delta = (short)((data.mouseData >> 16) & 0xFFFF);
@@ -437,10 +452,13 @@ public sealed class KeyboardHook : IDisposable
                  *
                  * delta 的正负约定和 Windows 一致：正 = 右拨，负 = 左拨。 */
                 var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                Interlocked.Increment(ref _wheelEvents);
                 int delta = (short)((data.mouseData >> 16) & 0xFFFF);
                 if (delta != 0)
                 {
                     bool injected = data.dwExtraInfo == InputSender.InjectionTag;
+                    if (injected) Interlocked.Increment(ref _injectedWheelEvents);
+                    else Interlocked.Increment(ref _physicalWheelEvents);
                     if (GestureWheelEvent is { } gestureWheel
                         && gestureWheel(delta > 0 ? 1 : -1, injected, true))
                         return new IntPtr(1);

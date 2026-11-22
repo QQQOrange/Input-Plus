@@ -285,78 +285,13 @@ public partial class GestureRecordWindow : Window
 
         List<int> flat = GestureMath.ToFlat(GestureMath.Normalize(_points));
         string chord = _chordVk == 0 ? "" : ButtonNameValue(_chordVk);
-        /* 原始轨迹（像素）一并回传：美化器要的就是"没被校正过的那一手"，
-         * 拿归一化后的 Path 再美化等于二次加工，形状会被越推越偏。 */
-        var raw = new List<GestureMath.Pt>(_points);
-        Result = new RecordedGesture(ButtonNameValue(_vk), flat, pattern, chord, raw);
+        Result = new RecordedGesture(ButtonNameValue(_vk), flat, pattern, chord);
         UseButton.IsEnabled = true;
         string combo = chord.Length == 0
             ? ButtonName(_vk)
             : Loc.F("{0} + {1}", ButtonName(_vk), ButtonName(_chordVk));
 
-        /* 画板上立刻换成"将来存下来的样子"：用户点「用这一笔」之前就知道
-         * 这条手势的模板长什么样，不用等回到设置页才看见。 */
-        bool beautified = false;
-        try { beautified = PreviewBeauty(flat, pattern); }
-        catch (Exception ex) { CoreLog.Swallow(ex, "手势录制预览美化"); }
-
-        StatusText.Text = beautified
-            ? Loc.F("录好了：{0}　——　已整理成标准图形，点「用这一笔」填进手势。", combo)
-            : Loc.F("录好了：{0}　——　点「用这一笔」填进手势。", combo);
-    }
-
-    /// <summary>
-    /// 把画板上的那条线换成美化模板（任务四：创建阶段美化）。
-    /// 模板按**原始笔画的包围盒**摆回去 —— 位置不跳，用户只是看到它变规整了。
-    /// 返回 true 表示确实换了形状；任何一步不成立都保持原样，只当没这回事。
-    /// </summary>
-    private bool PreviewBeauty(List<int> flat, string pattern)
-    {
-        var opts = Options;
-        if (!opts.BeautifyOnCreate) return false;
-        if (_points.Count < 3) return false;
-
-        /* System.Windows.Input 里也有个 MouseGesture（WPF 的输入手势），这里要的是我们自己的模型。 */
-        var probe = new InputPlus.Core.Gestures.MouseGesture { Kind = "stroke", Path = flat, Pattern = pattern };
-        GestureBeauty.Apply(probe, _points, opts, "录制预览");
-        if (!probe.HasBeauty) return false;
-
-        var tpl = probe.BeautyPoints();
-        if (tpl.Count < 2) return false;
-
-        double padMinX = double.MaxValue, padMinY = double.MaxValue;
-        double padMaxX = double.MinValue, padMaxY = double.MinValue;
-        foreach (var p in _points)
-        {
-            if (p.X < padMinX) padMinX = p.X;
-            if (p.X > padMaxX) padMaxX = p.X;
-            if (p.Y < padMinY) padMinY = p.Y;
-            if (p.Y > padMaxY) padMaxY = p.Y;
-        }
-
-        /* 模板的包围盒（归一化坐标）等比塞进原始笔画的包围盒：横线也不会被拉成一片。 */
-        double tplMinX = double.MaxValue, tplMinY = double.MaxValue;
-        double tplMaxX = double.MinValue, tplMaxY = double.MinValue;
-        foreach (var p in tpl)
-        {
-            if (p.X < tplMinX) tplMinX = p.X;
-            if (p.X > tplMaxX) tplMaxX = p.X;
-            if (p.Y < tplMinY) tplMinY = p.Y;
-            if (p.Y > tplMaxY) tplMaxY = p.Y;
-        }
-
-        double spanX = Math.Max(1e-6, padMaxX - padMinX);
-        double spanY = Math.Max(1e-6, padMaxY - padMinY);
-        double tplSpanX = Math.Max(1e-6, tplMaxX - tplMinX);
-        double tplSpanY = Math.Max(1e-6, tplMaxY - tplMinY);
-        double scale = Math.Min(spanX / tplSpanX, spanY / tplSpanY);
-        double offX = padMinX + (spanX - tplSpanX * scale) / 2 - tplMinX * scale;
-        double offY = padMinY + (spanY - tplSpanY * scale) / 2 - tplMinY * scale;
-
-        TrailLine.Points.Clear();
-        foreach (var p in tpl)
-            TrailLine.Points.Add(new Point(p.X * scale + offX, p.Y * scale + offY));
-        return true;
+        StatusText.Text = Loc.F("录好了：{0}　——　点「用这一笔」填进手势。", combo);
     }
 
     // ───────────────────────── 按钮 ─────────────────────────
@@ -421,7 +356,5 @@ public partial class GestureRecordWindow : Window
 }
 
 /// <summary>录制结果：起始键（right/middle/x1/x2…）、归一化轨迹、方向串、可选的第二键。</summary>
-/// <param name="Raw">原始像素轨迹（美化用；老记录里可能没有）。</param>
 public sealed record RecordedGesture(
-    string Button, List<int> Path, string Pattern, string Chord = "",
-    IReadOnlyList<GestureMath.Pt>? Raw = null);
+    string Button, List<int> Path, string Pattern, string Chord = "");

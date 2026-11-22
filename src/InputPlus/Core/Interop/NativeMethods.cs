@@ -821,4 +821,71 @@ public static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool ShellExecuteExW(ref SHELLEXECUTEINFO info);
 
+    /* ── 桌面图标列表的命中测试（中键菜单用） ─────────────────────────────
+     *
+     * 要回答的问题只有一个：指针底下是桌面图标，还是图标之间的空白？
+     * 桌面的图标视图是一个 SysListView32，Explorer 自己知道答案，问它就完了，
+     * 别去猜（图标名占多宽、网格间距多少、换了字体/缩放全都会变）。
+     *
+     * 为什么必须远程分配内存：LVM_HITTEST 的 lParam 是 LVHITTESTINFO*，
+     * 对方进程会拿它当指针直接读。传本进程的栈地址过去，在 Explorer 里
+     * 就是一段野指针 —— 轻则 iItem 乱给（在空白处弹出菜单），重则 Explorer 崩掉。
+     * 所以：OpenProcess → VirtualAllocEx → WriteProcessMemory → 发消息 → ReadProcessMemory → 释放。
+     *
+     * 位数陷阱：消息号 ≥ WM_USER 的带指针消息**不做跨位数封送**。
+     * 32 位的 InputPlus 往 64 位 Explorer 里发，lParam 会被截成 32 位，
+     * 对方解引用到的是垃圾地址。调用方必须先比位数（见 BlankHit.SameBitnessAsTarget）。 */
+    public const uint LVM_HITTEST = 0x1000 + 18;
+
+    /// <summary>LVM_HITTEST 的结构：`pt` 是**列表控件的客户区坐标**，不是屏幕坐标。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LVHITTESTINFO
+    {
+        public POINT pt;
+        public int iItem;
+        public int iSubItem;
+        public int iGroup;
+    }
+
+    public const uint PROCESS_VM_OPERATION = 0x0008;
+    public const uint PROCESS_VM_READ = 0x0010;
+    public const uint PROCESS_VM_WRITE = 0x0020;
+
+    public const uint MEM_COMMIT = 0x1000;
+    public const uint MEM_RELEASE = 0x8000;
+    public const uint PAGE_READWRITE = 0x04;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, IntPtr dwSize,
+        uint flAllocationType, uint flProtect);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool VirtualFreeEx(IntPtr hProcess, IntPtr lpAddress, IntPtr dwSize, uint dwFreeType);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
+        byte[] lpBuffer, IntPtr nSize, out IntPtr lpNumberOfBytesWritten);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress,
+        byte[] lpBuffer, IntPtr nSize, out IntPtr lpNumberOfBytesRead);
+
+    /// <summary>屏幕坐标 → 指定窗口的客户区坐标（LVM_HITTEST 要的是客户区坐标）。</summary>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ScreenToClient(IntPtr hWnd, ref POINT lpPoint);
+
+    /// <summary>按类名找子窗口：从 SHELLDLL_DefView 下面捞 SysListView32 用。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter,
+        string? lpszClass, string? lpszWindow);
+
+    /// <summary>目标进程是不是 WOW64（32 位跑在 64 位系统上）。被 XP 拒绝时返回 false。</summary>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWow64Process(IntPtr hProcess, [MarshalAs(UnmanagedType.Bool)] out bool wow64Process);
+
 }

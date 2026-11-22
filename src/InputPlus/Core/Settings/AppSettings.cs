@@ -1169,6 +1169,29 @@ public sealed class QbarOptions
     public bool ShowIcons { get; set; } = true;
 
     /// <summary>
+    /// 用户拖动过 Qbar 面板，下次唤出就落回那个位置。
+    ///
+    /// false = 走默认位置（工作区上方 22% 居中）。只在真的拖动过之后才置 true：
+    /// 默认摆位要跟着前台窗口所在显示器走，一旦固定成"上次那个坐标"，
+    /// 换块屏唤出反而会跑到另一块屏上去。
+    /// </summary>
+    public bool CustomPosition { get; set; }
+
+    /// <summary>
+    /// 面板左上角在**工作区**里的比例（0..1，0 = 贴左/贴上，1 = 贴右/贴下）。
+    ///
+    /// 存比例而不是像素：换分辨率、改缩放、插拔副屏之后像素会落到屏幕外，
+    /// 比例至少还能落在同一块屏的相对位置上。
+    /// 分母是工作区本身而不是"工作区减面板"：Qbar 高度随结果条数变，
+    /// 拿可用空间当分母会让同一个比例在不同高度下算出不同的位置。
+    /// 0.5/0.3 ≈ 默认的"上方居中"一带。
+    /// </summary>
+    public double PositionX { get; set; } = 0.5;
+
+    /// <inheritdoc cref="PositionX"/>
+    public double PositionY { get; set; } = 0.3;
+
+    /// <summary>
     /// 空面板最上面先列几条"最近打开的项目"。
     ///
     /// 0 = 不显示。只在**直接唤出** Qbar（没有关键字、没有指定搜索引擎）时出现；
@@ -1256,6 +1279,82 @@ public sealed class QbarOptions
     public List<QbarCommand> Commands { get; set; } = new();
 }
 
+/// <summary>
+/// 文件对话框搜索栏（见 FILE-DIALOG-BAR.md）。
+///
+/// 默认值全部写在属性初始值上：老配置反序列化时缺这些字段就自动取默认，
+/// 不需要再在 SettingsStore 里写迁移。
+/// </summary>
+public sealed class FileDialogBarOptions
+{
+    /// <summary>
+    /// 默认值版本：0 = 1.3.4 及以前（那时 ShowOnAppear 默认 false）。
+    /// 1.3.5 起默认改成 true（用户要的就是打开另存为就有一条搜索栏），
+    /// 由 SettingsStore.Normalize 对老配置做一次迁移；迁移后用户再关掉就不再改。
+    /// </summary>
+    public int DefaultsVersion { get; set; }
+
+    public const int DefaultsVersionCurrent = 2;
+
+    /// <summary>总开关。false = 不装钩子、不建窗口。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>对话框一出现就显示（默认开：用户要的就是"打开另存为就有一条搜索栏"）。</summary>
+    public bool ShowOnAppear { get; set; } = true;
+
+    /// <summary>
+    /// 收藏的目录（QuickSwitch 的 ★）。这是普通设置项，跟 Favorites 一起走
+    /// settings.json 的保存/备份/同步，不另建一套存储。
+    /// </summary>
+    public List<FavoriteDirectory> Favorites { get; set; } = new();
+
+    /// <summary>按热键显示（默认开）。</summary>
+    public bool ShowOnHotkey { get; set; } = true;
+
+    /// <summary>显示/隐藏浮层的全局热键。</summary>
+    public string Hotkey { get; set; } = "Ctrl+Alt+F";
+
+    /// <summary>
+    /// 按类型开关（键见 <c>DialogTypeKeys</c>）。
+    ///
+    /// 字典里没有的键按「开」处理 —— 新增类型时老配置不必迁移。
+    /// </summary>
+    public Dictionary<string, bool> Types { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [InputPlus.Core.FileDialog.DialogTypeKeys.FileDialog] = true,
+        [InputPlus.Core.FileDialog.DialogTypeKeys.FolderDialog] = true,
+        [InputPlus.Core.FileDialog.DialogTypeKeys.ExplorerWindow] = false,
+    };
+
+    /// <summary>按进程名禁用（小写、带 .exe）。</summary>
+    public List<string> DisabledProcesses { get; set; } = new();
+
+    /// <summary>Vista+ 对话框优先走 UIA ValuePattern（失败自动退化到键盘+剪贴板）。</summary>
+    public bool UiaBackfill { get; set; } = true;
+
+    /// <summary>结果上限（本地重排后展示）。</summary>
+    public int MaxResults { get; set; } = 200;
+
+    /// <summary>浮层输入行高度（DIP）。</summary>
+    public double BarHeight { get; set; } = 44;
+
+    /// <summary>SHOW 事件丢失时的兜底轮询间隔（毫秒，只枚举顶层窗口）。</summary>
+    public int PollFallbackMs { get; set; } = 300;
+
+    /// <summary>
+    /// 跟随度量（默认关）：每秒往日志写一行 p50/p99 延迟与像素误差。
+    /// 排查"拖动时浮条跟不跟得上"时打开，平时关着不产生任何日志。
+    /// </summary>
+    public bool FollowMetrics { get; set; }
+}
+
+/// <summary>一个收藏目录（QuickSwitch ★ 的数据项）。</summary>
+public sealed class FavoriteDirectory
+{
+    public string Name { get; set; } = "";
+    public string Path { get; set; } = "";
+}
+
 public sealed class AppSettings
 {
     public int SchemaVersion { get; set; } = 1;
@@ -1293,6 +1392,13 @@ public sealed class AppSettings
 
     public GlobalOptions Global { get; set; } = new();
     public QbarOptions Qbar { get; set; } = new();
+
+    /// <summary>文件对话框搜索栏的开关与外观。</summary>
+    public FileDialogBarOptions FileDialogBar { get; set; } = new();
+
+    /// <summary>启动器空态"搜索前建议"的开关、来源与黑名单。</summary>
+    public SuggestionsOptions Suggestions { get; set; } = new();
+
     public SyncOptions Sync { get; set; } = new();
 
     /// <summary>启动密码（与备份密码独立的另一套，见 <see cref="SecurityOptions"/>）。</summary>
@@ -1415,6 +1521,35 @@ public sealed class AppSettings
     /// </summary>
     public string HoldDragJson { get; set; } = "";
 
+    /// <summary>
+    /// 中键在桌面 / 资源管理器**空白处**单击时，弹出 Input Plus 自己的菜单。
+    ///
+    /// 出厂关，理由有三条，都写在 DECISIONS.md 里：
+    ///   ① 中键这颗键全系统都在用 —— 浏览器自动滚动、CAD/3D 平移、资源管理器开新标签，
+    ///      默认接管等于悄悄改掉用户已经形成肌肉记忆的一颗键；
+    ///   ② 菜单内容是"收藏 / 最近 / 自定义命令"，新装用户点开是一片空，先给开关更诚实；
+    ///   ③ 关着的时候行为与升级前**完全一致**，老配置读进来不需要任何迁移。
+    /// </summary>
+    public bool MiddleClickMenuEnabled { get; set; }
+
+    /// <summary>
+    /// 中键菜单用哪一份：空 = 内置动态菜单（收藏文件夹 / 最近打开 / 自定义命令 / 打开设置，
+    /// 每次现拼）；非空 = <see cref="GestureMenus"/> 里那个 Id 的菜单。
+    ///
+    /// 为什么留一个空串而不是必选：这两件事本来就是两种需求 ——
+    /// "随手在桌面点一下，给我常去的地方"（动态）和"我配好的一份固定菜单"（静态）。
+    /// 空串而不是 null：JSON 里缺这项、写 null、写空串都落到同一个默认，反序列化不会拐进 null 分支。
+    /// </summary>
+    public string MiddleClickMenuId { get; set; } = "";
+
+    /// <summary>
+    /// 中键菜单的生效范围，存字符串而不是枚举 —— 和 <see cref="InputPlus.Core.Gestures.GestureOptions.TargetMode"/>
+    /// 同一个理由：配置里被人手改成别的词时只退回默认，不会让整份设置反序列化抛异常
+    /// （那会触发 SettingsStore.Load 的"读取失败 → 回退默认设置"，用户会觉得设置全丢了）。
+    /// 取值见 <see cref="MiddleMenuScope"/> 的常量。
+    /// </summary>
+    public string MiddleClickMenuScope { get; set; } = MiddleMenuScope.DesktopAndExplorer;
+
     public KeyBinding? FindBinding(string combo) =>
         Keys.FirstOrDefault(k => string.Equals(k.Combo, combo, StringComparison.OrdinalIgnoreCase));
 
@@ -1437,4 +1572,49 @@ public sealed class AppSettings
         var json = System.Text.Json.JsonSerializer.Serialize(this, SettingsStore.JsonOptions);
         return System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json, SettingsStore.JsonOptions)!;
     }
+}
+
+/// <summary>
+/// 中键菜单的生效范围：只在桌面，还是桌面 + 资源管理器文件夹窗口。
+///
+/// 两套表示各干一件事：
+///   · <see cref="AppSettings.MiddleClickMenuScope"/> 存**字符串**（老配置容错，见那边的注释）；
+///   · 代码里比较、传参用这个**枚举**，别在各处写 "desktop" 字面量。
+/// 两边靠 <see cref="ToScope"/> / <see cref="ToStorage"/> 互转，解析失败的字符串一律按
+/// <see cref="DesktopAndExplorer"/> 处理 —— 默认范围就是"两个地方都管"，
+/// 用户真改成不认识的值，回到默认比"突然只在桌面生效"更不容易让人以为坏了。
+/// </summary>
+public enum MiddleClickMenuScope
+{
+    /// <summary>只在桌面空白处弹。</summary>
+    Desktop = 0,
+
+    /// <summary>桌面 + 资源管理器文件夹窗口的空白处。</summary>
+    DesktopAndExplorer = 1,
+}
+
+/// <summary>中键菜单范围：存储用的字符串常量与解析/归一化。</summary>
+public static class MiddleMenuScope
+{
+    /// <summary>只在桌面空白处弹。</summary>
+    public const string Desktop = "desktop";
+
+    /// <summary>桌面 + 资源管理器文件夹窗口的空白处（出厂值）。</summary>
+    public const string DesktopAndExplorer = "desktopExplorer";
+
+    /// <summary>字符串 → 枚举。null / 空 / 不认识的词一律回落到 <see cref="MiddleClickMenuScope.DesktopAndExplorer"/>。</summary>
+    public static MiddleClickMenuScope ToScope(string? stored) => (stored ?? "").Trim().ToLowerInvariant() switch
+    {
+        Desktop => MiddleClickMenuScope.Desktop,
+        DesktopAndExplorer => MiddleClickMenuScope.DesktopAndExplorer,
+        _ => MiddleClickMenuScope.DesktopAndExplorer,
+    };
+
+    /// <summary>枚举 → 存储用的字符串。</summary>
+    public static string ToStorage(MiddleClickMenuScope scope) =>
+        scope == MiddleClickMenuScope.Desktop ? Desktop : DesktopAndExplorer;
+
+    /// <summary>这个范围管不管资源管理器文件夹窗口。</summary>
+    public static bool IncludesExplorer(MiddleClickMenuScope scope) =>
+        scope == MiddleClickMenuScope.DesktopAndExplorer;
 }

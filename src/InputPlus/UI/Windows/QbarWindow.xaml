@@ -10,17 +10,17 @@
         FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
 
     <Grid Margin="18">
-        <!-- 投影用三层递减的半透明底衬模拟。
-             不用 DropShadowEffect：这个窗口是 AllowsTransparency 的，整窗走软件合成，
-             再加模糊效果的话每敲一个字符都要重算一遍 —— Qbar 是"边打边搜"的面板，卡不得。
-             也不用单层实心块：它和面板错位时右侧/底部会露出一条硬边，看着像两个面板叠在一起。 -->
-        <Border CornerRadius="26" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.35" Margin="-8,-4,-8,12" />
-        <Border CornerRadius="23" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.65" Margin="-4,1,-4,7" />
-        <Border CornerRadius="20" Background="{DynamicResource Brush.OverlayShadow}" Margin="-1,5,-1,2" />
+        <!-- 不画投影底衬。
+             用户反馈：面板外框有一圈"线性光晕"，日夜两套主题都不想要。
+             那圈东西原来就是这里的三块半透明底衬（Brush.OverlayShadow，圆角 26/23/20、
+             各自往外撑 -8/-4/-1 DIP）叠出来的：三层同心圆角在面板外侧压出一圈
+             由深到浅的带状阴影。浅色照片壁纸上它像一圈脏灰边，深色壁纸上又几乎看不见，
+             两头不讨好。现在直接不画了，面板靠自己的 1.5px 描边和圆角跟背景分开，
+             窗口留白（Margin 18）不动，面板本身的尺寸和排版跟以前完全一样。 -->
 
         <!-- 面板 -->
         <Border x:Name="Panel" CornerRadius="18" BorderThickness="1.5"
-                Background="{DynamicResource Brush.OverlayCard}"
+                Background="Transparent"
                 BorderBrush="{DynamicResource Brush.OverlayBorder}">
             <Border.RenderTransform>
                 <TranslateTransform x:Name="Slide" Y="10" />
@@ -34,6 +34,14 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
+
+                <!-- 毛玻璃底衬。BackdropFill 垫"抓到的背后屏幕 + 模糊"，TintFill 是主题色的一层薄纱；
+                     两块都铺满整个面板、不吃鼠标，原来的输入行/结果列表仍在上面，层级不变。
+                     没有模糊图时 BackdropFill 是空的，看起来就跟以前一样是纯色面板。 -->
+                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="16.5"
+                        IsHitTestVisible="False" />
+                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="16.5"
+                        IsHitTestVisible="False" Background="{DynamicResource Brush.OverlayCard}" />
 
                 <!-- 输入行：标签 + 输入框 -->
                 <Grid Grid.Row="0" Margin="18,16,18,12">
@@ -193,10 +201,23 @@
                         </StackPanel>
                     </Border>
 
-                <ListBox Grid.Row="1" x:Name="Results" Margin="8,8,8,4" Background="Transparent"
+                <StackPanel Grid.Row="1">
+                <!-- 分组标题：空态带"搜索前建议"时显示一行"最近文件"。
+                     建议项和搜索结果共用这一个列表（红线 6：不许两套列表同时出现），
+                     所以标题只是给建议那一档加个抬头，不影响后续查询结果。 -->
+                <Border x:Name="GroupHeaderBox" Visibility="Collapsed" Margin="16,4,16,2">
+                    <TextBlock x:Name="GroupHeaderText" FontSize="11.5" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                </Border>
+                <ListBox x:Name="Results" Margin="8,8,8,4" Background="Transparent"
                          PreviewMouseRightButtonDown="OnResultsRightClick"
                          BorderThickness="0" MaxHeight="420"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Pixel"
                          PreviewMouseLeftButtonUp="OnResultClick"
                          ItemContainerStyle="{StaticResource QbarRow}">
                     <ListBox.ItemTemplate>
@@ -268,6 +289,7 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+                </StackPanel>
 
                     <!-- 查询调试面板：翻译层每一层的中间结果 + 请求参数 + 命中数与耗时。
                          默认收起，设置里打开或用 Ctrl+D 就地切换。 -->

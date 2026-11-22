@@ -39,6 +39,9 @@ public static class UiaSelectionReader
     /// <summary>最多向上找几层父元素（再多就是桌面/窗口框架了，没意义）。</summary>
     private const int MaxParentLevels = 10;
 
+    /// <summary>从"选中条目"里最多取几个名字（大目录里取太多既慢又不像用户的意图）。</summary>
+    private const int MaxSelectedItems = 32;
+
     /// <summary>默认等待预算（毫秒）。正常 UIA 查询在 10~80ms 内返回。</summary>
     public const int DefaultTimeoutMs = 600;
 
@@ -186,24 +189,41 @@ public static class UiaSelectionReader
              * （某些程序的文本控件确实只在 SelectionPattern 里暴露选中项）。 */
             foreach (var c in candidates)
             {
-                try
+                string picked = ReadPatternSelection(c);
+                if (picked.Length > 0) return picked;
+            }
+
+            /* ④b 只在候选元素**自己**身上找是不够的。
+             *
+             * 资源管理器的文件列表就是反例：焦点元素是列表内部的滚动视图，
+             * 前台窗口根元素是整窗框架，SelectionPattern 挂在这条父链的中间某层。
+             * 两者自身都没有这个模式，于是永远拿到空串，调用方只能去等用户按 Ctrl+C ——
+             * 用户看到的就是"按了直接搜索，然后整个快捷键像死了一样"。
+             * 所以这里沿父链再走一遍（预算和 ③ 一样，10 层）。 */
+            foreach (var start in candidates)
+            {
+                AutomationElement? cur;
+                try { cur = TreeWalker.ControlViewWalker.GetParent(start); }
+                catch { continue; }
+
+                for (int level = 0; level < MaxParentLevels && cur != null; level++)
                 {
-                    if (c.TryGetCurrentPattern(SelectionPattern.Pattern, out var selRaw))
-                    {
-                        var sp = (SelectionPattern)selRaw;
-                        var items = sp.Current.GetSelection();
-                        if (items.Length > 0)
-                        {
-                            var sb2 = new System.Text.StringBuilder();
-                            foreach (var it in items)
-                            {
-                                try { sb2.Append(it.Current.Name); } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
-                            }
-                            if (sb2.Length > 0) return sb2.ToString();
-                        }
-                    }
+                    string picked = ReadPatternSelection(cur);
+                    if (picked.Length > 0) return picked;
+
+                    try { cur = TreeWalker.ControlViewWalker.GetParent(cur); }
+                    catch { break; }
                 }
-                catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+            }
+
+            /* ④c 最外围的一种：根本没有容器级 SelectionPattern，
+             * 选中状态散落在每个条目自己的 SelectionItemPattern 上
+             * （资源管理器、部分第三方文件管理器、详情列表都是这样）。
+             * 它们的 Name 就是文件名 / 条目名，正是"选中它去搜"要的东西。 */
+            foreach (var c in candidates)
+            {
+                string picked = ReadSelectedItemNames(c);
+                if (picked.Length > 0) return picked;
             }
 
             /* 走到这儿说明：沿父链确实找到过 TextPattern，但选区是空的。
@@ -216,6 +236,94 @@ public static class UiaSelectionReader
             // 取词失败不该影响用户操作，静默返回
             return "";
         }
+    }
+
+    /// <summary>
+    /// 读一个元素**自己**的 SelectionPattern 选中项名字；没这个模式或没选中就返回空串。
+    /// 多个选中项用换行拼起来（与 ReadSelection 拼接 TextPattern 选区的做法一致）。
+    /// </summary>
+    private static string ReadPatternSelection(AutomationElement element)
+    {
+        try
+        {
+            if (!element.TryGetCurrentPattern(SelectionPattern.Pattern, out var raw)) return "";
+            if (raw is not SelectionPattern pattern) return "";
+
+            AutomationElement[] items;
+            try { items = pattern.Current.GetSelection(); }
+            catch { return ""; }   /* 预期内：探测/重试型，失败即视为无结果 */
+
+            if (items == null || items.Length == 0) return "";
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var item in items)
+            {
+                try
+                {
+                    string name = item.Current.Name;
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (sb.Length > 0) sb.Append('\n');
+                    sb.Append(name);
+                }
+                catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+            }
+            return sb.ToString();
+        }
+        catch { return ""; }   /* 预期内：探测/重试型，失败即视为无结果 */
+    }
+
+    /// <summary>
+    /// 在元素的后代里找"已被选中"的条目，用它们的名字拼一段文本。
+    ///
+    /// 场景：资源管理器里选中一个文件 —— 焦点元素是整个文件视图，
+    /// 只有在每个条目自己身上才有 SelectionItemPattern.IsSelected，
+    /// 它的 Name 就是文件名。先看 Children（列表项通常就在这一层），
+    /// 没有再往 Descendants 找；条数封顶，免得在大目录里把 UIA 拖到超时。
+    /// </summary>
+    private static string ReadSelectedItemNames(AutomationElement root)
+    {
+        try
+        {
+            var condition = new AndCondition(
+                new PropertyCondition(AutomationElement.IsSelectionItemPatternAvailableProperty, true),
+                new PropertyCondition(AutomationElement.IsOffscreenProperty, false));
+
+            AutomationElementCollection? found = null;
+            try { found = root.FindAll(TreeScope.Children, condition); }
+            catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+
+            if (found == null || found.Count == 0)
+            {
+                try { found = root.FindAll(TreeScope.Descendants, condition); }
+                catch { return ""; }
+            }
+            if (found == null || found.Count == 0) return "";
+
+            var sb = new System.Text.StringBuilder();
+            int taken = 0;
+            foreach (AutomationElement element in found)
+            {
+                if (taken >= MaxSelectedItems) break;
+
+                try
+                {
+                    if (!element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var raw)) continue;
+                    if (raw is not SelectionItemPattern item) continue;
+                    if (!item.Current.IsSelected) continue;
+
+                    // 名字要从元素上取：SelectionItemPatternInformation 只暴露 IsSelected/SelectionContainer
+                    string name = element.Current.Name;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+
+                    if (sb.Length > 0) sb.Append('\n');
+                    sb.Append(name);
+                    taken++;
+                }
+                catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+            }
+            return sb.ToString();
+        }
+        catch { return ""; }   /* 预期内：探测/重试型，失败即视为无结果 */
     }
 
     /// <summary>读 TextPattern 的所有选区，拼成一段文本。</summary>

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using InputPlus.Core.Settings;
 
 namespace InputPlus.UI.Views;
@@ -22,7 +23,25 @@ public partial class ScrollView : UserControl
     /// <summary>回填控件时置位：避免把程序化赋值当成用户操作再存一遍。</summary>
     private bool _sync;
 
-    public ScrollView() => InitializeComponent();
+    /// <summary>状态行每秒刷新：用户滚动时能直接看到"接管次数"在涨，
+    /// 而不是停在上次进页面时的数字 —— 那会让人以为功能没生效。</summary>
+    private DispatcherTimer? _statusTimer;
+
+    public ScrollView()
+    {
+        InitializeComponent();
+        Loaded += (_, _) =>
+        {
+            _statusTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _statusTimer.Tick -= OnStatusTick;
+            _statusTimer.Tick += OnStatusTick;
+            _statusTimer.Start();
+            UpdateStatus();
+        };
+        Unloaded += (_, _) => _statusTimer?.Stop();
+    }
+
+    private void OnStatusTick(object? sender, EventArgs e) => UpdateStatus();
 
     public void Initialize(AppHost host)
     {
@@ -260,6 +279,9 @@ public partial class ScrollView : UserControl
             return;
         }
 
-        StatusText.Text = Loc.F("已接管 {0} 次滚轮，注入 {1} 像素。", _host.Scroll.SmoothCount, _host.Scroll.SentPixels);
+        string line = Loc.F("已接管 {0} 次滚轮，注入 {1} 像素。", _host.Scroll.SmoothCount, _host.Scroll.SentPixels);
+        if (_host.Scroll.InjectionFailures > 0)
+            line += Loc.F(" 有 {0} 次注入被系统拦截（前台程序权限更高）。", _host.Scroll.InjectionFailures);
+        StatusText.Text = line;
     }
 }

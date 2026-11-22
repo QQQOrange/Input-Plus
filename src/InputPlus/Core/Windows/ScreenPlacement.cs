@@ -106,6 +106,100 @@ public static class ScreenPlacement
     }
 
     /// <summary>
+    /// 按**工作区比例**摆放窗口：比例说的是"窗口左上角落在工作区的百分之几"。
+    ///
+    /// 为什么不用"可用空间（工作区减窗口）的比例"：Qbar 是 SizeToContent 的，
+    /// 每次唤出的高度都不一样（结果多就高、只有一行就矮）。按可用空间算的话，
+    /// 同一个比例配不同高度会算出不同的纵坐标 —— 用户拖到某处，下次却偏了十几像素。
+    /// 左上角相对工作区的位置跟高度无关，拖到哪就在哪，高度自己往下长。
+    ///
+    /// Qbar 拖完面板吃这个：拖动结束时把 <see cref="TryGetFraction"/> 量到的比例
+    /// 存进设置，下次唤出按同一个比例放回来 —— 换分辨率/换缩放/插拔副屏之后
+    /// 仍然落在同一块屏的相对位置上。
+    /// </summary>
+    /// <param name="window">已 Show 或至少已建句柄的窗口。</param>
+    /// <param name="fx">水平比例：窗口左边在工作区宽度的百分比（0 = 贴左，1 = 贴右）。</param>
+    /// <param name="fy">纵向比例：窗口顶边在工作区高度的百分比（0 = 贴顶，1 = 贴底）。</param>
+    /// <param name="target">以哪个窗口所在显示器为准；默认用自己。</param>
+    public static bool PlaceAt(Window window, double fx, double fy, IntPtr target = default)
+    {
+        try
+        {
+            if (!TryResolveWork(window, target, out IntPtr hwnd, out var work, out double scale)) return false;
+
+            double dipW = window.ActualWidth > 1 ? window.ActualWidth : window.Width;
+            double dipH = window.ActualHeight > 1 ? window.ActualHeight : window.Height;
+            int w = (int)Math.Round(Math.Max(0, dipW) * scale);
+            int h = (int)Math.Round(Math.Max(0, dipH) * scale);
+
+            var (x, y) = ComputeFractionXY(work, w, h, fx, fy);
+
+            NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0,
+                NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("按比例摆位失败，退回默认位置：" + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 量出窗口左上角在工作区里的比例（0..1）。拖动结束时用它回写设置。
+    ///
+    /// 读的是 GetWindowRect 的物理像素（跟 PlaceAt 用同一套坐标），不是 WPF 的
+    /// Left/Top —— 后者是"窗口所在显示器 DPI 下的 DIP"，混 DPI 多屏下直接算会错位。
+    /// </summary>
+    public static bool TryGetFraction(Window window, out double fx, out double fy)
+    {
+        fx = 0.5;
+        fy = 0.3;
+        try
+        {
+            if (!TryResolveWork(window, IntPtr.Zero, out IntPtr hwnd, out var work, out _)) return false;
+            if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return false;
+
+            fx = FractionOf(rect.Left - work.Left, work.Width);
+            fy = FractionOf(rect.Top - work.Top, work.Height);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("读取面板位置比例失败：" + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 纯函数：把"距工作区左/上边的偏移"换算成 0..1 的比例。
+    /// 边长为 0（拿不到显示器信息）时按 0 处理，避免除零和负比例。
+    /// </summary>
+    internal static double FractionOf(int offset, int size)
+        => size <= 0 ? 0.0 : Math.Clamp(offset / (double)size, 0.0, 1.0);
+
+    /// <summary>
+    /// 纯函数：按 x/y 两个比例算窗口左上角的**物理像素**坐标（越界自动夹回工作区）。
+    /// 跟 <see cref="ComputePoint"/> 一样拆出来方便脱开屏幕做断言。
+    /// </summary>
+    internal static (int X, int Y) ComputeFractionXY(
+        NativeMethods.RECT work, int w, int h, double fx, double fy)
+    {
+        double px = double.IsNaN(fx) ? 0.5 : Math.Clamp(fx, 0.0, 1.0);
+        double py = double.IsNaN(fy) ? 0.3 : Math.Clamp(fy, 0.0, 1.0);
+
+        // 比例乘**工作区**，不是"可用空间"：高度随时会变，只有工作区是固定的参照
+        int x = work.Left + (int)Math.Round(work.Width * px);
+        int y = work.Top + (int)Math.Round(work.Height * py);
+
+        int maxX = Math.Max(work.Left, work.Right - w);
+        int maxY = Math.Max(work.Top, work.Bottom - h);
+        x = Math.Clamp(x, work.Left, maxX);
+        y = Math.Clamp(y, work.Top, maxY);
+        return (x, y);
+    }
+
+    /// <summary>
     /// 纯函数：水平居中 + 按比例纵向定位，返回窗口左上角的**物理像素**坐标。
     /// 跟 <see cref="ComputePoint"/> 一样拆出来，方便脱开屏幕做断言。
     /// </summary>

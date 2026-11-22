@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Media;
@@ -1106,6 +1106,85 @@ public static partial class SelfTest
         DoEvents(120);
         e2.Dispose();
         q2.Dispose();
+    }
+
+    /// <summary>
+    /// 修饰键单键绑定：caps_lalt / caps_ralt 这类"整条 combo 只有一个修饰键"的绑定。
+    ///
+    /// 用户把「只看文件夹」绑到 Caps+LAlt，按下去面板根本不弹 ——
+    /// OnKeyDownInLayer 一开头就把修饰键"记状态 + 吞掉 + return"，
+    /// 压根走不到后面的 combo 查找。这里验证补上的那一次查找真的能执行动作，
+    /// 并且"具体码 0xA4 → 通用码 0x12"不会把同一次按键执行两遍。
+    /// </summary>
+    private static void TestModifierOnlyBinding()
+    {
+        var s = DefaultSettings.Create();
+        s.Triggers.Clear();
+        s.Triggers.Add(new TriggerKey
+        {
+            Key = "capslock", LayerId = 1, HoldMs = 0, TapAction = "keepKey", Enabled = true,
+        });
+        s.Layers[0].Keys.Clear();
+        s.Layers[0].Keys.Add(new KeyBinding { Combo = "caps_lalt", Action = "qfilter", Arg = "builtin.file" });
+
+        var fired = new List<string>();
+        var queue = new ActionQueue();
+        var engine = new HotkeyEngine(queue, () => s, (action, arg) =>
+        {
+            fired.Add(action + "|" + arg);
+            return true;
+        });
+        engine.EnterLayerImmediatelyForTest = true;
+        engine.StartHoldTimer();
+
+        engine.SimulateKey(VK.CapsLock, true);      // 进层
+        Thread.Sleep(40);
+        CheckEqual("进层成功", engine.ActiveLayer, 1);
+
+        fired.Clear();
+        Check("层内按 LAlt 仍然被吞（不会漏给前台）", engine.SimulateKey(VK.LMenu, true));
+        DoEvents(150);
+        CheckEqual("Caps + LAlt 执行了「只看文件夹」", string.Join(",", fired), "qfilter|builtin.file");
+
+        // 同一个物理动作先发具体码、再发通用码：同一个绑定只执行一次
+        fired.Clear();
+        engine.SimulateKey(0x12, true);             // 通用 Alt 码，紧跟着来
+        DoEvents(150);
+        CheckEqual("具体码 + 通用码不重复执行", string.Join(",", fired), "");
+
+        engine.SimulateKey(0x12, false);
+        engine.SimulateKey(VK.LMenu, false);
+        engine.SimulateKey(VK.CapsLock, false);
+        DoEvents(150);
+
+        /* 有些键盘/驱动只发 0x12 这一个通用码，从来不发 0xA4。
+         * 上面那次已经在 250ms 去重窗口内被挡掉，这里等窗口过去再单独验一遍。 */
+        Thread.Sleep(300);
+        engine.SimulateKey(VK.CapsLock, true);
+        Thread.Sleep(40);
+        fired.Clear();
+        engine.SimulateKey(0x12, true);
+        DoEvents(150);
+        CheckEqual("只发通用码 0x12 的键盘也认", string.Join(",", fired), "qfilter|builtin.file");
+        engine.SimulateKey(0x12, false);
+        engine.SimulateKey(VK.CapsLock, false);
+        DoEvents(120);
+
+        /* 没绑定的修饰键仍然是"只记状态"，不能变成别的动作 */
+        s.Layers[0].Keys.Clear();
+        s.Layers[0].Keys.Add(new KeyBinding { Combo = "caps_lalt", Action = "qfilter", Arg = "builtin.file" });
+        engine.SimulateKey(VK.CapsLock, true);
+        Thread.Sleep(40);
+        fired.Clear();
+        engine.SimulateKey(VK.LShift, true);
+        DoEvents(120);
+        CheckEqual("没绑定的修饰键不触发动作", string.Join(",", fired), "");
+        engine.SimulateKey(VK.LShift, false);
+        engine.SimulateKey(VK.CapsLock, false);
+        DoEvents(120);
+
+        engine.Dispose();
+        queue.Dispose();
     }
 
     /// <summary>

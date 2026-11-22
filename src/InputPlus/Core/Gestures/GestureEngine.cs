@@ -42,16 +42,12 @@ public static class GestureEngine
     internal static bool CanonicalizeEnabled = true;
 
     /// <summary>
-    /// 模板指纹：原始轨迹 + 美化模板 + 美化档位 + 方向串。
-    /// 任何一项变了都要重建 —— 尤其是 <see cref="MouseGesture.Beauty"/>：
-    /// 重新美化后 Path 没动，但模板形状换了，缓存必须跟着换。
+    /// 模板指纹：轨迹点数 + 内容哈希 + 方向串。
+    /// 轨迹或方向串改了就要重建模板。
     /// </summary>
     private readonly record struct Signature(
         int PathCount,
         int PathHash,
-        int BeautyCount,
-        int BeautyHash,
-        string BeautyLevel,
         string Pattern);
 
     private sealed class Template
@@ -70,17 +66,13 @@ public static class GestureEngine
         new ConditionalWeakTable<MouseGesture, Template>();
 
     /// <summary>
-    /// 存档轨迹 + 美化模板的指纹（点数 + 内容哈希 + 档位 + 方向串）。
-    /// 美化模板参与进来，是因为它现在是识别用的形状：重新美化 / 改强度都必须让缓存失效。
+    /// 存档轨迹的指纹（点数 + 内容哈希 + 方向串）。
     /// </summary>
     private static Signature Fingerprint(MouseGesture g)
     {
         var path = g.Path;
-        var beauty = g.Beauty;
         return new Signature(
             path?.Count ?? 0, HashOf(path),
-            beauty?.Count ?? 0, HashOf(beauty),
-            g.BeautyLevel ?? "",
             g.Pattern ?? "");
     }
 
@@ -100,16 +92,13 @@ public static class GestureEngine
 
     /// <summary>
     /// 一条手势的几何形状（归一化到 1000 空间的折线），优先级：
-    /// ① 美化模板（<see cref="MouseGesture.Beauty"/>）—— 创建时过了语义守门，和原轨迹是同一个手势，
-    ///    用它当模板，触发时"画得糙一点"反而更容易命中；
-    /// ② 存档轨迹（老数据 / 关掉美化）；
-    /// ③ 方向串合成的等长折线（早期版本、导入时没带点阵的配置）。
-    /// 三种形状口径一致 —— 都过了一遍 <see cref="GestureMath.Normalize"/>。
+    /// ① 存档轨迹（<see cref="MouseGesture.Path"/>）；
+    /// ② 方向串合成的等长折线（早期版本、导入时没带点阵的配置）。
+    /// 两种形状口径一致 —— 都过了一遍 <see cref="GestureMath.Normalize"/>。
     /// </summary>
     public static List<GestureMath.Pt>? ShapeOf(MouseGesture? g)
     {
         if (g == null) return null;
-        if (g.HasBeauty) return g.BeautyPoints();
         if (g.HasPath) return g.Points();
         var sketch = GesturePattern.Sketch(g.Pattern);
         return sketch.Count >= 2 ? sketch : null;

@@ -64,7 +64,14 @@ public sealed partial class AppHost
         {
             if (!System.Windows.Clipboard.ContainsText()) return;
             string text = System.Windows.Clipboard.GetText();
-            if (string.IsNullOrWhiteSpace(text) || text == _lastClipboardText) return;
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            /* 「直接搜索」取不到选区时会挂一条"等用户按 Ctrl+C"的待办（见 ActionContext.CaptureThen）。
+             * 这里先把内容交回去，再走去重 —— 用户完全可能把同一段文字又复制一次，
+             * 那次一样是"他按下了 Ctrl+C"，被去重挡掉就永远等不到下一步。 */
+            Context.ClipboardCaptured(text);
+
+            if (text == _lastClipboardText) return;
 
             /* 「输入文本」的长文本走剪贴板粘贴时会临时写两下（正文 + 还原）
              * 那份内容不是用户复制的，记进历史纯属噪声。 */
@@ -93,6 +100,7 @@ public sealed partial class AppHost
         _watchdog.Dispose();
         _clipboard.Dispose();
         try { Scroll.Dispose(); } catch { }
+        try { FileDialogBar.Dispose(); } catch { }
         try { HoldDrag.Dispose(); } catch { }
         try { Gestures.Dispose(); } catch { }
         Engine.Dispose();

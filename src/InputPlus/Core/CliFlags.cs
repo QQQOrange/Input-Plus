@@ -27,6 +27,8 @@ public static class CliFlags
         "--probe-key", "--selection-test", "--gesture-probe", "--gesture-import",
         "--drag-e2e", "--drag-target", "--qbar-query", "--qbar-bench",
         "--everything-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
+        "--shell-probe", "--dialogprobe", "--filedialog-e2e", "--suggestions-probe", "--scroll-probe",
+        "--gesture-overlay-diag",
     };
 
     /// <summary>
@@ -52,6 +54,7 @@ public static class CliFlags
          "  --capture-test                 打开自定义按键捕获窗并自检三路输入来源\n" +
          "  --probe-key <键>               拿当前配置判定一个键：会不会被吞、被哪条规则吞\n" +
         "  --gesture-probe [手势名] [文件]  说清这条手势为什么认不出来：超阈、两条都像、还是没模板\n" +
+        "  --gesture-overlay-diag          实测轨迹覆盖层：建窗/首帧要多久、快划有没有上屏、连划两下会不会被上一笔的淡出吃掉（写数据目录 gesture-overlay-diag.txt）\n" +
         "  --gesture-import <文件> [--keep]  把手势表整表换成 WGestures 2 的配置（.wg28bw 或 gestures.json）\n" +
         "  --hwtest                        硬件测试：真的调一次音量与亮度（会出声/变亮）\n" +
         "  --pick-test <结果文件>           验证「选中文字直接搜索」的取词链路，结果写进文件\n" +
@@ -59,6 +62,11 @@ public static class CliFlags
         "  --drag-e2e [结果文件] [--live]    端到端验证「按住拖拽」：真装钩子、真发左右键，看窗口动不动\n" +
         "  --drag-target <句柄文件>        给 --drag-e2e 当靶子的窗口进程（由 e2e 自己拉起，不用手敲）\n" +
         "  --holddrag-config               打印「按住拖拽」的运行期真实配置 + 九宫格选边演算（缩放只能单轴时用）\n" +
+        "  --shell-probe [文件] [--dismiss] 前台是不是开始菜单/搜索这类 shell 浮层，并试收起一次\n" +
+        "  --dialogprobe                  打印当前所有文件对话框的子控件清单与判型结果（写数据目录 logs\\dialog-probe.txt）\n" +
+        "  --filedialog-e2e               起一个真对话框，实测一次回填能不能被它接受（写数据目录 logs\\filedialog-e2e.txt）\n" +
+        "  --suggestions-probe            真机跑一遍「搜索前建议」采集：各来源条数、首屏耗时、前 20 条（写数据目录 logs\\suggestions-probe.txt）\n" +
+        "  --scroll-probe                 实测滚轮钩子→平滑滚动的链路：钩子收到几次、接管几次、为什么放行（写数据目录 logs\\scroll-probe.txt）\n" +
         "  --webdav-test <地址> [用户名] [密码]   实测一次 WebDAV 往返\n" +
         "  --svg2png <源目录> <目标目录>     把 SVG 图标批量转成 PNG（维护图标表时用）\n" +
         "\n" +

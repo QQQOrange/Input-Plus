@@ -146,6 +146,43 @@ public sealed partial class HotkeyEngine
             if (!wasPhysicallyDown) _swallowedUp.TryAdd(code, 0);
         }
 
+        /* 修饰键单键绑定：caps_lalt = 只看文件夹 这类。
+         *
+         * 修饰键在本函数开头只"记状态 + 吞掉"就返回，压根走不到下面的 combo 查找，
+         * 于是 combo 里只有修饰键的绑定永远命中不了 —— 用户按 Caps+LAlt，
+         * 面板什么都不会弹（他就说成"这个功能没实现"）。
+         *
+         * 这里在记录状态之后补一次查找：用"其余修饰键 + 本键名"拼 combo。
+         * 一个修饰键可能以具体码（0xA4 LAlt）或通用码（0x12 Alt）到来，
+         * 两种名字都试一遍，谁绑了算谁。 */
+        void TryModifierBinding(KeyModifiers exclude, params string[] names)
+        {
+            KeyModifiers others = KeyModifiers.None;
+            if (_ctrlDown) others |= KeyModifiers.Ctrl;
+            if (_shiftDown) others |= KeyModifiers.Shift;
+            if (_laltDown) others |= KeyModifiers.Alt;
+            if (_lwinDown || _rwinDown) others |= KeyModifiers.Win;
+            others &= ~exclude;      // 它自己不算"别的修饰键"
+
+            var settings = _settings();
+            foreach (string name in names)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+                string id = KeyName.BuildComboEx(others, name);
+                KeyBinding? hit = FindInLayer(settings, _activeLayer, id, device);
+                if (hit == null || !hit.IsBound) continue;
+
+                // 具体码与通用码打的是同一条绑定：只执行一次
+                if (string.Equals(id, _lastModifierCombo, StringComparison.OrdinalIgnoreCase) &&
+                    (DateTime.Now - _lastModifierAt).TotalMilliseconds < 250) return;
+                _lastModifierCombo = id;
+                _lastModifierAt = DateTime.Now;
+
+                ExecuteBinding(hit, vk, oweUp: !wasPhysicallyDown);
+                return;
+            }
+        }
+
         /* 修饰键：记录状态并吞掉（否则会触发系统级 Alt / Win 菜单）。
          *
          * ⚠ 左右与通用码都要认。早先只认 LControl/LShift/LMenu：
@@ -156,24 +193,28 @@ public sealed partial class HotkeyEngine
         {
             _laltDown = true;
             OweUp(vk);
+            TryModifierBinding(KeyModifiers.Alt, KeyName.NameOf(vk) ?? "", "alt", "lalt", "ralt");
             return true;
         }
         if (vk is VK.LWin or VK.RWin)
         {
             if (vk == VK.LWin) _lwinDown = true; else _rwinDown = true;
             OweUp(vk);
+            TryModifierBinding(KeyModifiers.Win, KeyName.NameOf(vk) ?? "");
             return true;
         }
         if (vk is VK.LControl or VK.RControl or 0x11)
         {
             _ctrlDown = true;
             OweUp(vk);
+            TryModifierBinding(KeyModifiers.Ctrl, KeyName.NameOf(vk) ?? "", "ctrl", "lctrl", "rctrl");
             return true;
         }
         if (vk is VK.LShift or VK.RShift or 0x10)
         {
             _shiftDown = true;
             OweUp(vk);
+            TryModifierBinding(KeyModifiers.Shift, KeyName.NameOf(vk) ?? "", "shift", "lshift", "rshift");
             return true;
         }
 

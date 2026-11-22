@@ -46,6 +46,22 @@ public sealed class SmoothScrollService : IDisposable
     private long _smoothCount;
     private long _sentPixels;
 
+    /* ---- 诊断计数：为什么没平滑 ----
+     * 滚轮是整机最高频的事件之一，不能每次都写日志（会拖垮钩子、还可能被系统摘钩）。
+     * 这里只累加计数，由 --scroll-probe / 设置页状态行按需读取。 */
+    private long _rejectedInjected;
+    private long _rejectedDisabled;
+    private long _rejectedBinding;
+    private long _rejectedRule;
+    private long _rejectedTouchpad;
+
+    /// <summary>诊断：被判定为"本程序自己注入"而放行的次数。</summary>
+    public long RejectedInjected => Interlocked.Read(ref _rejectedInjected);
+    public long RejectedDisabled => Interlocked.Read(ref _rejectedDisabled);
+    public long RejectedBinding => Interlocked.Read(ref _rejectedBinding);
+    public long RejectedRule => Interlocked.Read(ref _rejectedRule);
+    public long RejectedTouchpad => Interlocked.Read(ref _rejectedTouchpad);
+
     public SmoothScrollService(Func<AppSettings> settings) => _settings = settings;
 
     /// <summary>
@@ -115,26 +131,31 @@ public sealed class SmoothScrollService : IDisposable
     /// </summary>
     public bool OnWheel(int delta, bool injected, bool horizontal)
     {
-        if (injected || delta == 0) return false;
+        if (injected) { Interlocked.Increment(ref _rejectedInjected); return false; }
+        if (delta == 0) return false;
 
         AppSettings settings;
         try { settings = _settings(); } catch { return false; }
         if (Suspended) return false;
 
         var o = settings.Scroll ?? new ScrollOptions();
-        if (!o.Enabled) return false;
+        if (!o.Enabled) { Interlocked.Increment(ref _rejectedDisabled); return false; }
 
-        if (WheelBindingHeld is { } bound && bound(delta > 0 ? 1 : -1)) return false;
+        if (WheelBindingHeld is { } bound && bound(delta > 0 ? 1 : -1))
+        {
+            Interlocked.Increment(ref _rejectedBinding);
+            return false;
+        }
 
         string app = ForegroundApp();
         var rule = FindRule(settings.ScrollApps, app);
-        if (rule is { Enabled: false }) return false;
+        if (rule is { Enabled: false }) { Interlocked.Increment(ref _rejectedRule); return false; }
 
         if (!horizontal)
         {
             /* 触摸板/精密滚轮：delta 不是 120 的整数倍，事件又密又碎。
              * 交给系统原样处理，手感本来就连续。 */
-            if (o.IgnoreTouchpad && Math.Abs(delta) < 120) return false;
+            if (o.IgnoreTouchpad && Math.Abs(delta) < 120) { Interlocked.Increment(ref _rejectedTouchpad); return false; }
 
             /* Shift+滚轮 = 横向。Windows 的惯例是"上滚 = 往左"，
              * 所以换算成横向时要取反，否则方向感是反的。 */
@@ -162,7 +183,11 @@ public sealed class SmoothScrollService : IDisposable
         if (Math.Abs(pixels) < 0.01) return false;
 
         Enqueue(pixels, horizontal, duration, scale);
-        Interlocked.Increment(ref _smoothCount);
+
+        /* 只记第一次：滚轮是高频事件，每次写日志会拖慢钩子（还可能被系统摘钩）。
+         * 有这一行，"开了没效果"到底是没接管、还是注入了没反应，一眼能分清。 */
+        if (Interlocked.Increment(ref _smoothCount) == 1)
+            CoreLog.Info($"[平滑滚动] 首次接管滚轮：delta={delta} 目标={pixels:0}px 时长={duration:0}ms 加速度={_accel:0.##} 前台={app}");
         return true;
     }
 
@@ -262,8 +287,17 @@ public sealed class SmoothScrollService : IDisposable
     private static void Send(int delta, bool horizontal)
     {
         if (SendForTest is { } spy) { spy(delta, horizontal); return; }
-        InputSender.WheelDelta(delta, horizontal);
+        if (!InputSender.WheelDelta(delta, horizontal))
+        {
+            /* SendInput 失败最常见的原因是前台窗口权限更高（UIPI）。
+             * 只记第一次：否则每个动画帧都会刷一行，日志会炸。 */
+            if (Interlocked.Increment(ref _injectionFailures) == 1)
+                CoreLog.Warn("[平滑滚动] 注入滚轮失败（前台程序权限更高时会被系统拦截），后续同类失败不再记录");
+        }
     }
+
+    private static long _injectionFailures;
+    public long InjectionFailures => Interlocked.Read(ref _injectionFailures);
 
     private void StopTimerLocked()
     {

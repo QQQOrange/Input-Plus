@@ -8,6 +8,7 @@
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Brush.WindowGradient}"
         FontFamily="{StaticResource Font.Ui}"
+        Foreground="{DynamicResource Brush.TextPrimary}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         PreviewKeyDown="OnWindowPreviewKeyDown">

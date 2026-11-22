@@ -1158,9 +1158,9 @@ public static class InputSender
     /// Chromium 系与 UWP 的 ScrollViewer 都按比例累加，所以 37、-12 这种小 delta
     /// 也能滚出平滑的一段。老式窗口会把它按格取整，这类程序里平滑会退化成整格。
     /// </summary>
-    public static void WheelDelta(int delta, bool horizontal = false)
+    public static bool WheelDelta(int delta, bool horizontal = false)
     {
-        if (delta == 0) return;
+        if (delta == 0) return true;
         var input = new INPUT
         {
             type = INPUT_MOUSE,
@@ -1174,7 +1174,7 @@ public static class InputSender
                 },
             },
         };
-        Send(input);
+        return Send(input);
     }
 
     public static void Click(bool right = false)

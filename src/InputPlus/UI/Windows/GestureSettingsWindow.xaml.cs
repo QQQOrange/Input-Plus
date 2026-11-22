@@ -55,8 +55,5 @@ public partial class GestureSettingsWindow : Window
     /// <summary>渲染用：滚到设置卡片的最底下，拍参数卡尾部。</summary>
     internal void ScrollOptionsToEndForRender() => Options.ScrollToEndForRender();
 
-    /// <summary>出图用：滚到「手势美化」卡。</summary>
-    internal void ScrollOptionsToBeautyForRender() => Options.ScrollToBeautyForRender();
-
     private void OnClose(object sender, RoutedEventArgs e) => Close();
 }

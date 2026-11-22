@@ -207,6 +207,12 @@
                                   ScrollChanged="OnFileScrollChanged">
                         <StackPanel x:Name="FileScrollContent">
 
+                            <!-- 文件对话框浮层：第三方程序弹「打开 / 保存」时，在对话框下沿浮出一条 qbar 风格的搜索栏。
+                                 这张卡只管配置；真正的浮层由 FileDialogBarService 按总开关/类型/进程三重判定后挂出，
+                                 所以这里的开关都必须在“判定阶段”生效，关掉就不会建窗口。
+                                 浮条菜单里的「设置」会直接把这一卡滚进视野（见 ScrollToFileDialogBar）。 -->
+                            
+
                             <!-- 索引与后端 -->
                             <Border x:Name="CardBackend" Style="{StaticResource Card}" Padding="18,16">
                                 <StackPanel>
@@ -560,7 +566,240 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
-                        </StackPanel>
+
+                            <!-- 搜索前建议：Qbar 唤出、还没打字时那组「最近文件」。
+                                 放在「文件搜索」页而不是右栏：它和过滤器/优先级一样属于
+                                 「搜什么、怎么排」，而且选项多到右栏塞不下。 -->
+                            <Border x:Name="CardSuggestions" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '搜索前建议'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T 'Qbar 唤出后、还没输入时列出最近用过的文件 / 文件夹 / 应用；一打字就让位给搜索结果。来源在后台线程采集，首屏先读缓存。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <CheckBox x:Name="SgShowBox" Content="{loc:T '启用搜索前建议'}"
+                                              Style="{StaticResource CheckBox.Text}" Click="OnSuggestionsChanged"
+                                              ToolTip="{loc:T '关掉后空态与改造前完全一致：只有老的「最近打开」+ 提示命令。'}" />
+
+                                    <TextBlock Text="{loc:T '来源（关掉的来源不采集；目录不存在时自动计 0，不报错）'}"
+                                               Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="8" Padding="10,6">
+                                        <StackPanel>
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="210" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="1" Text="{loc:T '来源'}" Style="{StaticResource Text.Tertiary}" />
+                                                <TextBlock Grid.Column="2" Text="{loc:T '权重'}" Style="{StaticResource Text.Tertiary}" />
+                                                <TextBlock Grid.Column="3" Text="{loc:T '上次采集'}" Style="{StaticResource Text.Tertiary}" />
+                                            </Grid>
+
+                                            <!-- 来源行本身就是拖拽手柄：按住文字区域上下拖即可排序，
+                                                 不放任何"≡"之类的小图标。复选框区域留给勾选，不参与拖拽。 -->
+                                            <ItemsControl x:Name="SgSourceList"
+                                                          Background="Transparent"
+                                                          AllowDrop="True"
+                                                          PreviewMouseLeftButtonDown="OnSuggestionSourceMouseDown"
+                                                          PreviewMouseMove="OnSuggestionSourceMouseMove"
+                                                          DragOver="OnSuggestionSourceDragOver"
+                                                          Drop="OnSuggestionSourceDrop">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Height="30" Background="Transparent">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="70" />
+                                                                <ColumnDefinition Width="210" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <CheckBox Grid.Column="0" Tag="{Binding Id}"
+                                                                      IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                                                      Style="{StaticResource CheckBox.Text}"
+                                                                      Click="OnSuggestionSourceToggle"
+                                                                      VerticalAlignment="Center" />
+                                                            <TextBlock Grid.Column="1" Text="{Binding Label}"
+                                                                       Style="{StaticResource Text.Secondary}"
+                                                                       VerticalAlignment="Center" Margin="2,0,0,0"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                            <TextBlock Grid.Column="2" Text="{Binding Weight}"
+                                                                       Style="{StaticResource Text.Tertiary}"
+                                                                       VerticalAlignment="Center" />
+                                                            <TextBlock Grid.Column="3" Text="{Binding Status}"
+                                                                       Style="{StaticResource Text.Tertiary}"
+                                                                       VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <TextBlock Text="{loc:T '按住任意一行（复选框以外的区域）上下拖即可排序；Qbar 空态按这个顺序分组展示，不拖则按修改时间倒序。'}"
+                                                       Style="{StaticResource Text.Tertiary}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <TextBlock Text="{loc:T '显示与采集'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{loc:T '空态显示条数'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" Width="150" />
+                                        <TextBlock x:Name="SgCountValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="SgCountSlider" Minimum="0" Maximum="50" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnSuggestionsChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Text="{loc:T '候选硬上限'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" Width="150" />
+                                        <TextBlock x:Name="SgMaxValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="SgMaxSlider" Minimum="200" Maximum="5000" TickFrequency="100"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnSuggestionsChanged" />
+                                    <TextBlock Text="{loc:T '采集阶段最多收多少条再去重排序；超出的直接丢，避免大目录把后台线程拖死。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Text="{loc:T '采集时间预算'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" Width="150" />
+                                        <TextBlock x:Name="SgBudgetValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="SgBudgetSlider" Minimum="200" Maximum="5000" TickFrequency="100"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnSuggestionsBudgetChanged" />
+                                    <TextBlock Text="{loc:T '超过预算的来源提前收手；已经采到的照常展示，不阻塞启动器唤出。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                                    <TextBlock Text="{loc:T '文件类型与排除'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="{loc:T '只保留这些扩展名'}" Style="{StaticResource Text.Tertiary}" Margin="0,0,0,5" />
+                                            <TextBox x:Name="SgFilterBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center"
+                                                     ToolTip="{loc:T '分号或逗号分隔，留空 = 不过滤。例如 docx;pdf;xlsx'}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{loc:T '排除这些扩展名'}" Style="{StaticResource Text.Tertiary}" Margin="0,0,0,5" />
+                                            <TextBox x:Name="SgExtBox" Style="{StaticResource TextBox.Base}" MinHeight="34"
+                                                     VerticalContentAlignment="Center"
+                                                     ToolTip="{loc:T '默认 tmp;bak;log'}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button Content="{loc:T '应用过滤'}" Style="{StaticResource Button.Primary}" Click="OnSuggestionsApplyFilters" />
+                                        <Button Content="{loc:T '立即重新采集'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0"
+                                                Click="OnSuggestionsRefresh" />
+                                        <TextBlock Text="{loc:T '系统目录（Windows / Program Files / AppData 等）始终不采集；黑名单优先于一切规则。'}"
+                                                   Style="{StaticResource Text.Tertiary}" Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    </StackPanel>
+
+                                    <TextBlock Text="{loc:T '隐藏与还原'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{loc:T '隐藏热键'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBox x:Name="SgHotkeyBox" Width="150" Margin="10,0,0,0" Style="{StaticResource TextBox.Base}"
+                                                 InputMethod.IsInputMethodEnabled="False" />
+                                        <Button Content="{loc:T '应用'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0"
+                                                Click="OnSuggestionsApplyHotkey" />
+                                        <TextBlock Text="{loc:T '选中建议后按热键或右键「不建议此文件」即可隐藏。'}"
+                                                   Style="{StaticResource Text.Tertiary}" Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    </StackPanel>
+
+                                    <TextBlock Text="{loc:T '已隐藏的建议'}" Style="{StaticResource Text.Tertiary}" Margin="0,12,0,4" />
+                                    <ListBox x:Name="SgHiddenList" Height="96" Background="Transparent" BorderThickness="0" />
+                                    <TextBlock x:Name="SgHiddenEmpty" Text="{loc:T '还没有隐藏任何建议。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Button Content="{loc:T '还原选中'}" Style="{StaticResource Button.Ghost}" Click="OnSuggestionsUnhide" />
+                                        <Button Content="{loc:T '还原全部'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0"
+                                                Click="OnSuggestionsUnhideAll" />
+                                    </StackPanel>
+
+                                    <TextBlock x:Name="SgStatsText" Style="{StaticResource Text.Tertiary}" Margin="0,12,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
+
+<Border x:Name="FileDialogBarCard" Style="{StaticResource Card}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '文件对话框浮层'}" Style="{StaticResource Text.H3}" />
+                                    <TextBlock Text="{loc:T '别的程序弹出「打开 / 保存」对话框时，在对话框下沿浮出一条搜索栏；输入关键词、回车，文件就填回那个对话框。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,5,0,12" TextWrapping="Wrap" />
+
+                                    <CheckBox x:Name="FdEnabledBox" Content="{loc:T '启用文件对话框浮层'}"
+                                              Style="{StaticResource CheckBox.Text}" Click="OnFileDialogBarChanged"
+                                              ToolTip="{loc:T '关掉后卸载窗口监听和热键，任何对话框都不会浮出搜索栏，也不留后台轮询。'}" />
+
+                                    <TextBlock Text="{loc:T '什么时候显示'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <CheckBox x:Name="FdShowOnAppearBox" Content="{loc:T '对话框一出现就浮出'}"
+                                              Style="{StaticResource CheckBox.Text}" Click="OnFileDialogBarChanged" />
+                                    <CheckBox x:Name="FdShowOnHotkeyBox" Content="{loc:T '按热键才浮出（推荐，不打扰）'}"
+                                              Style="{StaticResource CheckBox.Text}" Margin="0,6,0,0" Click="OnFileDialogBarChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="{loc:T '显示热键'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBox x:Name="FdHotkeyBox" Width="150" Margin="10,0,0,0" Style="{StaticResource TextBox.Base}"
+                                                 InputMethod.IsInputMethodEnabled="False" />
+                                        <Button Content="{loc:T '应用'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Click="OnFileDialogApplyHotkey" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="FdHotkeyHint" Text="{loc:T '写法：Ctrl+Alt+F，修饰键可用 Ctrl / Shift / Alt / Win。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                                    <TextBlock Text="{loc:T '接管哪几类窗口'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <CheckBox x:Name="FdTypeFileBox" Content="{loc:T '文件对话框（打开 / 保存）'}"
+                                              Style="{StaticResource CheckBox.Text}" Click="OnFileDialogTypeChanged" />
+                                    <CheckBox x:Name="FdTypeFolderBox" Content="{loc:T '文件夹选择对话框'}"
+                                              Style="{StaticResource CheckBox.Text}" Margin="0,6,0,0" Click="OnFileDialogTypeChanged" />
+                                    <CheckBox x:Name="FdTypeExplorerBox" Content="{loc:T '资源管理器窗口（只占位，本次不浮出）'}"
+                                              Style="{StaticResource CheckBox.Text}" Margin="0,6,0,0" Click="OnFileDialogTypeChanged" />
+
+                                    <TextBlock Text="{loc:T '不回填的进程'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="FdProcessBox" Width="200" Style="{StaticResource TextBox.Base}"
+                                                 ToolTip="{loc:T '进程可执行文件名，例如 game.exe；不区分大小写。'}" />
+                                        <Button Content="{loc:T '添加'}" Style="{StaticResource Button.Ghost}" Margin="8,0,0,0" Click="OnFileDialogAddProcess" />
+                                        <Button Content="{loc:T '删除选中'}" Style="{StaticResource Button.Ghost}" Margin="4,0,0,0" Click="OnFileDialogRemoveProcess" />
+                                    </StackPanel>
+                                    <ListBox x:Name="FdProcessList" Height="84" Margin="0,8,0,0" Background="Transparent" BorderThickness="0" />
+                                    <TextBlock Text="{loc:T '列在这里的程序弹对话框时不会浮出搜索栏；别的程序不受影响。'}"
+                                               Style="{StaticResource Text.Tertiary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+
+                                    <TextBlock Text="{loc:T '回填方式'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                                    <CheckBox x:Name="FdUiaBox" Content="{loc:T '优先用 UI Automation 写入文件名框（失败自动退回键盘 + 剪贴板）'}"
+                                              Style="{StaticResource CheckBox.Text}" Click="OnFileDialogBarChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,14,0,6">
+                                        <TextBlock Text="{loc:T '最多显示条数'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FdMaxValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="FdMaxSlider" Minimum="20" Maximum="500" TickFrequency="10"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnFileDialogBarChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
+                                        <TextBlock Text="{loc:T '浮层高度'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FdHeightValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="FdHeightSlider" Minimum="40" Maximum="48" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnFileDialogBarChanged" />
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,6">
+                                        <TextBlock Text="{loc:T '兜底轮询间隔'}" Style="{StaticResource Text.Secondary}" VerticalAlignment="Center" />
+                                        <TextBlock x:Name="FdPollValue" Style="{StaticResource Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <Slider x:Name="FdPollSlider" Minimum="0" Maximum="2000" TickFrequency="100"
+                                            IsSnapToTickEnabled="True" ValueChanged="OnFileDialogBarChanged" />
+                                    <TextBlock Text="{loc:T '窗口事件偶发丢失时用低频顶层枚举补发现；设成 0 就只靠窗口事件，完全不轮询。'}"
+                                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                                <CheckBox x:Name="FdFollowMetricsBox" Content="{loc:T '记录跟随度量（排查拖动滞后时打开）'}"
+                                          Style="{StaticResource CheckBox.Text}" Margin="0,14,0,0"
+                                          Click="OnFileDialogBarChanged"
+                                          ToolTip="{loc:T '每秒往日志写一行：事件→摆位的 p50/p99 耗时、与对话框底边的像素误差、几何重算次数。默认关，关着不产生日志。'}" />
+                                <TextBlock Text="{loc:T '拖动时浮条只挪位置、不改尺寸；几何（宽度/列表高/翻转）只在尺寸变化或停手 200ms 后重算一次。'}"
+                                           Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                                </StackPanel>
+                            </Border>                        </StackPanel>
                     </ScrollViewer>
                 </Grid>
             </Grid>
@@ -688,6 +927,19 @@
                         </StackPanel>
                         <Button Content="{loc:T '恢复默认外观'}" Style="{StaticResource Button.Ghost}" HorizontalAlignment="Left"
                                 Margin="-10,10,0,0" Click="OnResetAppearance" />
+
+                        <!-- 面板位置：直接拖面板空白处就能挪，松手即记住；
+                              这里只显示当前是不是自定义过，并提供一键回默认。 -->
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <TextBlock Text="{loc:T '面板位置'}" Style="{StaticResource Text.Secondary}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="PositionValue" Style="{StaticResource Text.Tertiary}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="{loc:T '拖动面板空白处（不要按在输入框、结果行、按钮上）就能挪位置，松手即记住，下次唤出还在那儿。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                        <Button Content="{loc:T '恢复默认位置'}" Style="{StaticResource Button.Ghost}"
+                                HorizontalAlignment="Left" Margin="-10,8,0,0" Click="OnResetPosition" />
                     </StackPanel>
                 </Border>
 
@@ -742,6 +994,8 @@
                                    Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
+
+
             </StackPanel>
         </ScrollViewer>
     </Grid>

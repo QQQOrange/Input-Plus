@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using InputPlus.Core.Input;
@@ -17,6 +17,27 @@ namespace InputPlus;
 /// </summary>
 public static partial class SelfTest
 {
+    /// <summary>
+    /// 分组里的两条 UI 规则（用户反馈的「删除按钮是灰的」「新增不在当前分组」）：
+    /// 抽成纯函数后在这里钉住，避免以后又被改回去。
+    /// </summary>
+    private static void TestHotstringGroupRules()
+    {
+        Check("分组：没选中时删除/移动不可用", !UI.Views.HotstringView.CanActOnSelection(0));
+        Check("分组：选中 1 条可用", UI.Views.HotstringView.CanActOnSelection(1));
+        Check("分组：多选保持可用", UI.Views.HotstringView.CanActOnSelection(5));
+
+        CheckEqual("分组：在「全部」里新增落到未分组",
+            UI.Views.HotstringView.ResolveNewGroup(true, null, "工作"), "");
+        CheckEqual("分组：在「未分组」里新增仍是未分组",
+            UI.Views.HotstringView.ResolveNewGroup(true, "", "工作"), "");
+        CheckEqual("分组：在「工作」里新增落到工作",
+            UI.Views.HotstringView.ResolveNewGroup(true, "工作", null), "工作");
+        CheckEqual("分组：选中项在刷新瞬间丢了，退回上一次的分组",
+            UI.Views.HotstringView.ResolveNewGroup(false, null, "工作"), "工作");
+        CheckEqual("分组：连上一次都没有就落到未分组",
+            UI.Views.HotstringView.ResolveNewGroup(false, null, null), "");
+    }
     private static void TestSnippetPrefixes()
     {
         /* ① 折叠：全角符号折成半角，长度必须 1:1（Match 靠下标判词边界）。 */

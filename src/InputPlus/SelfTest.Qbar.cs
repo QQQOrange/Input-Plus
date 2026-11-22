@@ -1760,6 +1760,69 @@ public static partial class SelfTest
         Check("找不到过滤器时给明确提示",
             notes.Any(n => n.Contains("找不到这个过滤器")), string.Join(" | ", notes));
 
+        /* ④ 取不到选区时**不能再原地等 8 秒**（用户报的"直接搜索一按就卡死"）。
+         *
+         * 旧实现在动作队列线程上 Thread.Sleep 轮询剪贴板，那 8 秒里所有快捷键
+         * 全部排队 —— 用户看到的就是"整个软件死了"。现在改成挂一条待办立即返回，
+         * 用户按下 Ctrl+C 之后由剪贴板监听把内容接上继续跑。
+         * 这里把 ManualCopyWaitForTest 显式置空，走的就是那条真路径。 */
+        requests.Clear();
+        notes.Clear();
+        ctx.CaptureTextForTest = () => "";
+        ctx.ManualCopyWaitForTest = null;
+
+        var stopwatch = Stopwatch.StartNew();
+        ok = cat.Invoke("fsearch:builtin.doc", "");
+        stopwatch.Stop();
+
+        Check("取不到选区时立即返回（不再卡住动作队列）",
+            ok && stopwatch.ElapsedMilliseconds < 500, stopwatch.ElapsedMilliseconds + "ms");
+        Check("取不到选区时不急着打开面板", requests.Count == 0,
+            string.Join(",", requests.Select(r => r.Id)));
+        /* 提示文案会按前台程序/权限分三层（"没读到选中文字（xxx.exe）。请按一下 Ctrl+C…"），
+         * 所以这里只认最关键的那半句：告诉用户按 Ctrl+C。 */
+        Check("取不到选区时提示按 Ctrl+C",
+            notes.Any(n => n.Contains("Ctrl+C")), string.Join(" | ", notes));
+
+        // 用户照提示按了 Ctrl+C：剪贴板监听把内容送回来，这次搜索接着做完
+        ctx.ClipboardCaptured("  报告.docx  ");
+        Check("按下 Ctrl+C 之后继续这次文件搜索",
+            requests.Count == 1 && requests[0].Id == "builtin.doc" && requests[0].Query == "报告.docx",
+            string.Join(",", requests.Select(r => r.Id + "|" + (r.Query ?? "null"))));
+
+        // 待办只消费一次：再复制别的内容不该又开一次面板
+        ctx.ClipboardCaptured("另一段文字");
+        Check("待办被消费后不会重复触发", requests.Count == 1,
+            string.Join(",", requests.Select(r => r.Id + "|" + (r.Query ?? "null"))));
+
+        /* ⑤ 搜索动作（搜索引擎那条线）共用同一段取词：同样要立刻返回。 */
+        notes.Clear();
+        string? searchedUrl = null;
+        ActionContext.OpenUrlInterceptForTest = u => searchedUrl = u;
+        try
+        {
+            ctx.CaptureTextForTest = () => "";
+            ctx.ManualCopyWaitForTest = null;
+
+            stopwatch.Restart();
+            ok = ctx.SearchSelection("bd");
+            stopwatch.Stop();
+
+            Check("搜索动作取不到选区时也立即返回",
+                ok && stopwatch.ElapsedMilliseconds < 500, stopwatch.ElapsedMilliseconds + "ms");
+            Check("搜索动作没拿到词就不开浏览器", searchedUrl == null, searchedUrl ?? "(null)");
+
+            ctx.ClipboardCaptured("猫");
+            /* 网址里的搜索词是 URL 编码过的（%E7%8C%AB），比对前先解回来 */
+            Check("按下 Ctrl+C 之后接着搜这个词",
+                searchedUrl != null && Uri.UnescapeDataString(searchedUrl).Contains("猫", StringComparison.Ordinal),
+                searchedUrl ?? "(null)");
+        }
+        finally
+        {
+            ActionContext.OpenUrlInterceptForTest = null;
+        }
+
         ctx.CaptureTextForTest = null;
     }
 

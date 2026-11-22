@@ -74,8 +74,49 @@ public sealed partial class AppHost
         return IntPtr.Zero;
     }
 
+    /// <summary>
+    /// 浮条菜单 →「设置」：打开 Qbar 面板页，并直接滚到「文件对话框浮层」这张卡。
+    ///
+    /// 为什么不是只 <c>ShowMainWindow("qbar")</c>：那一页很长（左边是条目表，右边是编辑+外观），
+    /// 浮层设置在最下面 —— 窗口是打开了，可用户盯着浮条看，屏幕上没有任何"设置"的样子，
+    /// 看起来就是"点了没反应"。滚到卡片这一步在页面 Loaded 之后做，否则 ScrollViewer
+    /// 还没量出高度，BringIntoView 会滚到 0。
+    /// </summary>
+    private void ShowFileDialogSettings()
+    {
+        CoreLog.Info("[浮条] 菜单动作：设置（打开文件对话框设置）");
+        ShowMainWindow("qbar");
+        try
+        {
+            /* 滚到卡片这一步要等页面**量完**：只是 BeginInvoke(Loaded) 的话，
+             * ScrollViewer 的 extent 还是 0，BringIntoView 会滚到顶上 ——
+             * 用户看到的就是"窗口开了，但没到设置那一块"。这里在 ApplicationIdle
+             * 再滚，并补一次（第一次可能正好赶上页面创建）。 */
+            ScrollToFileDialogCard(0);
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "安排滚动到文件对话框设置"); }
+    }
+
+    private void ScrollToFileDialogCard(int attempt)
+    {
+        _dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                _main?.ScrollToFileDialogSettings();
+                if (attempt < 1) ScrollToFileDialogCard(attempt + 1);
+            }
+            catch (Exception ex) { CoreLog.Swallow(ex, "滚动到文件对话框设置"); }
+        }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+    }
+
     public void ShowMainWindow(string? page = null)
     {
+        /* 本进程的窗口要到前台了：浮条（文件对话框搜索栏）先收掉。
+         * 前台钩子带 SKIPOWNPROCESS，收不到"本进程窗口变前台"，不主动收就会一直挂着。 */
+        try { FileDialogBar?.HideForOwnWindow(); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "显示主窗口前收起浮条"); }
+
         _dispatcher.BeginInvoke(() =>
         {
             if (_main == null)
@@ -95,6 +136,18 @@ public sealed partial class AppHost
             _main.Topmost = true;
             _main.Topmost = false;
             _main.Focus();
+
+            /* 从浮条菜单 / 托盘 / 热键点过来时，本进程不是前台进程，
+             * WPF 的 Activate() 常常只是闪一下任务栏就失败 —— 用户看到的就是
+             * "点了没反应"。这里补一次带 AttachThreadInput 的前台抢占（见
+             * WindowService.Activate），只记日志、不弹任何提示。 */
+            try
+            {
+                var hwndMain = new System.Windows.Interop.WindowInteropHelper(_main).Handle;
+                bool ok = hwndMain != IntPtr.Zero && Core.Windows.WindowService.Activate(hwndMain);
+                CoreLog.Info($"[主窗口] 显示 {page ?? "(默认页)"}：抢前台={ok}");
+            }
+            catch (Exception ex) { CoreLog.Swallow(ex, "主窗口抢前台"); }
         });
     }
 

@@ -66,8 +66,90 @@ public partial class GestureOptionsView : UserControl
             UpdateColorSwatches();
             SyncWg2Controls(opts);
             SyncLabelStyle(_host.Settings.GestureLabel);
+            SyncMiddleMenu(_host.Settings);
         }
         finally { _loading = false; }
+    }
+
+    // ─────────────────── 中键菜单（v1.3.16） ───────────────────
+
+    /// <summary>把中键菜单那三个控件灌成当前配置（只读配置，不触发保存）。</summary>
+    private void SyncMiddleMenu(AppSettings s)
+    {
+        MiddleMenuEnabledBox.IsChecked = s.MiddleClickMenuEnabled;
+
+        /* 下拉每次重建：菜单管理里加了/删了菜单，回到这一页就该看到最新的。
+         * 重建期间 _loading 还是 true（Sync 的外层），所以 SelectionChanged 不会写盘。 */
+        MiddleMenuPickBox.Items.Clear();
+        MiddleMenuPickBox.Items.Add(new ComboBoxItem
+        {
+            Content = Loc.T("内置：收藏 / 最近 / 命令 / 设置"),
+            Tag = "",
+        });
+        foreach (var menu in s.GestureMenus)
+        {
+            MiddleMenuPickBox.Items.Add(new ComboBoxItem
+            {
+                Content = menu.DisplayName,
+                Tag = menu.Id,
+            });
+        }
+
+        /* 指向的菜单可能已经被删了：这时下拉停在第一项（内置）。
+         * 不在这里顺手改配置 —— 用户只是打开设置页看一眼，不该被悄悄改掉值。 */
+        string wanted = (s.MiddleClickMenuId ?? "").Trim();
+        int index = 0;
+        for (int i = 1; i < MiddleMenuPickBox.Items.Count; i++)
+        {
+            if (MiddleMenuPickBox.Items[i] is ComboBoxItem item &&
+                string.Equals(item.Tag as string, wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                index = i;
+                break;
+            }
+        }
+        MiddleMenuPickBox.SelectedIndex = index;
+
+        var scope = MiddleMenuScope.ToScope(s.MiddleClickMenuScope);
+        MiddleMenuScopeDesktopRadio.IsChecked = scope == MiddleClickMenuScope.Desktop;
+        MiddleMenuScopeAllRadio.IsChecked = scope == MiddleClickMenuScope.DesktopAndExplorer;
+
+        UpdateMiddleMenuAvailability();
+    }
+
+    /// <summary>总开关关着时，下面两项变灰 —— 免得用户以为"选了菜单却没反应"。</summary>
+    private void UpdateMiddleMenuAvailability()
+    {
+        bool on = MiddleMenuEnabledBox.IsChecked == true;
+        MiddleMenuPickBox.IsEnabled = on;
+        MiddleMenuScopeDesktopRadio.IsEnabled = on;
+        MiddleMenuScopeAllRadio.IsEnabled = on;
+    }
+
+    private void OnMiddleMenuToggleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _host == null) return;
+        _host.Settings.MiddleClickMenuEnabled = MiddleMenuEnabledBox.IsChecked == true;
+        UpdateMiddleMenuAvailability();
+        _host.SaveSettings();
+    }
+
+    private void OnMiddleMenuPicked(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || _host == null) return;
+        _host.Settings.MiddleClickMenuId =
+            (MiddleMenuPickBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+        _host.SaveSettings();
+    }
+
+    private void OnMiddleMenuScopeChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _host == null) return;
+        _host.Settings.MiddleClickMenuScope = MiddleMenuScope.ToStorage(
+            MiddleMenuScopeDesktopRadio.IsChecked == true
+                ? MiddleClickMenuScope.Desktop
+                : MiddleClickMenuScope.DesktopAndExplorer);
+        _host.SaveSettings();
     }
 
     /// <summary>渲染工具用：滚回顶上（内容现在分三张卡，没有折叠面板了）。</summary>
@@ -76,8 +158,6 @@ public partial class GestureOptionsView : UserControl
     /// <summary>渲染用：滚到卡片底部（参数卡的最后几行）。</summary>
     internal void ScrollToEndForRender() => OptionsScroll.ScrollToEnd();
 
-    /// <summary>出图用：把「手势美化」卡滚进可视区，单独拍一张。</summary>
-    internal void ScrollToBeautyForRender() => BeautyCard.BringIntoView();
 
     /// <summary>
     /// 切换「手势作用目标」。只改一个字段：匹配哪个程序、执行前要不要切窗口
@@ -130,34 +210,9 @@ public partial class GestureOptionsView : UserControl
         /* 笔画平滑：只影响画出来的那条线，不影响识别（点列照旧）。 */
         SmoothStrokesBox.IsChecked = o.SmoothStrokes;
 
-        /* 美化：开关三项直接回填，强度按 id 找下标，过渡时长夹到滑杆量程。 */
-        BeautifyOnCreateBox.IsChecked = o.BeautifyOnCreate;
-        BeautifyOnMatchBox.IsChecked = o.BeautifyOnMatch;
-        BeautifyBackfillBox.IsChecked = o.BeautifyBackfill;
-        BeautifyLevelBox.SelectedIndex = StrokeBeautyLevels.Parse(o.BeautifyLevel) switch
-        {
-            StrokeBeautyLevel.Light => 0,
-            StrokeBeautyLevel.Strong => 2,
-            _ => 1,
-        };
-        BeautifyTransitionSlider.Value = Math.Clamp(o.BeautifyTransitionMs, 0, 600);
-        BeautifyTransitionText.Text = TransitionLabel((int)Math.Round(BeautifyTransitionSlider.Value));
-
         UpdateWg2Swatches();
-        UpdateBeautyStats(o);
     }
 
-    /// <summary>
-    /// 美化卡片顶部那行统计：一眼看出到底有多少条手势真的用上了标准图形。
-    /// 用户报「美化没生效」时，先看这一行就能分清是算法没过校验还是链路没跑。
-    /// </summary>
-    private void UpdateBeautyStats(GestureOptions o)
-    {
-        var (beautified, total) = GestureBeauty.Count(_host?.Settings.Gestures);
-        BeautyStatsText.Text = total <= 0
-            ? Loc.T("还没有手绘手势：录一笔就会按当前档位自动整理。")
-            : Loc.F("已有 {0}/{1} 条手绘手势使用标准图形，其余保留手绘形状。", beautified, total);
-    }
 
     /// <summary>
     /// 六个外观勾选共用：Tag 就是字段名。
@@ -179,9 +234,6 @@ public partial class GestureOptionsView : UserControl
             case "ShowGestureName": o.ShowGestureName = on; break;
             case "FadeOutExecuted": o.FadeOutExecuted = on; break;
             case "SmoothStrokes": o.SmoothStrokes = on; break;
-            case "BeautifyOnCreate": o.BeautifyOnCreate = on; break;
-            case "BeautifyOnMatch": o.BeautifyOnMatch = on; break;
-            case "BeautifyBackfill": o.BeautifyBackfill = on; break;
             case "ShowStartTimeoutIndicator": o.ShowStartTimeoutIndicator = on; break;
             case "DisableInFullscreen": o.DisableInFullscreen = on; break;
             case "PrefWindowTopmost":
@@ -206,96 +258,6 @@ public partial class GestureOptionsView : UserControl
         }
         else return;
         _host.SaveSettings();
-    }
-
-    // ─────────────────── 手势美化（任务四） ───────────────────
-
-    /* 美化只在创建时算，触发时只查模板。这里只有两处会真的重算：
-     * 「重新美化」按钮，和改强度（改完不重算等于没改，用户会以为功能坏了）。 */
-
-    /// <summary>美化强度：Tag 就是 StrokeBeautyLevels 里那套 id，和配置存的是同一套值。</summary>
-    private void OnBeautifyLevelChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        string id = (BeautifyLevelBox.SelectedItem as ComboBoxItem)?.Tag as string ?? StrokeBeautyLevels.IdMedium;
-        if (!StrokeBeautyLevels.IsKnown(id)) id = StrokeBeautyLevels.IdMedium;
-        var o = _host.Settings.GestureOptions;
-        if (string.Equals(o.BeautifyLevel, id, StringComparison.Ordinal)) return;
-        o.BeautifyLevel = id;
-        _host.SaveSettings();
-        /* 换了强度就地重算：只写配置不重算的话，用户点完下拉框看不出任何变化，
-         * 现象就是"调整功能没反应"。算不动或认不出来的照旧保留原样。 */
-        var (total, plain, lower, kept) = RebuildAllBeauty("强度变化");
-        if (total > 0)
-            _host.Notify(Loc.F("已按「{0}」档重算 {1} 条：{2} 条已规整、{3} 条按低一档整理、{4} 条保留原样。",
-                BeautifyLevelName(id), total, plain, lower, kept));
-    }
-
-    private static string BeautifyLevelName(string id) => StrokeBeautyLevels.Parse(id) switch
-    {
-        StrokeBeautyLevel.Light => Loc.T("轻"),
-        StrokeBeautyLevel.Strong => Loc.T("强"),
-        _ => Loc.T("中"),
-    };
-
-    /// <summary>替换过渡时长：0 表示不做过场动画，直接换成标准图形再执行动作。</summary>
-    private void OnBeautifyTransitionChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        int ms = (int)Math.Round(Math.Clamp(e.NewValue, 0, 600));
-        BeautifyTransitionText.Text = TransitionLabel(ms);
-        if (_loading || _host == null) return;
-        _host.Settings.GestureOptions.BeautifyTransitionMs = ms;
-        _host.SaveSettings();
-    }
-
-    private static string TransitionLabel(int ms) =>
-        ms <= 0 ? Loc.T("立即") : Loc.F("{0} 毫秒", ms);
-
-    /// <summary>
-    /// 按当前强度把存量手绘手势重算一遍。只改模板（Beauty），
-    /// Path / Pattern / 动作都不动；整理后认不出来的那条保留原样并计数。
-    /// </summary>
-    private void OnRebuildAllBeauty(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        var (total, plain, lower, kept) = RebuildAllBeauty("批量重新美化");
-        if (total == 0)
-        {
-            _host.Notify(Loc.T("没有需要美化的手绘手势。"));
-            return;
-        }
-        _host.Notify(Loc.F("重新美化 {0} 条：{1} 条已规整、{2} 条按低一档整理、{3} 条保留原样。",
-            total, plain, lower, kept));
-    }
-
-    /// <summary>
-    /// 按当前强度把存量手绘手势重算一遍并落盘，返回 (总数, 规整, 降档, 保留原样)。
-    /// 「重新美化」按钮和「换强度」都走这一份，两条路径的结果必须一样。
-    /// </summary>
-    private (int Total, int Plain, int Lower, int Kept) RebuildAllBeauty(string origin)
-    {
-        var opts = _host!.Settings.GestureOptions;
-        int total = 0, plain = 0, lower = 0, kept = 0;
-        foreach (var g in _host.Settings.Gestures)
-        {
-            if (g == null || !string.Equals(g.Kind, "stroke", StringComparison.Ordinal) || !g.HasPath) continue;
-            total++;
-            try
-            {
-                var result = GestureBeauty.Rebuild(g, opts, origin);
-                if (result == null || !result.Beautified) kept++;
-                else if (result.Fallback) lower++;
-                else plain++;
-            }
-            catch (Exception ex)
-            {
-                CoreLog.Swallow(ex, origin);
-                kept++;
-            }
-        }
-        _host.SaveSettings();
-        UpdateBeautyStats(opts);
-        return (total, plain, lower, kept);
     }
 
     /// <summary>两个色块：轨迹（已识别 / 未识别）。名称的颜色是另一组字段，由 OnPickLabelColor 处理。</summary>

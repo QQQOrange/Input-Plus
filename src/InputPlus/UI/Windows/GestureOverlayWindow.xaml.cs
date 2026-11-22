@@ -56,10 +56,10 @@ public sealed partial class GestureOverlayWindow : Window
     private readonly GestureTrail _trail = new();
     private long _lastPaintAt;
 
-    /* 「匹配后替换」的过渡令牌：每次换图 / 清轨迹都 +1。
-     * 旧动画的 Completed 回来时令牌对不上就什么都不做 —— 否则一次换图的尾巴
-     * 会把用户刚开始画的下一笔（或者刚显示的名称框）一起擦掉。 */
-    private int _replaceToken;
+    /* 起手后的第一帧必须画出去：节流按 16ms 算，而第一拍常常落在节流窗口里
+     * （起手 → 第一次移动只隔 8ms），于是"点了、手动了、屏幕还是空的"。
+     * 这一位只对每一笔的第一次 AddPoint 生效。 */
+    private bool _firstPaintPending;
 
     /// <summary>重绘最小间隔（<c>B/X.cs:119</c>：距上次画满 16ms 才重来一次）。</summary>
     private const int PaintIntervalMs = 16;
@@ -142,16 +142,6 @@ public sealed partial class GestureOverlayWindow : Window
         TrailBorder.Visibility = _opts.ShowPathBorder ? Visibility.Visible : Visibility.Collapsed;
         TrailShadow.Stroke = new SolidColorBrush(Color.FromArgb(A(0.075), 0, 0, 0));
         TrailShadow.StrokeThickness = width + 4;
-
-        /* 模板层与轨迹层**共用**同一套笔（颜色/粗细/描边开关都照抄）：
-         * 匹配后替换时只有形状变，粗细和配色不许跳 —— 那正是"美化"最容易被看穿的地方。 */
-        TemplatePath.Stroke = Trail.Stroke;
-        TemplatePath.StrokeThickness = Trail.StrokeThickness;
-        TemplateBorderPath.Stroke = TrailBorder.Stroke;
-        TemplateBorderPath.StrokeThickness = TrailBorder.StrokeThickness;
-        TemplateBorderPath.Visibility = TrailBorder.Visibility;
-        TemplateShadowPath.Stroke = TrailShadow.Stroke;
-        TemplateShadowPath.StrokeThickness = TrailShadow.StrokeThickness;
     }
 
     private void TrailMainSet(Color color, byte alpha, double width)
@@ -225,12 +215,27 @@ public sealed partial class GestureOverlayWindow : Window
         _opts = opts ?? new GestureOptions();
         _button = button;
         ClearTrail();
+        _firstPaintPending = true;
         TimeoutDot.Visibility = Visibility.Collapsed;
         LabelBox.Visibility = Visibility.Collapsed;
         ApplyPathColor(NormalColor());
         ApplyLabelStyle(executed: false);
         LabelBox.Opacity = 1.0;
         LabelBox.BeginAnimation(OpacityProperty, null);
+    }
+
+    /// <summary>
+    /// 预热：把窗口真正建出来、上一次屏，再藏回去。
+    ///
+    /// 为什么要有：<c>Show()</c> 要建 HWND + 首次布局合成，实测 30ms 上下；
+    /// 这笔钱以前是在"右键按下、第一笔手势已经开始了"的那一刻付的 ——
+    /// 手快的时候整条轨迹都画在还没上屏的窗口里，看起来就是"滑了没显示"。
+    /// 服务启动时在空闲优先级调一次，之后每笔起手只剩 SetWindowPos。
+    /// </summary>
+    public void WarmUp()
+    {
+        ShowPassive();
+        Hide();
     }
 
     /// <summary>
@@ -243,13 +248,12 @@ public sealed partial class GestureOverlayWindow : Window
         /* 采样没到 20px 也要动笔尖：只挪线头，不加采样点。
          * 以前这里直接 return，线就停在最后一个采样点上 ——
          * 20px 一格的"台阶"就是这么来的。 */
-        if (_trail.Add(px, py))
-        {
-            Repaint();
-            return;
-        }
-        _trail.Tail(px, py);
-        Repaint();
+        bool added = _trail.Add(px, py);
+        if (!added) _trail.Tail(px, py);
+
+        /* 这一笔的第一帧绕过 16ms 节流：否则起手那一下常常落在节流窗口里，
+         * 屏幕上要等到下一个 16ms 边界才有东西 —— 快划时就是"整笔都没显示"。 */
+        Repaint(_firstPaintPending);
     }
 
     public void ReplaceLast(double px, double py)
@@ -270,6 +274,10 @@ public sealed partial class GestureOverlayWindow : Window
         Trail.Data = geometry;
         TrailBorder.Data = geometry;
         TrailShadow.Data = geometry;
+
+        /* 直到真的有一条能画的线摆上去，才算"第一帧画过了"：
+         * 起手那一下只有 1 个点，几何是 null，屏幕上还是空的。 */
+        if (geometry != null) _firstPaintPending = false;
     }
 
     /// <summary>
@@ -278,8 +286,8 @@ public sealed partial class GestureOverlayWindow : Window
     /// </summary>
     public void ClearTrail()
     {
-        _replaceToken++;
         _trail.Clear();
+        _firstPaintPending = false;
         _lastPaintAt = 0;
         Trail.Data = null;
         TrailBorder.Data = null;
@@ -287,19 +295,6 @@ public sealed partial class GestureOverlayWindow : Window
         ResetOpacity(Trail);
         ResetOpacity(TrailBorder);
         ResetOpacity(TrailShadow);
-        ClearTemplate();
-    }
-
-    // ───────────────── 美化模板（匹配后替换，任务四） ─────────────────
-
-    private void ClearTemplate()
-    {
-        TemplatePath.Data = null;
-        TemplateBorderPath.Data = null;
-        TemplateShadowPath.Data = null;
-        ResetOpacity(TemplatePath);
-        ResetOpacity(TemplateBorderPath);
-        ResetOpacity(TemplateShadowPath);
     }
 
     private static void ResetOpacity(UIElement element)
@@ -307,143 +302,6 @@ public sealed partial class GestureOverlayWindow : Window
         element.BeginAnimation(OpacityProperty, null);
         element.Opacity = 1.0;
     }
-
-    /// <summary>
-    /// 匹配成功：把屏幕上的原始轨迹换成存档的美化模板（「匹配后替换」）。
-    ///
-    /// <paramref name="template"/> 是归一化坐标（0~1000，与 <see cref="MouseGesture.Beauty"/> 同口径）。
-    /// 这里把它按**当前这一笔的包围盒**等比摆回屏幕 —— 模板是在哪画都一样的标准图形，
-    /// 但用户刚才是画在这里的，替换后位置不能跳。
-    ///
-    /// <paramref name="transitionMs"/> &gt; 0 时做一次交叉淡入（轨迹 1→0、模板 0→1，
-    /// 同一时长、同一条缓动），0 表示立刻换完。
-    /// 返回实际用的过渡时长（0 = 已经换好了），调用方据此决定隔多久再执行动作。
-    /// </summary>
-    public int ReplaceTrailWithTemplate(IReadOnlyList<GestureMath.Pt>? template, int transitionMs)
-    {
-        if (template == null || template.Count < 2) return 0;
-        Geometry? geometry = BuildTemplateGeometry(template);
-        if (geometry == null) return 0;
-
-        TemplatePath.Data = geometry;
-        TemplateBorderPath.Data = geometry;
-        TemplateShadowPath.Data = geometry;
-
-        int ms = Math.Clamp(transitionMs, 0, 1000);
-        int token = ++_replaceToken;
-
-        if (ms <= 0)
-        {
-            FinishTemplateReplace();
-            return 0;
-        }
-
-        var easing = new QuadraticEase { EasingMode = EasingMode.EaseOut };
-        var duration = new Duration(TimeSpan.FromMilliseconds(ms));
-        var fadeIn = new DoubleAnimation(0.0, 1.0, duration) { EasingFunction = easing };
-        var fadeOut = new DoubleAnimation(1.0, 0.0, duration) { EasingFunction = easing };
-        fadeOut.Completed += (_, _) =>
-        {
-            if (token != _replaceToken) return;
-            FinishTemplateReplace();
-        };
-
-        TemplatePath.Opacity = 0;
-        TemplateBorderPath.Opacity = 0;
-        TemplateShadowPath.Opacity = 0;
-        TemplatePath.BeginAnimation(OpacityProperty, fadeIn);
-        TemplateBorderPath.BeginAnimation(OpacityProperty, fadeIn);
-        TemplateShadowPath.BeginAnimation(OpacityProperty, fadeIn);
-        Trail.BeginAnimation(OpacityProperty, fadeOut);
-        TrailBorder.BeginAnimation(OpacityProperty, fadeOut);
-        TrailShadow.BeginAnimation(OpacityProperty, fadeOut);
-        return ms;
-    }
-
-    /// <summary>过渡结束（或直接切换）：旧轨迹整条丢掉，模板留在屏幕上。</summary>
-    private void FinishTemplateReplace()
-    {
-        _replaceToken++;
-        _trail.Clear();
-        _lastPaintAt = 0;
-        Trail.Data = null;
-        TrailBorder.Data = null;
-        TrailShadow.Data = null;
-        ResetOpacity(Trail);
-        ResetOpacity(TrailBorder);
-        ResetOpacity(TrailShadow);
-        ResetOpacity(TemplatePath);
-        ResetOpacity(TemplateBorderPath);
-        ResetOpacity(TemplateShadowPath);
-    }
-
-    /// <summary>把归一化模板摆进"这一笔"的包围盒（DIP，画布坐标）。</summary>
-    private Geometry? BuildTemplateGeometry(IReadOnlyList<GestureMath.Pt> template)
-    {
-        double minX = double.MaxValue, minY = double.MaxValue;
-        double maxX = double.MinValue, maxY = double.MinValue;
-        foreach (var p in template)
-        {
-            if (p.X < minX) minX = p.X;
-            if (p.X > maxX) maxX = p.X;
-            if (p.Y < minY) minY = p.Y;
-            if (p.Y > maxY) maxY = p.Y;
-        }
-
-        double width = maxX - minX, height = maxY - minY;
-        if (width < 0.001 || height < 0.001) return null;
-
-        Rect box = TrailBox();
-        double scale = Math.Min(box.Width / width, box.Height / height);
-        if (!(scale > 0) || double.IsInfinity(scale)) return null;
-
-        double cx = box.Left + box.Width / 2;
-        double cy = box.Top + box.Height / 2;
-        double tx = (minX + maxX) / 2;
-        double ty = (minY + maxY) / 2;
-
-        var mapped = new List<Point>(template.Count);
-        foreach (var p in template)
-            mapped.Add(new Point(cx + (p.X - tx) * scale, cy + (p.Y - ty) * scale));
-
-        return GestureTrail.ToGeometry(mapped, point => point);
-    }
-
-    /// <summary>
-    /// 当前这一笔在画布上的包围盒（DIP）。某一轴几乎为零（横线/竖线）时
-    /// 把那一轴撑到 96 DIP，否则等比缩放会算出 0，模板直接缩成一个点。
-    /// </summary>
-    private Rect TrailBox()
-    {
-        var points = _trail.Build(smooth: false);
-        if (points.Count >= 2)
-        {
-            double minX = double.MaxValue, minY = double.MaxValue;
-            double maxX = double.MinValue, maxY = double.MinValue;
-            foreach (var point in points)
-            {
-                Point p = ToCanvas(point.X, point.Y);
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.Y > maxY) maxY = p.Y;
-            }
-
-            double w = Math.Max(maxX - minX, 1);
-            double h = Math.Max(maxY - minY, 1);
-            double cx = (minX + maxX) / 2;
-            double cy = (minY + maxY) / 2;
-            w = Math.Max(w, 96);
-            h = Math.Max(h, 96);
-            return new Rect(cx - w / 2, cy - h / 2, w, h);
-        }
-
-        /* 没有轨迹点（理论上走不到：替换总是发生在画完之后）→ 窗口正中一个方框。 */
-        double cw = Width > 1 ? Width : 800;
-        double ch = Height > 1 ? Height : 600;
-        return new Rect(cw / 2 - 100, ch / 2 - 100, 200, 200);
-    }
-
     private Point ToCanvasPointOf(Point device) => ToCanvas(device.X, device.Y);
 
     /// <summary>

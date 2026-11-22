@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
@@ -30,7 +31,7 @@ namespace InputPlus.UI;
 /// 线程模型：钩子回调在钩子线程，绘制/执行在界面线程。
 /// 共享状态用 <see cref="_gate"/> 保护，钩子回调里只做"记账 + BeginInvoke"。
 /// </summary>
-public sealed class GestureService : IDisposable
+public sealed partial class GestureService : IDisposable
 {
     private readonly AppHost _host;
     private readonly object _gate = new();
@@ -40,6 +41,20 @@ public sealed class GestureService : IDisposable
     private DispatcherTimer? _linger;
     /* 名称框淡出的第二段定时器：停留结束 → 开始淡出 → 淡完才清窗口。 */
     private DispatcherTimer? _fade;
+
+    /* ── 覆盖层的「这一笔」代号 ───────────────────────────────────
+     * 每次起手 +1。上一笔排的延迟收起（停留 / 淡出）回来时号对不上就作废。
+     * 少了这一层，连着划两下时上一笔的淡出定时器会在第二笔中途 Clear()+Hide()，
+     * 表现是"手势滑了，屏幕上一个像素都没有"，但动作其实执行了。 */
+    private int _hideEpoch;
+
+    /* 两个延迟收起定时器各自记着"我是哪一代排的队"。 */
+    private int _lingerEpoch;
+    private int _fadeEpoch;
+
+    /* 手势进行中每隔一会儿把覆盖层重新顶到最前（有些程序会把自己置顶压上来）。 */
+    private long _lastRaiseAt;
+    private const int RaiseIntervalMs = 200;
 
     private readonly List<GestureMath.Pt> _points = new();
     private GestureMath.Pt _start;
@@ -52,6 +67,19 @@ public sealed class GestureService : IDisposable
     private long _activeSince;
     private long _lastMoveAt;
     private bool _activeInjected;
+
+    /* 起笔那一刻前台是不是开始菜单 / 搜索（见 ShellOverlay）。
+     *
+     * 为什么要有：Win11 的开始菜单是 XAML 岛窗口，跑在 Z 序带 6；我们的轨迹窗是普通
+     * topmost WPF 窗口（带 0/1），于是"其实收到了指针、也在画"，但整条轨迹被开始菜单
+     * 盖得一点看不见 —— 用户报的"在开始菜单里划不出手势"就是这个。
+     * 指针一动就先收起浮层（_shellOverlayDismissed 保证只收一次），再重算作用目标，
+     * 否则动作会发给 SearchHost.exe，而不是下面那个真正想操作的窗口。
+     * 纯点击/按住不动不收：右键菜单还得在开始菜单里补发。 */
+    private volatile bool _shellOverlayUp;
+    private volatile bool _shellOverlayDismissed;
+    private long _shellOverlayAt;
+
     /* 画的过程中实时显示“现在最像哪条手势”的名称，避免用户等到松手才知道。 */
     private string _previewTitle = "";
 
@@ -107,12 +135,6 @@ public sealed class GestureService : IDisposable
     private const uint MOD_NOREPEAT = 0x4000;
 
     private Action<MouseGesture>? _recordDone;
-
-    /* ── 匹配后替换（任务四）────────────────────────────────────
-     * 命中后先把屏幕上的原始轨迹换成存档的美化模板，过渡走完再执行动作。
-     * 过渡用一次性 DispatcherTimer 排队；期间用户又起了一笔手势就把定时器停掉
-     * （见 BeginStroke 里的 CancelMatchReplace），不许旧动作打断新手势。 */
-    private DispatcherTimer? _matchReplace;
 
     /* 手势专用鼠标钩子。
      *
@@ -196,6 +218,19 @@ public sealed class GestureService : IDisposable
     /// </summary>
     internal KeyboardHook? Hook => _gestureHook;
 
+    /// <summary>
+    /// 钩子自愈：鼠标钩子没装成功（被别的钩子挤掉、桌面临时不可用）时重装。
+    /// 平滑滚动复用这条钩子，钩子没了它也就静默失效 —— 表现正是"开了没效果"。
+    /// </summary>
+    public void EnsureMouseHook()
+    {
+        try
+        {
+            if (_gestureHook is { MouseHookInstalled: false }) _gestureHook.Restart();
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "重装手势鼠标钩子"); }
+    }
+
     public void Attach()
     {
         try
@@ -243,17 +278,11 @@ public sealed class GestureService : IDisposable
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "老动作换成正式动作"); }
 
-        /* 存量手势的模板补算。
-         * 为什么放在启动而不是只在手势页：用户报「美化没生效」时，他的配置里
-         * 一条 Beauty 都没有 —— 老数据只有手绘点，而补算原先挂在「第一次识别到」
-         * 和「打开手势列表」两处，他两个都没碰过，于是永远看不到标准图形。
-         * EnsureAll 幂等（版本号一致直接跳过），跑一遍 300ms 上下，放在空闲优先级不挡启动。 */
-        try
-        {
-            var stats = GestureBeauty.EnsureAll(_host.Settings.Gestures, _host.Settings.GestureOptions, "启动补算");
-            if (stats.Changed) _host.SaveSettings();
-        }
-        catch (Exception ex) { CoreLog.Swallow(ex, "启动补算手势美化"); }
+        /* 覆盖层预热：第一笔手势不该为「建窗 + 首次上屏」付 30ms 的账。
+         * 这里在空闲优先级先建好、显示一次再藏起来，之后每笔起手都是纯绘制。
+         * 见 GestureOverlayWindow 与 GestureService.EnsureOverlay 的注释。 */
+        try { Ui(() => EnsureOverlay().WarmUp()); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "预热手势覆盖层"); }
     }
 
     /// <summary>只在"没导过 + 自己还没手势 + 找得到 WGestures 配置"时导入一次。</summary>
@@ -304,9 +333,9 @@ public sealed class GestureService : IDisposable
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "卸载手势钩子"); }
 
-        CancelMatchReplace();
         _poll?.Stop();
         _linger?.Stop();
+        _fade?.Stop();
         _hotWatch?.Stop();
         try
         {
@@ -428,9 +457,20 @@ public sealed class GestureService : IDisposable
         /* 立即执行发生在鼠标键还按着的时候。那一下抬起不能放给系统，
          * 否则前台窗口会收到一个没有配对的 MouseUp。 */
         if (!down && !injected && Interlocked.CompareExchange(ref _swallowUpVk, 0, vk) == vk)
+        {
+            /* 中键菜单：路径 A 的收尾（按下被吞、抬起必须配对吞）。
+             * 顺手判"用户其实在划还是只点了一下" —— 这里是唯一收得到这次抬起的地方，
+             * 下面 689 行那段要求 _active，路径 A 压根没开过 _active。 */
+            MiddleMenuOnSwallowedUp(vk);
             return true;
+        }
 
         if (Suspended) return false;
+
+        /* 中键菜单正开着：这一下中键（按下或抬起）只用来关菜单，绝不漏给底下程序。
+         * 放在 HoldDrag / 全屏 / 任务栏之前 —— 菜单是我们自己的窗口，那几个判断对它没意义，
+         * 早退会让"再按一下中键关掉"时灵时不灵。 */
+        if (MiddleMenuSwallowWhileOpen(vk, down, injected)) return true;
 
         /* 按住拖拽的触发键正按着：鼠标该归它。用户用那个键已经声明了"这一下是
          * 拖窗口 / 改大小"，右键再被当成手势起笔就成了两套功能抢同一颗键 ——
@@ -492,6 +532,10 @@ public sealed class GestureService : IDisposable
 
         if (opts is not { Enabled: true })
         {
+            /* 中键菜单是**独立功能**，不看这个总开关（见 DECISIONS）。
+             * 所以"手势关掉"这条 return 之前要先问一句：这一下是不是空白处的中键点击。
+             * 是就吞下按下，抬起时再按"有没有划动"决定弹不弹（路径 A 的入口之一）。 */
+            if (MiddleMenuTryPlainDown(vk, settings, hasMiddleGesture: false)) return true;
             if (IsTracking) ResetActive();
             return false;
         }
@@ -586,7 +630,14 @@ public sealed class GestureService : IDisposable
             var candidates = Candidates(settings, vk, app, includeWheel: false)
                 .Where(g => CanStart(g, opts, cornerAt) || (edgeDoubleTap && g.Kind == "corner"))
                 .ToList();
-            if (candidates.Count == 0) return false;
+            if (candidates.Count == 0)
+            {
+                /* 路径 A 的第二个入口：手势总开关开着，但用户**没给这颗键配任何手势**。
+                 * 以前这里直接把中键放行（浏览器自动滚动就靠这条）。现在先问一句
+                 * "空白处的中键要不要弹菜单"，不要才照旧放行。 */
+                if (MiddleMenuTryPlainDown(vk, settings, hasMiddleGesture: false)) return true;
+                return false;
+            }
 
             /* 防止乱画：同一时间窗里连续起笔太多次就提示并暂停一会儿。
              * 只统计真正会开一笔的按下，不会影响普通右键菜单。 */
@@ -609,6 +660,11 @@ public sealed class GestureService : IDisposable
             }
             _gestureBurst.Enqueue(burstNow);
 
+            /* 路径 B：中键真要开始一笔手势了。趁按下这一刻把"空白命中"算好记下来 ——
+             * 松手时才知道这一笔算不算"没成笔"，而那时不能再等跨进程查询（用户要求点了就出来）。
+             * 放在 lock 外面：命中判定最长可能等 UIA 90ms，不能抱着 _gate 等。 */
+            if (vk == MiddleVk) MiddleMenuArm(vk, settings, hasMiddleGesture: true);
+
             lock (_gate)
             {
                 _active = true;
@@ -624,6 +680,12 @@ public sealed class GestureService : IDisposable
                 _points.Add(_start);
                 _appPath = app;
                 _targetWindow = targetWindow;
+                /* 起笔在开始菜单/搜索上：先记下来，等指针真动起来再收（见 MaybeDismissShell）。
+                 * 这里同时问一次前台 —— 有些版本上光标命中的是桌面 Progman，ResolveTarget
+                 * 会退回前台窗口，而前台窗口正是 SearchHost。 */
+                _shellOverlayUp = ShellOverlay.IsUp(targetWindow) || ShellOverlay.IsUp();
+                _shellOverlayDismissed = false;
+                _shellOverlayAt = 0;
                 _cornerCandidate = CornerCandidate(candidates, px, py, opts.CornerSize)
                     ?? (edgeDoubleTap ? CornerCandidateFor(candidates, NearestCorner(px, py)) : null);
                 /* 这一次按下有可能做成多步手势：OnPoll 就会按"停顿"切步骤。 */
@@ -635,12 +697,13 @@ public sealed class GestureService : IDisposable
             }
 
             var o = opts;
-            _linger?.Stop();
+            /* 上一笔排的「停留后收起 / 淡出后收起」到这里一律作废。
+             * 不停的话：连着划两下时，上一笔 100~350ms 的淡出定时器正好在
+             * 第二笔中途到点，把第二笔的覆盖层 Clear()+Hide() —— 轨迹和名字
+             * 一个像素都不剩，动作却照常执行，就是用户说的「滑了但没显示出来」。 */
+            BeginStrokeVisual();
             Ui(() =>
             {
-                /* 新手势开始 = 上一笔「匹配后替换」的排期作废：那个动作属于上一笔，
-                 * 现在执行会把这一笔的覆盖层一起收掉。 */
-                CancelMatchReplace();
                 var overlay = EnsureOverlay();
                 overlay.Begin(o, GestureButtons.FromVk(vk));
                 overlay.ShowPassive();
@@ -725,10 +788,9 @@ public sealed class GestureService : IDisposable
                 _tracker.Start(px, py);
             }
             var opts = _host.Settings.GestureOptions;
-            _linger?.Stop();
+            BeginStrokeVisual();
             Ui(() =>
             {
-                CancelMatchReplace();
                 var overlay = EnsureOverlay();
                 overlay.Begin(opts, GestureButtons.FromVk(vk));
                 overlay.ShowPassive();
@@ -1074,6 +1136,71 @@ public sealed class GestureService : IDisposable
     // ───────────────────────── 采样与收尾 ─────────────────────────
 
     /// <summary>丢掉当前这一笔（抬起丢了、选项被关掉、进入录制模式）。</summary>
+    /// <summary>
+    /// 在开始菜单 / 搜索上起笔时，把浮层收起来再继续画。
+    ///
+    /// 触发条件只有两个：起笔时前台确实是 shell 浮层（_shellOverlayUp），
+    /// 且指针已经划过激活距离 —— 不划过就收，等于"点一下开始菜单它自己关了"。
+    /// 收的动作交给 <see cref="ShellOverlay.Dismiss"/>，这里只负责只收一次、
+    /// 并安排一次「重算作用目标」：收起后光标下面已经是别的窗口了。
+    /// </summary>
+    private void MaybeDismissShell(double extent)
+    {
+        if (!_shellOverlayUp || _shellOverlayDismissed) return;
+
+        var opts = Settings().GestureOptions;
+        if (extent < Math.Max(8, opts.ActivationDistance)) return;
+
+        _shellOverlayDismissed = true;
+        _shellOverlayAt = Environment.TickCount64;
+
+        if (!ShellOverlay.Dismiss())
+        {
+            /* 前台已经自己换掉了：什么都不用做，轨迹本来就是可见的。 */
+            _shellOverlayUp = false;
+            return;
+        }
+
+        CoreLog.Info("[手势] 在开始菜单/搜索上起笔：先收起浮层，轨迹才看得见");
+        _ = RetargetAfterShellDismiss();
+    }
+
+    /// <summary>
+    /// 收起 shell 浮层之后重新认一次"这一笔要作用在哪个窗口"。
+    ///
+    /// 为什么不能沿用起笔时那个：起笔时光标在开始菜单上，ResolveTarget 认到的是
+    /// SearchHost.exe；收起之后同一个位置是桌面或某个应用窗口，那才是用户想操作的东西。
+    /// 用 120ms 的延迟等切换落定（开始菜单的收起动画约 100ms），再在后台线程问一次 ——
+    /// 不能阻塞 8ms 的轮询，否则轨迹会一顿一顿。
+    /// </summary>
+    private async Task RetargetAfterShellDismiss()
+    {
+        try
+        {
+            await Task.Delay(120).ConfigureAwait(false);
+
+            string app;
+            lock (_gate)
+            {
+                if (!_active) return;      // 用户已经松手/取消了，别再改
+            }
+
+            (app, IntPtr targetWindow) = ResolveTarget(Settings().GestureOptions);
+            lock (_gate)
+            {
+                if (!_active) return;
+                _appPath = app;
+                _targetWindow = targetWindow;
+            }
+
+            /* 前台切换会让别的窗口重新置顶一次，刚抬起来的轨迹窗可能又沉下去。 */
+            Ui(() => _overlay?.ShowPassive());
+
+            CoreLog.Info($"[手势] 收起浮层后改认目标：{app}");
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "手势改认目标"); }
+    }
+
     private void ResetActive()
     {
         Interlocked.Exchange(ref _swallowUpVk, 0);
@@ -1091,7 +1218,13 @@ public sealed class GestureService : IDisposable
             _multiExpected = false;
             _points.Clear();
             _chordSwallow = 0;
+            /* 中键那半截"点击"状态跟着一起清：抬起丢了（安全桌面/锁屏）之后
+             * 残留的 pending 会让下一次中键抬起读到上一笔的命中结论。 */
+            _middleTap = default;
             _targetWindow = IntPtr.Zero;
+            _shellOverlayUp = false;
+            _shellOverlayDismissed = false;
+            _shellOverlayAt = 0;
         }
         _poll?.Stop();
         HideOverlay(0);
@@ -1134,9 +1267,11 @@ public sealed class GestureService : IDisposable
         int minMove = Settings().GestureOptions.MinMove;
         int timeoutMs = Math.Clamp(Settings().GestureOptions.StartTimeoutMs, 100, 3000);
         List<GestureMath.Pt>? snapshot = null;
+        double extent = 0;
         lock (_gate)
         {
             if (!_active) return;
+            extent = GestureMath.Extent(_points);
             double dx = px - _last.X, dy = py - _last.Y;
             add = dx * dx + dy * dy >= 4;   // 2px 一处，够画圆也够省内存
             long now = Environment.TickCount64;
@@ -1179,6 +1314,10 @@ public sealed class GestureService : IDisposable
 
         if (startTimedOut)
         {
+            /* 中键菜单：按下后半天不动，这一笔同样"没成笔"。慢按一次中键也要算一次点击 ——
+             * 少了这一句，慢按的观感是"菜单不弹、原生中键还被吞了"，最难解释。
+             * 必须在 ResetActive 之前问：它会把 _middleTap 一起清掉。 */
+            MiddleMenuOnSilentCancel(vk, px, py);
             ResetActive();
             Interlocked.Exchange(ref _swallowUpVk, vk);
             ShowTimeoutDot(px, py);
@@ -1187,6 +1326,20 @@ public sealed class GestureService : IDisposable
         }
 
         if (!add) return;
+
+        /* 开始菜单/搜索上起笔：指针一过激活距离就先收浮层，见 MaybeDismissShell。 */
+        MaybeDismissShell(extent);
+
+        /* 覆盖层每 200ms 重新顶一次最前：画的过程中别的程序可能把自己置顶
+         * （开始菜单那种高带窗口、刚被激活的置顶窗体），一压下去整条轨迹就看不见了。
+         * SetWindowPos 只改 Z 序、不改窗口状态，8ms 轮询里按 200ms 节流。 */
+        long raiseNow = Environment.TickCount64;
+        if (raiseNow - _lastRaiseAt >= RaiseIntervalMs)
+        {
+            _lastRaiseAt = raiseNow;
+            _overlay?.ShowPassive();
+        }
+
         if (Settings().GestureOptions.ShowPath)
             _overlay?.AddPoint(px, py);
 
@@ -1300,8 +1453,7 @@ public sealed class GestureService : IDisposable
         }
         _poll?.Stop();
 
-        /* 立即执行模式：屏幕上先换上美化模板（不等过渡，0ms 当场换），
-         * 再让命令下去，覆盖层按 WG2 的「执行后淡出」规则收
+        /* 立即执行模式：命令当场下去，覆盖层按 WG2 的「执行后淡出」规则收
          * （见 SettleOverlay / GestureOptions.FadeOutExecuted）。 */
         ImmediateHit(hit, px, py, score);
         return true;
@@ -1322,10 +1474,18 @@ public sealed class GestureService : IDisposable
         string app;
         MouseGesture? corner;
         string pattern;
+        bool wasInjected;
+        /* 中键那半截记录在这里一次性取走并清掉：这一笔无论成不成笔，结算之后都不该留尾巴。 */
+        MiddleTap middleTap;
         lock (_gate)
         {
             _active = false;
+            /* 这笔是不是从注入事件起手的（改键回声那张通行证）。
+             * 中键菜单要用它：注入的中键一律不弹，不然"点中键"这条动作会一路套娃。 */
+            wasInjected = _activeInjected;
             _activeInjected = false;
+            middleTap = _middleTap;
+            _middleTap = default;
             points = new List<GestureMath.Pt>(_points);
             _points.Clear();
             vk = _vk;
@@ -1391,6 +1551,11 @@ public sealed class GestureService : IDisposable
 
             if (hit == null && extent < opts.MinMove)
             {
+                /* 中键菜单（路径 B）：中键手势没成笔 —— 先问菜单要不要接手。
+                 * 接手了就**不要**补发原生中键：否则用户会同时得到一次自动滚动和一份菜单
+                 * （这就是任务书里那句"不然用户会同时看到一次原生中键加一个菜单"）。 */
+                if (MiddleMenuInterceptsTap(vk, px, py, wasInjected, middleTap)) return;
+
                 /* 没画出形状 → 用户只是想点一下。补发一次被吞掉的按键。
                  * 带注入标记，所以不会再被自己的钩子接住。 */
                 /* 补发不能在钩子回调里做：SendInput 会同步把事件送回同一个
@@ -1421,8 +1586,8 @@ public sealed class GestureService : IDisposable
                 IsRecording = false;
             }
             /* 落库前过一遍轨迹校正：存下来的就是"校正后的那一笔"，以后回放、缩略图、
-             * 以及这条手势自己的模板都统一用它 —— 用户看到的就是校正后的样子。
-             * 判定那一侧不在这里校正：GestureEngine.StrokeOf 里模板和手绘已经统一过了一次，
+             * 以及识别都统一用它 —— 用户看到的就是校正后的样子。
+             * 判定那一侧不在这里校正：GestureEngine.StrokeOf 里两侧已经统一过了一次，
              * 两个入口都做就成了双重校正。 */
             var canonical = StrokeCanonicalizer.Canonicalize(points);
             var recorded = new MouseGesture
@@ -1434,11 +1599,6 @@ public sealed class GestureService : IDisposable
                 Pattern = GesturePattern.FromPoints(
                     canonical, opts.ActivationDistance, opts.TurnTolerance, opts.MaxTurnDistance)
             };
-            /* 创建阶段美化（任务四）：Path 仍是识别器的规范化轨迹（老版本/无模板时
-             * 的回退口径），美化后的标准图形单独存进 Beauty；识别、缩略图、预览都优先
-             * 用 Beauty，原始像素轨迹留在 RawPath 供「恢复原始轨迹」和重新美化。
-             * 语义校验（美化前后必须是同一手势）在 StrokeBeautifier 里做，不通过就保留原样。 */
-            GestureBeauty.Apply(recorded, points, opts, "录制");
             HideOverlay(0);
             try { done?.Invoke(recorded); }
             catch (Exception ex) { CoreLog.Swallow(ex, "手势录制回调"); }
@@ -1447,9 +1607,8 @@ public sealed class GestureService : IDisposable
 
         if (hit != null)
         {
-            /* 松手结算模式：画的过程中方框一直在（预览），用户松手 →
-             * 先「匹配后替换」成美化模板，再执行 → 名称换成「已执行」配色再淡出。
-             * 顺序见 FinishHit：动作要等替换走完，否则动作打开的窗口会先把覆盖层压掉。 */
+            /* 松手结算模式：画的过程中方框一直在（预览），用户松手 → 执行动作，
+             * 名称换成「已执行」配色再淡出（见 FinishHit / SettleOverlay）。 */
             FinishHit(hit, px, py, score);
         }
         else
@@ -1462,132 +1621,26 @@ public sealed class GestureService : IDisposable
         }
     }
 
-    // ─────────────────── 匹配后替换（任务四） ───────────────────
-
-    /// <summary>停掉「匹配后替换」的排期（新手势开始、关闭服务时用）。线程无关。</summary>
-    private void CancelMatchReplace()
-    {
-        var timer = _matchReplace;
-        _matchReplace = null;
-        if (timer == null) return;
-        /* 非 UI 线程调 Stop 会抛，但字段已经清了 —— 到点的回调看到
-         * !ReferenceEquals(_matchReplace, timer) 会自己放弃。 */
-        try { timer.Stop(); }
-        catch (Exception ex) { CoreLog.Swallow(ex, "取消手势替换排期"); }
-    }
-
     /// <summary>
-    /// 存量手势的模板回填：老数据没有 <see cref="MouseGesture.Beauty"/>，
-    /// 第一次被命中时就地补一份并存盘（下次启动直接有模板）。
-    /// 计算放在调用线程（钩子线程）上做，别塞进 UI 线程 —— 美化是几十毫秒级的活。
-    /// </summary>
-    private void EnsureBeauty(MouseGesture g, GestureOptions opts, string origin)
-    {
-        try
-        {
-            if (!GestureBeauty.Ensure(g, opts, origin)) return;
-            Ui(() =>
-            {
-                try { _host.SaveSettings(); }
-                catch (Exception ex) { CoreLog.Swallow(ex, "保存手势模板"); }
-            });
-        }
-        catch (Exception ex) { CoreLog.Swallow(ex, "手势模板回填"); }
-    }
-
-    /// <summary>
-    /// 松手命中：先「匹配后替换」，替换（或直接切换）完成后才执行动作。
-    /// 未开启替换、或这条手势没有模板时，退回原来的执行顺序，一点不差。
+    /// 松手命中：立刻执行动作，名称换「已执行」配色再收掉。
     /// </summary>
     private void FinishHit(MouseGesture hit, double px, double py, double score)
     {
-        string title = hit.Title(ActionCatalogTitle(hit));
-        var opts = Settings().GestureOptions;
-        EnsureBeauty(hit, opts, "首次使用回填");
-
-        if (!opts.BeautifyOnMatch || !hit.HasBeauty)
-        {
-            Execute(hit, px, py);
-            SettleOverlay(hit, px, py);
-            CoreLog.Info($"手势命中：{title}（偏差 {score:0.000}）");
-            return;
-        }
-
-        int ms = Math.Clamp(opts.BeautifyTransitionMs, 0, 600);
-        var template = hit.BeautyPoints();
-        Ui(() =>
-        {
-            void Run()
-            {
-                Execute(hit, px, py);
-                /* 替换后轨迹已经是模板本身，名称换「已执行」配色再淡出时保留它。 */
-                SettleOverlay(hit, px, py);
-                CoreLog.Info($"手势命中：{title}（偏差 {score:0.000}）");
-            }
-
-            CancelMatchReplace();
-            int played = 0;
-            try
-            {
-                var overlay = EnsureOverlay();
-                overlay.ShowPassive();
-                overlay.MarkRecognized();
-                played = overlay.ReplaceTrailWithTemplate(template, ms);
-            }
-            catch (Exception ex)
-            {
-                /* 画不出模板不影响功能：直接执行。 */
-                CoreLog.Swallow(ex, "手势匹配后替换");
-                Run();
-                return;
-            }
-
-            if (played <= 0) { Run(); return; }
-
-            var timer = new DispatcherTimer(DispatcherPriority.Render)
-            {
-                Interval = TimeSpan.FromMilliseconds(played)
-            };
-            timer.Tick += (_, _) =>
-            {
-                if (!ReferenceEquals(_matchReplace, timer)) return;
-                _matchReplace = null;
-                timer.Stop();
-                Run();
-            };
-            _matchReplace = timer;
-            timer.Start();
-        });
+        Execute(hit, px, py);
+        SettleOverlay(hit, px, py);
+        CoreLog.Info($"手势命中：{hit.Title(ActionCatalogTitle(hit))}（偏差 {score:0.000}）");
     }
 
     /// <summary>
-    /// 立即执行（画到一半就命中）：不能等过渡动画，当场把轨迹换成模板再执行。
-    /// 视觉上"啪"一下变成标准图形，紧接着动作就发生了，与之前的手感一致。
+    /// 立即执行（画到一半就命中）：动作当场下去，覆盖层按「执行后淡出」收。
     /// 调用点在 UI 线程（轮询回调），这里直接碰覆盖层。
     /// </summary>
     private void ImmediateHit(MouseGesture hit, double px, double py, double score)
     {
-        string title = hit.Title(ActionCatalogTitle(hit));
-        var opts = Settings().GestureOptions;
-        EnsureBeauty(hit, opts, "首次使用回填");
-
-        if (opts.BeautifyOnMatch && hit.HasBeauty)
-        {
-            try
-            {
-                var overlay = EnsureOverlay();
-                overlay.ShowPassive();
-                overlay.MarkRecognized();
-                overlay.ReplaceTrailWithTemplate(hit.BeautyPoints(), 0);
-            }
-            catch (Exception ex) { CoreLog.Swallow(ex, "手势立即执行替换"); }
-        }
-
         Execute(hit, px, py);
         SettleOverlay(hit, px, py);
-        CoreLog.Info($"手势立即执行：{title}（偏差 {score:0.000}）");
+        CoreLog.Info($"手势立即执行：{hit.Title(ActionCatalogTitle(hit))}（偏差 {score:0.000}）");
     }
-
     private void Execute(MouseGesture g, double px, double py)
     {
         if (string.IsNullOrWhiteSpace(g.Action)) return;
@@ -2284,6 +2337,17 @@ public sealed class GestureService : IDisposable
     private GestureOverlayWindow EnsureOverlay()
     {
         if (_overlay != null) return _overlay;
+
+        /* 只能在界面线程上建：WPF 对象绑定在创建它的 Dispatcher 上。从钩子线程
+         * new 出来的窗口，之后每次 Show() 都会抛线程亲和性异常，而那条异常会被
+         * Ui() 吞掉 —— 表现就是"从此以后每笔手势都画得出来、但一个像素都不显示"。
+         * 现在所有调用点都在 Ui() 里；这里留一道闸，越界就记日志并放弃这一次。 */
+        if (Application.Current is { } app && !app.Dispatcher.CheckAccess())
+        {
+            CoreLog.Warn("[手势] 覆盖层被非界面线程创建，已忽略（轨迹这一笔不会显示）");
+            throw new InvalidOperationException("GestureOverlayWindow 必须在界面线程创建");
+        }
+
         _overlay = new GestureOverlayWindow();
         _overlay.Closed += (_, _) => _overlay = null;
         return _overlay;
@@ -2293,7 +2357,8 @@ public sealed class GestureService : IDisposable
     private void ShowLabelOnly(MouseGesture g, double px, double py)
     {
         if (g.HideLabel) { HideOverlay(0); return; }
-        EnsureOverlay();
+        /* 建窗与显示都交给 ShowLabel 里的 Ui()：这里原来先 EnsureOverlay() 再 ShowLabel，
+         * 而 OnWheel 跑在钩子线程上 —— 第一次走这条路会把覆盖层建在钩子线程上。 */
         ShowLabel(g.Title(ActionCatalogTitle(g)), px, py);
     }
 
@@ -2418,12 +2483,33 @@ public sealed class GestureService : IDisposable
         HideOverlayFading();
     }
 
+    /// <summary>
+    /// 新手势起手：先把上一笔排的「收起覆盖层」全部作废。
+    ///
+    /// 连着划两下时，上一笔的淡出定时器（默认 100~350ms）常常正好在第二笔
+    /// 中途到点 —— 它会 Clear()+Hide()，第二笔的轨迹和名字就全没了，
+    /// 而动作照常执行。所以起手这一下必须把两段定时器停掉并换一代号，
+    /// 让已经排进消息队列的回调也一并失效（见 <see cref="_hideEpoch"/>）。
+    ///
+    /// 只在钩子线程/轮询线程上调，两个字段的 Stop 都是线程安全的：
+    /// DispatcherTimer.Stop 可以从任意线程调用。
+    /// </summary>
+    private void BeginStrokeVisual()
+    {
+        Interlocked.Increment(ref _hideEpoch);
+        try { _linger?.Stop(); } catch (Exception ex) { CoreLog.Swallow(ex, "停手势名称停留"); }
+        try { _fade?.Stop(); } catch (Exception ex) { CoreLog.Swallow(ex, "停手势名称淡出"); }
+        _lastRaiseAt = 0;
+    }
+
     /// <summary>立刻开始淡出名称框，淡完再清窗口（WG2 的 T.cs:141-150）。</summary>
     private void HideOverlayFading()
     {
         _linger?.Stop();
+        int epoch = Interlocked.Increment(ref _hideEpoch);
         Ui(() =>
         {
+            if (epoch != Volatile.Read(ref _hideEpoch)) return;      // 新手势已经起手，这一笔的回报作废
             int fade = _overlay?.FadeOutLabel() ?? 0;
             if (fade <= 0)
             {
@@ -2432,6 +2518,7 @@ public sealed class GestureService : IDisposable
                 return;
             }
 
+            _fadeEpoch = epoch;
             _fade ??= new DispatcherTimer(DispatcherPriority.Background);
             _fade.Stop();
             _fade.Interval = TimeSpan.FromMilliseconds(fade);
@@ -2444,8 +2531,11 @@ public sealed class GestureService : IDisposable
     private void OnFadeDone(object? sender, EventArgs e)
     {
         _fade?.Stop();
+        int epoch = _fadeEpoch;
         Ui(() =>
         {
+            /* 号变了 = 新手势已经开始：这一下是上一笔的尾巴，不许碰现在的画面。 */
+            if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
             _overlay?.Clear();
             _overlay?.Hide();
         });
@@ -2455,16 +2545,19 @@ public sealed class GestureService : IDisposable
     {
         _linger?.Stop();
         _fade?.Stop();
+        int epoch = Interlocked.Increment(ref _hideEpoch);
         if (delayMs <= 0)
         {
             Ui(() =>
             {
+                if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
                 _overlay?.Clear();
                 _overlay?.Hide();
             });
             return;
         }
 
+        _lingerEpoch = epoch;
         _linger ??= new DispatcherTimer(DispatcherPriority.Background);
         _linger.Stop();
         _linger.Interval = TimeSpan.FromMilliseconds(delayMs);
@@ -2477,8 +2570,10 @@ public sealed class GestureService : IDisposable
     {
         _linger?.Stop();
         _fade?.Stop();
+        int epoch = _lingerEpoch;
         Ui(() =>
         {
+            if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
             _overlay?.Clear();
             _overlay?.Hide();
         });

@@ -32,8 +32,10 @@ public static class ElevationHelper
     {
         "--selftest", "--diag", "--render", "--render-diag",
         "--qbar", "--trace", "--svg2png", "--webdav-test",
-        "--qbar-query", "--qbar-bench", "--qbar-command", "--everything-status", "--settings-dump", "--holddrag-config",
+        "--qbar-query", "--qbar-bench", "--qbar-command", "--everything-status", "--settings-dump", "--holddrag-config", "--shell-probe",
         "--noelevate", "--elevated", "--updated",
+        /* 取词助手本身就是被 runas 拉起来的提权进程；它再走一次提权逻辑只会自我复制。 */
+        InputPlus.Core.Text.SelectionElevated.ServerFlag,
     };
 
     /// <summary>自检用：白名单快照。诊断开关每加一个都必须同步进来，否则命令行一跑就弹 UAC。</summary>

@@ -43,6 +43,18 @@ public partial class App : Application
             return;
         }
 
+        /* ---- 取词助手：常驻、提权 ----
+         *
+         * 这是 SelectionProxy 的镜像：本程序普通权限、前台程序是管理员时，
+         * 由这个 runas 起来的助手替我们读选区（低权限读不了高权限，反过来可以）。
+         * 同样必须赶在单实例检查与提权逻辑之前 —— 否则助手会被"已有实例在运行"劝退。
+         * 助手常驻，直到主进程关闭管道（读到 EOF）才退出。 */
+        if (Core.Text.SelectionElevated.TryRunServer(e.Args, out int highCode))
+        {
+            Environment.Exit(highCode);
+            return;
+        }
+
         /* 诊断：`--pick-test <结果文件>` 走一遍完整链路（拉起代理 → 收结果），
          * 用来验证"管理员模式取词"这条支路是否真的通。 */
         int pickTestIdx = Array.FindIndex(e.Args,
@@ -195,6 +207,10 @@ public partial class App : Application
             Environment.Exit(Core.KeyProbe.Run(e.Args));
             return;
         }
+
+        /* `--shell-probe`：前台是不是开始菜单/搜索这类 shell 浮层，能不能收起来。 */
+        if (Core.CliFlags.Has(e.Args, "--shell-probe"))
+            Environment.Exit(Core.Windows.ShellProbe.Run(e.Args));
 
         /* `--gesture-probe`：说清一条手势为什么认不出来（距离、歧义、超阈）。 */
         if (Core.CliFlags.Has(e.Args, "--gesture-probe"))
@@ -387,6 +403,34 @@ public partial class App : Application
         bool isSelfTest = e.Args.Any(a => a.Equals("--selftest", StringComparison.OrdinalIgnoreCase));
         bool isDiag = e.Args.Any(a => a.Equals("--diag", StringComparison.OrdinalIgnoreCase));
         bool isHwTest = e.Args.Any(a => a.Equals("--hwtest", StringComparison.OrdinalIgnoreCase));
+
+        // 文件对话框探测：只枚举窗口、打印判型结果，不起 WPF、不驻留、不弹窗。
+        if (e.Args.Any(a => a.Equals("--filedialog-e2e", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(Core.FileDialog.DialogE2E.Run());
+            return;
+        }
+
+        /* 搜索前建议探针：真机采集一遍、写报告就退出。
+         * 必须在 WPF/单实例之前 —— 它只借采集线程，不需要窗口，也不该被
+         * "已有实例在运行"拦住。 */
+        if (e.Args.Any(a => a.Equals("--scroll-probe", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(Core.Scroll.ScrollProbeCli.Run());
+            return;
+        }
+
+        if (e.Args.Any(a => a.Equals("--suggestions-probe", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(Core.Suggestions.SuggestionsProbeCli.Run());
+            return;
+        }
+
+        if (e.Args.Any(a => a.Equals("--dialogprobe", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(Core.FileDialog.DialogProbeCli.Run());
+            return;
+        }
 
         /* 测试类模式一律"干跑"：只走逻辑，不真的往系统里发按键。
          *
@@ -789,6 +833,15 @@ public partial class App : Application
 
         Host = new AppHost(settings, Dispatcher);
         Host.Start();
+
+        /* 临时诊断：量手势覆盖层的上屏延迟（见 UI/GestureOverlayDiag.cs）。 */
+        if (e.Args.Any(a => a.Equals("--gesture-overlay-diag", StringComparison.OrdinalIgnoreCase)))
+        {
+            var diagHost = Host;
+            Dispatcher.BeginInvoke(new Action(() => UI.GestureOverlayDiag.Start(diagHost)),
+                DispatcherPriority.ApplicationIdle);
+            return;
+        }
 
         /* 文件搜索的索引在这里就叫起来：Start 幂等，真正的扫盘跑在 BelowNormal
          * 后台线程上，不挡启动那几百毫秒。Qbar 第一次搜文件时也会调一次。

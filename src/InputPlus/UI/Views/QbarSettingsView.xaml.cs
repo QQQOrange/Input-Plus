@@ -1,15 +1,18 @@
+using System.Collections.ObjectModel;
 using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using InputPlus.Core.Icons;
 using InputPlus.Core.Qbar;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Suggestions;
 using InputPlus.UI.Windows;
 
 namespace InputPlus.UI.Views;
@@ -162,6 +165,7 @@ public partial class QbarSettingsView : UserControl
         ShowIconsBox.IsChecked = _host.Settings.Qbar.ShowIcons;
         ImeOnOpenBox.IsChecked = _host.Settings.Qbar.SwitchToEnglishOnOpen;
         ImeBackBox.IsChecked = _host.Settings.Qbar.SwitchBackOnEngine;
+        UpdatePositionLabel();
 
         /* 联想参数也是“控件跟随设置”，不是反过来：
            设置文件里可能被手改成超范围的值，这里顺手夹到界面允许的区间，
@@ -172,6 +176,8 @@ public partial class QbarSettingsView : UserControl
         SuggestTimeoutSlider.Value = Math.Clamp(_host.Settings.Qbar.SuggestTimeoutMs, 200, 5000);
         SuggestCacheSlider.Value = Math.Clamp(_host.Settings.Qbar.SuggestCacheMinutes, 0, 1440);
         UpdateSuggestLabels();
+        RefreshFileDialogBar();
+        RefreshSuggestions();
 
         /* 语义层开关：控件跟随设置，越界值夹回界面允许的区间（设置文件可能被手改）。 */
         QbarSearchOptions sem = _host.Settings.Qbar.Search;
@@ -645,13 +651,58 @@ public partial class QbarSettingsView : UserControl
         SuggestCacheValue.Text = minutes <= 0 ? Loc.T("不缓存") : Loc.F("{0} 分钟", minutes);
     }
 
+    /// <summary>
+    /// 外观恢复默认：**只重置外观字段**。
+    ///
+    /// 以前这里整块 `_host.Settings.Qbar = new QbarOptions()` —— 顺手把过滤器、
+    /// 优先级规则、命令、固定项目、语义层开关全清了。用户点「恢复默认外观」
+    /// 只是想调回颜色字号，结果文件搜索的整套配置没了。
+    /// </summary>
     private void OnResetAppearance(object sender, RoutedEventArgs e)
     {
         if (_host == null) return;
-        _host.Settings.Qbar = new QbarOptions();
+        QbarOptions q = _host.Settings.Qbar;
+        QbarOptions def = new();
+
+        q.PanelColor = def.PanelColor;
+        q.PanelOpacity = def.PanelOpacity;
+        q.Width = def.Width;
+        q.TextFontSize = def.TextFontSize;
+        q.ListCount = def.ListCount;
+        q.LineHeight = def.LineHeight;
+        q.AccentColor = def.AccentColor;
+        q.ShowIcons = def.ShowIcons;
+        q.RecentCount = def.RecentCount;
+        q.SwitchToEnglishOnOpen = def.SwitchToEnglishOnOpen;
+        q.SwitchBackOnEngine = def.SwitchBackOnEngine;
+
         _host.SaveSettings();
         Refresh();
         _host.Notify(Loc.T("Qbar 外观已恢复默认"));
+    }
+
+    /// <summary>面板位置恢复默认：清掉"拖动过"的标记，下次唤出回到上方居中。</summary>
+    private void OnResetPosition(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        QbarOptions q = _host.Settings.Qbar;
+        q.CustomPosition = false;
+        q.PositionX = 0.5;
+        q.PositionY = 0.3;
+        _host.SaveSettings();
+        UpdatePositionLabel();
+        _host.Notify(Loc.T("Qbar 位置已恢复默认"));
+    }
+
+    /// <summary>位置状态文案：默认摆位 vs 用户自己拖过的位置。</summary>
+    private void UpdatePositionLabel()
+    {
+        if (PositionValue == null || _host == null) return;
+        QbarOptions q = _host.Settings.Qbar;
+        PositionValue.Text = q.CustomPosition
+            ? Loc.F("已自定义（水平 {0}% · 垂直 {1}%）",
+                Math.Round(q.PositionX * 100), Math.Round(q.PositionY * 100))
+            : Loc.T("默认（工作区上方居中）");
     }
 
     /// <summary>
@@ -846,8 +897,10 @@ public partial class QbarSettingsView : UserControl
         AddTocChip(Loc.T("索引与后端"), CardBackend);
         AddTocChip(Loc.T("过滤器"), CardFilters);
         AddTocChip(Loc.T("优先级"), CardPriority);
+        AddTocChip(Loc.T("文件对话框浮层"), FileDialogBarCard);
         AddTocChip(Loc.T("命令"), CardCommands);
         AddTocChip(Loc.T("语法与调试"), CardSyntax);
+        AddTocChip(Loc.T("搜索前建议"), CardSuggestions);
     }
 
     private void AddTocChip(string text, FrameworkElement card)
@@ -1001,6 +1054,9 @@ public partial class QbarSettingsView : UserControl
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 128,
             Opacity = f.Enabled ? 1 : 0.45,
+            // 代码自建的 TextBlock 不会继承窗口的 Foreground 以外的任何一套配色，
+            // 而默认前景色是黑的 —— 深色主题下"视频/图片"这些名字就成了黑底黑字。
+            Foreground = Res("Brush.TextPrimary"),
         };
         name.Children.Add(title);
         if (builtin && overridden) name.ToolTip = Loc.T("这条内置过滤器被改过：「恢复内置」可以还原。");
@@ -1018,7 +1074,9 @@ public partial class QbarSettingsView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = f.Enabled ? 1 : 0.5,
         };
-        chip.Child = new TextBlock { Text = f.Keyword + ":", FontSize = 11.5, Foreground = Res("Brush.Accent") };
+        /* 只显示关键字本身。以前拼了个尾冒号（"wj:"），用户改完关键字看到的就是
+         * "wj:" —— 冒号是输入时用的分隔符，不是关键字的一部分，摆在这里纯属误导。 */
+        chip.Child = new TextBlock { Text = f.Keyword, FontSize = 11.5, Foreground = Res("Brush.Accent") };
         Grid.SetColumn(chip, 1);
         grid.Children.Add(chip);
 
@@ -1065,7 +1123,7 @@ public partial class QbarSettingsView : UserControl
             f.Enabled = toggle.IsChecked == true;
             UpsertFilter(f);
             RefreshFilterList(rebindEditor: false);
-            _host?.Notify(f.Enabled ? Loc.F("已启用 {0}:", f.Keyword) : Loc.F("已停用 {0}:", f.Keyword));
+            _host?.Notify(f.Enabled ? Loc.F("已启用 {0}", f.Keyword) : Loc.F("已停用 {0}", f.Keyword));
         };
         Grid.SetColumn(toggle, 4);
         grid.Children.Add(toggle);
@@ -1237,7 +1295,7 @@ public partial class QbarSettingsView : UserControl
 
         /* 列表只换个样子，不回填编辑器：一回填光标就跳到行首，边打边跳没法用。 */
         RefreshFilterList(rebindEditor: false);
-        FilterHint.Text = Loc.F("已保存：输入「{0}:」就带上这条过滤器。", keyword);
+        FilterHint.Text = Loc.F("已保存：输入「{0}」再加冒号就带上这条过滤器。", keyword);
     }
 
     private void OnFilterFlagChanged(object sender, RoutedEventArgs e)
@@ -2071,6 +2129,620 @@ public partial class QbarSettingsView : UserControl
             : Loc.T("这一条本来就是出厂值，没有改动可撤。");
     }
 
+
+    /* ── 文件对话框浮层 ─────────────────────────────────────────
+       控件事件直接改 Settings.FileDialogBar，再交给 AppHost 防抖落盘 + 广播
+       SettingsChanged；FileDialogBarService.Apply() 收到广播后按新配置重挂监听。
+       这里刻意不做“预览”，因为浮层真实行为发生在别人的对话框上，设置页里
+       造不出那个上下文，假预览反而误导。 */
+
+    private void OnFileDialogBarChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        FileDialogBarOptions o = _host.Settings.FileDialogBar;
+        o.Enabled = FdEnabledBox.IsChecked == true;
+        o.ShowOnAppear = FdShowOnAppearBox.IsChecked == true;
+        o.ShowOnHotkey = FdShowOnHotkeyBox.IsChecked == true;
+        o.UiaBackfill = FdUiaBox.IsChecked == true;
+        o.MaxResults = (int)Math.Round(FdMaxSlider.Value);
+        o.BarHeight = (int)Math.Round(FdHeightSlider.Value);
+        o.PollFallbackMs = (int)Math.Round(FdPollSlider.Value);
+        o.FollowMetrics = FdFollowMetricsBox.IsChecked == true;
+        UpdateFileDialogLabels();
+        _host.SaveSettings();
+    }
+
+    /// <summary>
+    /// 热键：先本地校验再落盘。
+    ///
+    /// 校验用的是注册热键那条代码的同一份解析器（<see cref="Core.FileDialog.FileDialogBarService.TryValidateHotkey"/>），
+    /// 不是另写一套正则 —— 否则“设置页说能用、真正注册时解析失败”会变成两个真相。
+    /// </summary>
+    private void OnFileDialogApplyHotkey(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        string text = (FdHotkeyBox.Text ?? "").Trim();
+        if (text.Length == 0)
+        {
+            _host.Settings.FileDialogBar.Hotkey = "";
+            FdHotkeyHint.Text = Loc.T("清空后不再用热键唤出浮层（仍可按“对话框一出现就浮出”）。");
+            _host.SaveSettings();
+            return;
+        }
+
+        if (!Core.FileDialog.FileDialogBarService.TryValidateHotkey(text, out string detail))
+        {
+            FdHotkeyHint.Text = Loc.T("这个写法认不出来：需要一到三个修饰键 + 一个主键，例如 Ctrl+Alt+F。");
+            return;
+        }
+
+        _host.Settings.FileDialogBar.Hotkey = detail;
+        FdHotkeyHint.Text = Loc.F("已设为 {0}；若被别的程序占用，日志里会有记录。", detail);
+        _host.SaveSettings();
+    }
+
+    private void OnFileDialogTypeChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        /* 键名用 DialogTypeKeys，不写字面量：判定侧用的是同一份常量，
+         * 改名字时编译器会一起报错，不会出现“设置写了但判定读不到”。 */
+        var types = _host.Settings.FileDialogBar.Types;
+        types[Core.FileDialog.DialogTypeKeys.FileDialog] = FdTypeFileBox.IsChecked == true;
+        types[Core.FileDialog.DialogTypeKeys.FolderDialog] = FdTypeFolderBox.IsChecked == true;
+        types[Core.FileDialog.DialogTypeKeys.ExplorerWindow] = FdTypeExplorerBox.IsChecked == true;
+        _host.SaveSettings();
+    }
+
+    private void OnFileDialogAddProcess(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        string name = (FdProcessBox.Text ?? "").Trim();
+        if (name.Length == 0) return;
+        // 只收文件名：用户可能顺手粘了一整条路径进来。
+        try { name = System.IO.Path.GetFileName(name); } catch { }
+        if (name.Length == 0) return;
+        List<string> list = _host.Settings.FileDialogBar.DisabledProcesses;
+        if (list.Any(x => string.Equals(x, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _host.Notify(Loc.F("「{0}」已经在列表里了", name));
+            return;
+        }
+        list.Add(name);
+        FdProcessBox.Text = "";
+        RefreshFileDialogProcessList();
+        _host.SaveSettings();
+    }
+
+    private void OnFileDialogRemoveProcess(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        if (FdProcessList.SelectedItem is not string name) return;
+        _host.Settings.FileDialogBar.DisabledProcesses.RemoveAll(
+            x => string.Equals(x, name, StringComparison.OrdinalIgnoreCase));
+        RefreshFileDialogProcessList();
+        _host.SaveSettings();
+    }
+
+    private void RefreshFileDialogProcessList()
+    {
+        if (_host == null) return;
+        // 每次换一份 List：设置里的集合是普通 List<string>，没有变更通知。
+        FdProcessList.ItemsSource = null;
+        FdProcessList.ItemsSource = _host.Settings.FileDialogBar.DisabledProcesses.ToList();
+    }
+
+    /// <summary>
+    /// 把「文件对话框浮层」这张卡滚进可视区（浮条菜单 →「设置」）。
+    /// 这张卡是「文件搜索」标签里的一张独立卡片，所以先切标签再滚到它。
+    /// </summary>
+    internal void ScrollToFileDialogBar()
+    {
+        try
+        {
+            /* 这张卡现在在「文件搜索」标签里（自己的卡，不再挤在右栏最下面）：
+             * 先切到那个标签，再滚到卡片。 */
+            if (Tabs != null && Tabs.SelectedIndex != 1) Tabs.SelectedIndex = 1;
+            ShowFilesTab(true);
+            FileScroll.UpdateLayout();
+
+            double y = 0;
+            try
+            {
+                y = FileDialogBarCard.TransformToAncestor(FileScrollContent)
+                    .Transform(new Point(0, 0)).Y;
+            }
+            catch { }
+            FileScroll.ScrollToVerticalOffset(Math.Max(0, y - 8));
+            FileDialogBarCard.BringIntoView();
+            Core.CoreLog.Info($"[浮条] 文件搜索页滚动到文件对话框卡：offset={FileScroll.VerticalOffset:0}（卡 y={y:0}）");
+        }
+        catch (Exception ex) { Core.CoreLog.Swallow(ex, "滚动到文件对话框浮层卡"); }
+    }
+
+    /// <summary>出图用：切到「文件搜索」标签并滚到「文件对话框浮层」卡。</summary>
+    internal void ScrollToFileDialogBarForRender() => ScrollToFileDialogBar();
+
+    /// <summary>控件跟随设置：设置文件可能被手改，越界值在这里夹回界面区间。</summary>
+    private void RefreshFileDialogBar()
+    {
+        if (_host == null) return;
+        FileDialogBarOptions o = _host.Settings.FileDialogBar;
+        FdEnabledBox.IsChecked = o.Enabled;
+        FdShowOnAppearBox.IsChecked = o.ShowOnAppear;
+        FdShowOnHotkeyBox.IsChecked = o.ShowOnHotkey;
+        FdUiaBox.IsChecked = o.UiaBackfill;
+        FdHotkeyBox.Text = o.Hotkey ?? "";
+        FdTypeFileBox.IsChecked = !o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.FileDialog, out bool f) || f;
+        FdTypeFolderBox.IsChecked = !o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.FolderDialog, out bool d) || d;
+        FdTypeExplorerBox.IsChecked = o.Types.TryGetValue(Core.FileDialog.DialogTypeKeys.ExplorerWindow, out bool x) && x;
+        FdMaxSlider.Value = Math.Clamp(o.MaxResults, 20, 500);
+        FdHeightSlider.Value = Math.Clamp(o.BarHeight, 40, 48);
+        FdPollSlider.Value = Math.Clamp(o.PollFallbackMs, 0, 2000);
+        FdFollowMetricsBox.IsChecked = o.FollowMetrics;
+        RefreshFileDialogProcessList();
+        UpdateFileDialogLabels();
+    }
+
+    private void UpdateFileDialogLabels()
+    {
+        if (FdMaxValue == null) return;
+        FdMaxValue.Text = Loc.F("{0} 条", (int)Math.Round(FdMaxSlider.Value));
+        FdHeightValue.Text = Loc.F("{0} px", (int)Math.Round(FdHeightSlider.Value));
+        int poll = (int)Math.Round(FdPollSlider.Value);
+        FdPollValue.Text = poll <= 0 ? Loc.T("关闭") : Loc.F("{0} ms", poll);
+    }
+
+    /* ── 搜索前建议 ─────────────────────────────────────────────
+       同一套写法：控件事件改 Settings.Suggestions → _host.SaveSettings()，
+       SuggestionsService.Apply() 收到 SettingsChanged 后重建来源并请求重采。
+       注意这里**不做**“把建议列表塞回设置页”这种预览：建议项的排序依赖
+       真实文件时间与来源权重，设置页里造不出来。 */
+
+    private static readonly string[] AllSuggestionSourceIds =
+    {
+        "downloads", "desktop", "wechat", "wecom", "feishu", "windows-recent", "dialog-history", "app-history",
+    };
+
+    private static int SuggestionWeight(string id) => id switch
+    {
+        "downloads" => 70, "desktop" => 65, "wechat" => 80, "wecom" => 75,
+        "feishu" => 75, "windows-recent" => 90, "dialog-history" => 100, _ => 110,
+    };
+
+    /// <summary>来源表的行集合。拖拽排序直接改这个集合的顺序，UI 自动跟着动。</summary>
+    private readonly ObservableCollection<SuggestionSourceRow> _suggestionRows = new();
+
+    private void EnsureSuggestionRows()
+    {
+        if (_suggestionRows.Count > 0) return;
+        foreach (string id in SuggestionsOptions.DefaultSourceOrder)
+        {
+            _suggestionRows.Add(new SuggestionSourceRow
+            {
+                Id = id,
+                Label = SuggestionLabel(id),
+                Weight = SuggestionWeight(id).ToString(),
+                Status = Loc.T("尚未采集"),
+                Enabled = true,
+            });
+        }
+        SgSourceList.ItemsSource = _suggestionRows;
+    }
+
+    private void OnSuggestionsChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        SuggestionsOptions o = _host.Settings.Suggestions;
+        o.Show = SgShowBox.IsChecked == true;
+        o.ShowCount = (int)Math.Round(SgCountSlider.Value);
+        o.MaxCandidates = (int)Math.Round(SgMaxSlider.Value);
+        UpdateSuggestionLabels();
+        _host.SaveSettings();
+    }
+
+    private void OnSuggestionsBudgetChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        _host.Settings.Suggestions.CollectBudgetMs = (int)Math.Round(SgBudgetSlider.Value);
+        UpdateSuggestionLabels();
+        _host.SaveSettings();
+    }
+
+    /// <summary>立即重新采集：不清缓存、不重建服务，只把采集线程叫醒一次。</summary>
+    private void OnSuggestionsRefresh(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var service = _host.Suggestions;
+        if (service == null)
+        {
+            _host.Notify(Loc.T("建议服务未启动（诊断模式下不启用）"));
+            return;
+        }
+
+        service.RequestRefresh(0);
+        SgStatsText.Text = Loc.T("正在重新采集…");
+        _host.Notify(Loc.T("已开始重新采集建议"));
+
+        // 采集在后台线程，1.2 秒后把统计刷新一次（不阻塞界面）
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            RefreshSuggestionStats();
+        };
+        timer.Start();
+    }
+
+    private void OnSuggestionSourceToggle(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+
+        /* Sources 的语义是"空 = 全部启用"，所以这里只记"用户关掉了谁"：
+         * 全勾时 DisabledSources 为空，以后新增的第九个来源会自然跟着启用。
+         * 反过来，如果存"勾了哪几个"，旧配置就会把新来源冻在关闭状态。 */
+        if (sender is CheckBox { Tag: string id } box && _suggestionRows.FirstOrDefault(r => r.Id == id) is { } row)
+            row.Enabled = box.IsChecked == true;
+
+        _host.Settings.Suggestions.DisabledSources =
+            _suggestionRows.Where(r => !r.Enabled).Select(r => r.Id).ToList();
+        _host.Settings.Suggestions.Sources = new List<string>();
+        _host.SaveSettings();
+        RefreshSuggestionStats();
+    }
+
+    private void OnSuggestionsApplyFilters(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        SuggestionsOptions o = _host.Settings.Suggestions;
+
+        o.FileTypeFilter = SplitExtensions(SgFilterBox.Text);
+        o.Exclusions.FileExtensions = SplitExtensions(SgExtBox.Text);
+        // 都清空也不是“什么都不要”：扩展名黑名单空了就退回默认的三项，
+        // 否则 tmp/bak/log 会突然挤满建议列表。
+        if (o.Exclusions.FileExtensions.Count == 0)
+            o.Exclusions.FileExtensions = new List<string> { "tmp", "bak", "log" };
+
+        SgFilterBox.Text = string.Join(";", o.FileTypeFilter);
+        SgExtBox.Text = string.Join(";", o.Exclusions.FileExtensions);
+        _host.SaveSettings();
+        RefreshSuggestionStats();
+        _host.Notify(Loc.T("建议过滤已更新"));
+    }
+
+    private static List<string> SplitExtensions(string? text)
+        => (text ?? "").Split(new[] { ';', ',', ' ', '，', '；' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(x => x.Trim().TrimStart('.').ToLowerInvariant())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private void OnSuggestionsApplyHotkey(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        string text = (SgHotkeyBox.Text ?? "").Trim();
+        if (text.Length == 0)
+        {
+            _host.Settings.Suggestions.HideFileHotkey = "";
+            SgHotkeyBox.Text = "";
+            _host.SaveSettings();
+            _host.Notify(Loc.T("已关闭建议隐藏热键（右键菜单仍可隐藏）"));
+            return;
+        }
+
+        var parsed = Core.HotkeyCombo.Parse(text);
+        if (parsed == null)
+        {
+            _host.Notify(Loc.T("热键写法认不出来：需要修饰键 + 主键，例如 Ctrl+Alt+H"));
+            return;
+        }
+
+        string normalized = Core.HotkeyCombo.Normalize(text);
+        _host.Settings.Suggestions.HideFileHotkey = normalized;
+        SgHotkeyBox.Text = normalized;
+        _host.SaveSettings();
+        _host.Notify(Loc.F("建议隐藏热键已设为 {0}", normalized));
+    }
+
+    private void OnSuggestionsUnhide(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        var service = _host.Suggestions;
+        if (service == null || SgHiddenList.SelectedIndex < 0) return;
+        int index = SgHiddenList.SelectedIndex;
+        if (index >= _hiddenRows.Count) return;
+
+        HiddenRow row = _hiddenRows[index];
+        if (!service.Unhide(row.Path, row.IsFolder, out string error))
+        {
+            _host.Notify(Loc.T("还原失败：") + error);
+            return;
+        }
+        _host.Notify(Loc.T("已还原，刷新 Qbar 后会出现"));
+        RefreshSuggestionStats();
+    }
+
+    private void OnSuggestionsUnhideAll(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        var service = _host.Suggestions;
+        if (service == null) return;
+
+        int restored = 0;
+        string lastError = "";
+        foreach (string path in service.HiddenFiles().ToList())
+        {
+            if (service.Unhide(path, false, out string error)) restored++;
+            else lastError = error;
+        }
+        foreach (string path in service.HiddenFolders().ToList())
+        {
+            if (service.Unhide(path, true, out string error)) restored++;
+            else lastError = error;
+        }
+
+        _host.Notify(restored > 0
+            ? Loc.F("已还原 {0} 条被隐藏的建议", restored)
+            : Loc.T("没有可还原的建议项") + (lastError.Length > 0 ? "：" + lastError : ""));
+        RefreshSuggestionStats();
+    }
+
+    private sealed record HiddenRow(string Display, string Path, bool IsFolder);
+
+    private readonly List<HiddenRow> _hiddenRows = new();
+
+    /// <summary>来源 id 的界面名字（来源表和顺序都用它）。</summary>
+    private static string SuggestionLabel(string id) => id switch
+    {
+        "downloads" => Loc.T("下载文件夹"),
+        "desktop" => Loc.T("桌面"),
+        "wechat" => Loc.T("微信接收的文件"),
+        "wecom" => Loc.T("企业微信接收的文件"),
+        "feishu" => Loc.T("飞书文件"),
+        "windows-recent" => Loc.T("Windows 最近使用"),
+        "dialog-history" => Loc.T("文件对话框历史"),
+        "app-history" => Loc.T("应用内历史"),
+        _ => id,
+    };
+
+    /// <summary>来源表的一行。拖拽排序改的是集合顺序，不碰任何单独的顺序窗口。</summary>
+    public sealed class SuggestionSourceRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; init; } = "";
+        public string Label { get; init; } = "";
+        public string Weight { get; init; } = "";
+
+        private bool _enabled = true;
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Enabled)));
+            }
+        }
+
+        private string _status = "";
+        public string Status
+        {
+            get => _status;
+            set
+            {
+                if (string.Equals(_status, value, StringComparison.Ordinal)) return;
+                _status = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Status)));
+            }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private Point _sourceDragStart;
+    private int _sourceDragIndex = -1;
+
+    /// <summary>鼠标落点对应的来源行下标（0 起）；点不到行返回 -1。</summary>
+    private int SourceRowIndexAt(Point point)
+    {
+        if (SgSourceList == null) return -1;
+        var hit = SgSourceList.InputHitTest(point) as DependencyObject;
+        while (hit != null && !ReferenceEquals(hit, SgSourceList))
+        {
+            if (hit is ContentPresenter presenter)
+            {
+                int index = SgSourceList.ItemContainerGenerator.IndexFromContainer(presenter);
+                if (index >= 0) return index;
+            }
+            hit = ParentOf(hit);
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// 安全地往上找父级：TextBlock 里的 Run 是 ContentElement，直接
+    /// VisualTreeHelper.GetParent 会抛"Run 不是 Visual"（Qbar 就栽在这），
+    /// 拖拽时 OriginalSource 恰好经常是 Run。ContentElement 走逻辑树。
+    /// </summary>
+    private static DependencyObject? ParentOf(DependencyObject d)
+    {
+        try
+        {
+            if (d is Visual || d is System.Windows.Media.Media3D.Visual3D)
+                return VisualTreeHelper.GetParent(d);
+        }
+        catch (InvalidOperationException) { }
+        if (d is FrameworkContentElement fce) return fce.Parent;
+        if (d is FrameworkElement fe) return fe.Parent;
+        return null;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? source) where T : DependencyObject
+    {
+        for (DependencyObject? d = source; d != null; d = ParentOf(d))
+            if (d is T typed) return typed;
+        return null;
+    }
+
+    private void OnSuggestionSourceMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // 复选框区域留给勾选，不参与拖动；行里其它任何位置都是拖拽手柄。
+        if (FindAncestor<CheckBox>(e.OriginalSource as DependencyObject) != null) return;
+        int index = SourceRowIndexAt(e.GetPosition(SgSourceList));
+        if (index < 0) return;
+        _sourceDragIndex = index;
+        _sourceDragStart = e.GetPosition(SgSourceList);
+    }
+
+    private void OnSuggestionSourceMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _sourceDragIndex < 0) return;
+        Point now = e.GetPosition(SgSourceList);
+        if (Math.Abs(now.X - _sourceDragStart.X) < 6 && Math.Abs(now.Y - _sourceDragStart.Y) < 6) return;
+
+        var data = new DataObject("InputPlusSuggestionSource", _sourceDragIndex);
+        DragDrop.DoDragDrop(SgSourceList, data, DragDropEffects.Move);
+        _sourceDragIndex = -1;
+    }
+
+    private void OnSuggestionSourceDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent("InputPlusSuggestionSource") ? DragDropEffects.Move : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnSuggestionSourceDrop(object sender, DragEventArgs e)
+    {
+        _sourceDragIndex = -1;
+        if (_host == null || !e.Data.GetDataPresent("InputPlusSuggestionSource")) return;
+        if (e.Data.GetData("InputPlusSuggestionSource") is not int from) return;
+
+        int to = SourceRowIndexAt(e.GetPosition(SgSourceList));
+        if (to < 0 || from < 0 || from >= _suggestionRows.Count || to >= _suggestionRows.Count || from == to) return;
+
+        _suggestionRows.Move(from, to);
+        _host.Settings.Suggestions.SourceOrder = _suggestionRows.Select(r => r.Id).ToList();
+        _host.SaveSettings();
+        _host.Notify(Loc.T("来源顺序已更新，Qbar 空态会按新顺序展示"));
+        e.Handled = true;
+    }
+
+    /// <summary>控件跟随设置 + 已隐藏列表 + 上次采集统计。</summary>
+    private void RefreshSuggestions()
+    {
+        if (_host == null) return;
+        SuggestionsOptions o = _host.Settings.Suggestions;
+
+        SgShowBox.IsChecked = o.Show;
+        EnsureSuggestionRows();
+
+        /* 顺序以设置里的 SourceOrder 为准（空 = 出厂顺序）；这里把集合挪成同一顺序，
+         * 拖拽后的下一次 Refresh 也走同一条路，不会出现两套顺序。 */
+        var order = o.ResolveSourceOrder();
+        for (int i = 0; i < order.Count; i++)
+        {
+            SuggestionSourceRow? row = _suggestionRows.FirstOrDefault(r => r.Id == order[i]);
+            if (row == null) continue;
+            int current = _suggestionRows.IndexOf(row);
+            if (current != i) _suggestionRows.Move(current, i);
+        }
+        foreach (SuggestionSourceRow row in _suggestionRows) row.Enabled = o.IsSourceEnabled(row.Id);
+
+        SgFilterBox.Text = string.Join(";", o.FileTypeFilter);
+        SgExtBox.Text = string.Join(";", o.Exclusions.FileExtensions);
+        SgHotkeyBox.Text = o.HideFileHotkey ?? "";
+        SgCountSlider.Value = Math.Clamp(o.ShowCount, 0, 50);
+        SgMaxSlider.Value = Math.Clamp(o.MaxCandidates, 200, 5000);
+        SgBudgetSlider.Value = Math.Clamp(o.CollectBudgetMs, 200, 5000);
+        UpdateSuggestionLabels();
+        RefreshSuggestionStats();
+
+        /* 首屏还没采完时，状态表会全是「尚未采集」。等后台线程收工再补一次，
+         * 用户停在设置页就能看到每个来源的真实条数，不用退出再进。 */
+        if (_host.Suggestions is { IsWarm: false })
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                RefreshSuggestionStats();
+            };
+            timer.Start();
+        }
+    }
+
+    private void UpdateSuggestionLabels()
+    {
+        if (SgCountValue == null) return;
+        SgCountValue.Text = Loc.F("{0} 条", (int)Math.Round(SgCountSlider.Value));
+        SgMaxValue.Text = Loc.F("{0} 条", (int)Math.Round(SgMaxSlider.Value));
+        if (SgBudgetValue != null) SgBudgetValue.Text = Loc.F("{0} ms", (int)Math.Round(SgBudgetSlider.Value));
+    }
+
+    /// <summary>每个来源的"上次采集"格子：条数 / 失败原因 / 未启用 / 尚未采集。</summary>
+    private void RefreshSuggestionSourceStates(RecSnapshot snapshot)
+    {
+        foreach (SuggestionSourceRow row in _suggestionRows)
+        {
+            if (!row.Enabled)
+            {
+                row.Status = Loc.T("已关闭");
+                continue;
+            }
+            if (snapshot.CollectedAt == DateTime.MinValue)
+            {
+                row.Status = Loc.T("尚未采集");
+                continue;
+            }
+            if (snapshot.Failures.TryGetValue(row.Id, out string? failure) && !string.IsNullOrEmpty(failure))
+            {
+                row.Status = Loc.F("失败：{0}", failure.Length > 40 ? failure[..40] + "…" : failure);
+                continue;
+            }
+
+            snapshot.SourceCounts.TryGetValue(row.Id, out int count);
+            row.Status = count > 0 ? Loc.F("收录 {0} 条", count) : Loc.T("没有数据");
+        }
+    }
+
+    private void RefreshSuggestionStats()
+    {
+        if (SgStatsText == null) return;
+
+        var service = _host?.Suggestions;
+        if (service == null)
+        {
+            SgStatsText.Text = Loc.T("建议服务未启动（诊断模式下不启用）。");
+            return;
+        }
+
+        /* 已隐藏列表：文件在前、文件夹在后，均按路径排序，避免每次刷新顺序乱跳。 */
+        _hiddenRows.Clear();
+        foreach (string path in service.HiddenFiles().OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            _hiddenRows.Add(new HiddenRow(Loc.F("文件  {0}", path), path, false));
+        foreach (string path in service.HiddenFolders().OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            _hiddenRows.Add(new HiddenRow(Loc.F("文件夹  {0}", path), path, true));
+        SgHiddenList.ItemsSource = null;
+        SgHiddenList.ItemsSource = _hiddenRows.Select(r => r.Display).ToList();
+
+        /* 一条都没隐藏时不要把 96px 的空框摆在那里 —— 看着像"列表加载失败"。
+           空提示代替它，有内容再把列表放回来。 */
+        bool hasHidden = _hiddenRows.Count > 0;
+        if (SgHiddenEmpty != null)
+            SgHiddenEmpty.Visibility = hasHidden ? Visibility.Collapsed : Visibility.Visible;
+        if (SgHiddenList != null)
+            SgHiddenList.Visibility = hasHidden ? Visibility.Visible : Visibility.Collapsed;
+
+        var snapshot = service.Snapshot;
+        RefreshSuggestionSourceStates(snapshot);
+        if (snapshot.CollectedAt == DateTime.MinValue)
+        {
+            SgStatsText.Text = Loc.T("还没采集完：建议会在后台线程里补上，Qbar 这边不会等它。");
+            return;
+        }
+
+        SgStatsText.Text = Loc.F("上次采集：展示 {0} 条 / 原始 {1} 条，用时 {2} ms。来源明细见上表；某个来源失败只影响它自己。",
+            snapshot.Items.Count, snapshot.RawCount, snapshot.CollectMs);
+    }
 
     private void OnTryClick(object sender, RoutedEventArgs e) => _host?.ShowQbar();
 

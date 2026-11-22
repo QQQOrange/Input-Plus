@@ -1531,6 +1531,49 @@ public static class SettingsStore
             if (rule.StepSize is { } stepSize) rule.StepSize = Math.Clamp(stepSize, 10, 1000);
             if (rule.AnimationTime is { } animation) rule.AnimationTime = Math.Clamp(animation, 40, 2000);
         }
+        /* 文件对话框浮层 / 搜索前建议（1.3.4 新增，1.3.5 调整默认值）。
+         *
+         * 1.3.4 把 ShowOnAppear 默认成了 false，结果用户打开「另存为」看不到浮层，
+         * 以为功能没实现。1.3.5 起默认 true；老配置靠 DefaultsVersion 迁移一次，
+         * 迁移后用户再手动关掉就不会被改回去。 */
+        s.FileDialogBar ??= new FileDialogBarOptions();
+        if (s.FileDialogBar.DefaultsVersion < FileDialogBarOptions.DefaultsVersionCurrent)
+        {
+            s.FileDialogBar.ShowOnAppear = true;
+            s.FileDialogBar.DefaultsVersion = FileDialogBarOptions.DefaultsVersionCurrent;
+        }
+        s.FileDialogBar.MaxResults = Math.Clamp(s.FileDialogBar.MaxResults, 20, 500);
+        s.FileDialogBar.BarHeight = Math.Clamp(s.FileDialogBar.BarHeight, 40, 48);
+        s.FileDialogBar.PollFallbackMs = Math.Clamp(s.FileDialogBar.PollFallbackMs, 0, 2000);
+        s.FileDialogBar.Types ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        s.FileDialogBar.DisabledProcesses ??= new List<string>();
+        s.FileDialogBar.Favorites ??= new List<FavoriteDirectory>();
+        s.FileDialogBar.Favorites.RemoveAll(f => f == null || string.IsNullOrWhiteSpace(f.Path));
+        var seenFavorites = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        s.FileDialogBar.Favorites = s.FileDialogBar.Favorites
+            .Where(f => seenFavorites.Add(f.Path.Trim()))
+            .GroupBy(f => f.Path.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+        foreach (var favorite in s.FileDialogBar.Favorites)
+        {
+            favorite.Path = favorite.Path.Trim();
+            if (string.IsNullOrWhiteSpace(favorite.Name)) favorite.Name = Path.GetFileName(favorite.Path.TrimEnd('\\'));
+        }
+
+        s.Suggestions ??= new SuggestionsOptions();
+        s.Suggestions.ShowCount = Math.Clamp(s.Suggestions.ShowCount, 0, 50);
+        s.Suggestions.MaxCandidates = Math.Clamp(s.Suggestions.MaxCandidates, 200, 5000);
+        s.Suggestions.CollectBudgetMs = Math.Clamp(s.Suggestions.CollectBudgetMs, 200, 5000);
+        s.Suggestions.Exclusions ??= new SuggestionsExclusions();
+        s.Suggestions.Exclusions.Files ??= new List<string>();
+        s.Suggestions.Exclusions.Folders ??= new List<string>();
+        s.Suggestions.Exclusions.FileExtensions ??= new List<string>();
+        s.Suggestions.Sources ??= new List<string>();
+        s.Suggestions.DisabledSources ??= new List<string>();
+        s.Suggestions.FileTypeFilter ??= new List<string>();
+        s.Suggestions.SourceOrder ??= new List<string>();
+
         /* 手势名称 / 提示条（v1.6.3）：v1.6.0 曾把两者合并成一套「通知样式」，
          * 用下来两边的需求并不一样（名称框跟着手势、提示条贴死右下角），所以又拆回两套。
          *

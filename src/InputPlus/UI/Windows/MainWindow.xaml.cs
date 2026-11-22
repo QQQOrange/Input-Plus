@@ -205,6 +205,23 @@ public partial class MainWindow : Window
         else ShowPage(page);
     }
 
+    /// <summary>
+    /// 滚到「Qbar 面板 → 文件对话框浮层」那张卡（浮条菜单的「设置」用）。
+    /// 页面还没建出来时什么都不做 —— 调用方是先 Navigate 再排这一下的。
+    /// </summary>
+    public void ScrollToFileDialogSettings()
+    {
+        if (_pages.TryGetValue("qbar", out var page) && page is QbarSettingsView view)
+        {
+            view.ScrollToFileDialogBar();
+            Core.CoreLog.Info("[浮条] 已滚到文件对话框设置卡");
+        }
+        else
+        {
+            Core.CoreLog.Info("[浮条] 滚到设置卡：qbar 页还没建出来");
+        }
+    }
+
     /// <summary>按需创建页面：只有真正打开过的页面才会构建可视化树，启动更快、内存更省。</summary>
     /// <summary>把某页记到"最近使用"队尾。</summary>
     private void TouchPage(string page)

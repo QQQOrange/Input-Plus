@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Suggestions;
 using InputPlus.Core.Text;
 using InputPlus.Core.Windows;
 
@@ -60,6 +61,12 @@ public sealed record QbarResult(
     /// <summary>命中高亮区间（文件名内偏移）。只有文件结果会有，UI 负责上色。</summary>
     internal IReadOnlyList<QbarHighlight> Highlights { get; init; } = Array.Empty<QbarHighlight>();
 
+    /// <summary>
+    /// 这一行来自"搜索前建议"的哪个来源（空 = 不是建议行）。
+    /// UI 用它区分"建议"和普通结果：只有建议行才参与右键隐藏/热键隐藏。
+    /// </summary>
+    public string Suggestion { get; init; } = "";
+
     public string KindLabel => Kind switch
     {
         QbarKind.Command => Loc.T("命令"),
@@ -91,6 +98,13 @@ public sealed class QbarService
 
     /// <summary>动作目录的来源（可为空：空则 Qbar 不索引动作）。</summary>
     private readonly Func<IReadOnlyList<Core.Actions.ActionInfo>>? _actions;
+
+    /// <summary>
+    /// 空态分组标题（"最近文件"）：只有本次空态查询真的带了建议项时才非空。
+    /// Presenter 读它决定要不要在列表上方显示分组标题 —— 建议项与普通结果
+    /// 共用同一个列表，但"最近文件"这个标题只在建议出现时才有意义。
+    /// </summary>
+    public string EmptyStateGroup { get; private set; } = "";
 
     public QbarService(Func<AppSettings> settings, Func<IReadOnlyList<string>> clipboardHistory,
         Func<IReadOnlyList<Core.Actions.ActionInfo>>? actions = null)
@@ -327,6 +341,11 @@ public sealed class QbarService
     {
         var settings = _settings();
         string tail = (raw ?? "").Trim();
+
+        /* 分组标题只属于"本次空态建议"。任何一次查询都先清掉，
+         * 否则先空态（有建议）再输入，标题会粘在搜索结果上方，
+         * 看起来像搜索结果是"最近文件"。 */
+        EmptyStateGroup = "";
 
         if (chip != null)
         {
@@ -705,23 +724,46 @@ public sealed class QbarService
             .ToList();
     }
 
-    private static IEnumerable<QbarResult> DefaultResults(AppSettings settings)
+    private IEnumerable<QbarResult> DefaultResults(AppSettings settings)
     {
-        /* 空面板最上面先放"最近打开的项目"：用户唤出 Qbar 十有八九是想接着干
-         * 刚才那件事（同一个文档、同一个网页、同一个文件夹）。
+        /* 空面板最上面先放"搜索前建议"（Suggestions 层给的最近文件/文件夹/应用），
+         * 再放老的"最近打开的项目"。
          *
          * 只有这里会出现 —— DefaultResults 只在 QueryCore 里、且 text 为空
          * 且 chip 为空时才被调用；带搜索引擎或带关键字唤出时走的是另一条路，
-         * 不会看到这些条目。
+         * 不会看到这些条目（红线 6：两套列表互斥）。
          *
-         * 数量由设置里的 RecentCount 决定（0 = 不显示）。
+         * 数量由设置里的 ShowCount / RecentCount 决定（0 = 不显示）。
          * 文件夹也用 QbarKind.File（打开方式与文件一致，靠 shell 处理）；
          * 网址必须用 Web，否则会被当成路径去找。 */
+        EmptyStateGroup = "";
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var suggestions = SuggestionsService.Current?.FirstScreen(Math.Clamp(settings.Suggestions?.ShowCount ?? 20, 0, 50))
+                          ?? Array.Empty<RecItem>();
+        if (settings.Suggestions?.Show == true && suggestions.Count > 0)
+        {
+            EmptyStateGroup = Loc.T("最近文件");
+            foreach (RecItem item in suggestions)
+            {
+                if (!seen.Add(item.Key)) continue;
+                string badge = item.Badges.Count == 0
+                    ? Loc.T("最近")
+                    : string.Join("·", item.Badges.Take(2));
+                yield return new QbarResult(QbarKind.File, item.DisplayName, item.Path, badge, item.Path)
+                {
+                    Score = 0,
+                    Glyph = item.IsFolder ? "\uE8B7" : "\uE8A5",
+                    Suggestion = item.SourceId,
+                };
+            }
+        }
+
         int recentCount = Math.Clamp(settings.Qbar.RecentCount, 0, 20);
         if (recentCount > 0)
         {
             foreach (var recent in RecentTargets.Top(recentCount))
             {
+                if (!seen.Add(RecItem.NormalizeKey(recent.Target))) continue;
                 var kind = recent.Kind == RecentTargetKind.Url ? QbarKind.Web : QbarKind.File;
                 yield return new QbarResult(kind, recent.Title, recent.Target, Loc.T("最近"), recent.Target)
                 { Score = 0 };

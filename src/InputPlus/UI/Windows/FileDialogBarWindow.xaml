@@ -1,0 +1,309 @@
+<Window x:Class="InputPlus.UI.Windows.FileDialogBarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:InputPlus.UI.Windows"
+        xmlns:fd="clr-namespace:InputPlus.Core.FileDialog"
+        Title="InputPlus 文件对话框搜索"
+        Width="720"
+        Height="44"
+        SizeToContent="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        ResizeMode="NoResize"
+        Topmost="False"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        FontFamily="{StaticResource Font.Ui}">
+
+    <Window.Resources>
+        <Style x:Key="BarItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Focusable" Value="False" />
+            <!-- 每行给个可访问名字：不给的话 UIA 拿到的 Name 是数据对象的 ToString()，
+                 读屏软件（和我们自己的自动化自检）看到的是 "InputPlus.Core.FileDialog.QuickSwitchRow"。 -->
+            <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Margin="6,1">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.OverlayRowHover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.OverlayAccentSoft}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate DataType="{x:Type local:BarRow}">
+            <Grid Height="34">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0" Width="20" Height="20" Margin="6,0,10,0" VerticalAlignment="Center">
+                    <Image Source="{Binding Icon}"
+                           Visibility="{Binding IconVisibility}"
+                           Width="18" Height="18" Stretch="Uniform" />
+                    <TextBlock Text="{Binding Glyph}"
+                               Visibility="{Binding GlyphVisibility}"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="14"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                </Grid>
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Title}"
+                               FontSize="14"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource Brush.OverlayText}" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Subtitle}"
+                               FontSize="12"
+                               Margin="10,0,8,0"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                </Grid>
+                <Border Grid.Column="2"
+                        CornerRadius="4"
+                        Padding="6,1"
+                        Margin="0,0,6,0"
+                        VerticalAlignment="Center"
+                        Background="{DynamicResource Brush.OverlayAccentSoft}"
+                        Visibility="{Binding BadgeVisibility}">
+                    <TextBlock Text="{Binding Badge}"
+                               FontSize="11"
+                               Foreground="{DynamicResource Brush.OverlayAccentText}" />
+                </Border>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type fd:QuickSwitchRow}">
+            <Grid Height="36">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{Binding Glyph}"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="14"
+                           VerticalAlignment="Center"
+                           Margin="6,0,10,0"
+                           Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" FontSize="13.5"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource Brush.OverlayText}" />
+                    <TextBlock Text="{Binding Subtitle}" FontSize="11" Margin="0,1,0,0"
+                               Visibility="{Binding SubtitleVisibility}"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+    </Window.Resources>
+
+    <!-- 分层窗口：圆角 + 外侧阴影要靠它。贴合边缘那两角由 ApplyOrientation 改成直角，
+         拖动时只 SetWindowPos 改位置（尺寸恒定），不做整窗重合成。 -->
+    <Grid x:Name="OuterGrid" Margin="8">
+        <Border x:Name="Panel"
+                CornerRadius="12"
+                BorderThickness="1"
+                BorderBrush="{DynamicResource Brush.OverlayBorder}"
+                Background="{DynamicResource Brush.OverlayCard}">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.38" Color="#000000" />
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition x:Name="ListRow" Height="Auto" />
+                    <RowDefinition x:Name="FooterRow" Height="Auto" />
+                    <RowDefinition x:Name="InputRow" Height="44" />
+                </Grid.RowDefinitions>
+
+                <Grid x:Name="InputGrid" Grid.Row="2" Margin="12,0,10,0" KeyboardNavigation.TabNavigation="Cycle">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 推荐文件夹 chip：资源管理器正在浏览的目录；对话框已在同一目录时隐藏 -->
+                    <Button x:Name="FolderChip" Grid.Column="0"
+                            Style="{StaticResource Button.Ghost}"
+                            Padding="7,3" Margin="0,0,6,0" MinWidth="0"
+                            Focusable="False"
+                            Visibility="Collapsed"
+                            Click="OnFolderChipClick"
+                            ToolTip="导航到资源管理器正在浏览的文件夹（Ctrl+G）">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="13" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                            <TextBlock x:Name="ChipText" FontSize="12" Margin="5,0,0,0"
+                                       MaxWidth="130" TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                        </StackPanel>
+                    </Button>
+
+                    <TextBlock Grid.Column="1"
+                               Text="&#xE721;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               FontSize="15"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"
+                               Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                    <TextBox x:Name="QueryBox"
+                             Grid.Column="2"
+                             TabIndex="0"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             FontSize="15"
+                             VerticalContentAlignment="Center"
+                             Foreground="{DynamicResource Brush.OverlayText}"
+                             CaretBrush="{DynamicResource Brush.OverlayText}"
+                             AcceptsReturn="False"
+                             AcceptsTab="False"
+                             SpellCheck.IsEnabled="False"
+                             InputMethod.IsInputMethodEnabled="True" />
+                    <Border x:Name="ScopeChip"
+                            Grid.Column="3"
+                            CornerRadius="4"
+                            Padding="6,2"
+                            Margin="8,0,0,0"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource Brush.OverlayCardAlt}"
+                            BorderThickness="1"
+                            BorderBrush="{DynamicResource Brush.OverlayBorder}">
+                        <TextBlock x:Name="ScopeText"
+                                   FontSize="11"
+                                   Text="全部"
+                                   Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                    </Border>
+
+                    <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                        <Button x:Name="FavoriteButton" Width="32" Height="32" MinWidth="0" Padding="0"
+                                Style="{StaticResource Button.Ghost}" TabIndex="1"
+                                Click="OnFavoriteClick" ToolTip="收藏">
+                            <TextBlock Text="&#xE734;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                        </Button>
+                        <Button x:Name="HistoryButton" Width="32" Height="32" MinWidth="0" Padding="0" Margin="2,0,0,0"
+                                Style="{StaticResource Button.Ghost}" TabIndex="2"
+                                Click="OnHistoryClick" ToolTip="历史">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                        </Button>
+                        <Button x:Name="MenuButton" Width="32" Height="32" MinWidth="0" Padding="0" Margin="2,0,0,0"
+                                Style="{StaticResource Button.Ghost}" TabIndex="3"
+                                Click="OnMenuClick" ToolTip="更多">
+                            <TextBlock Text="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                        </Button>
+                    </StackPanel>
+
+                </Grid>
+
+                <Border x:Name="ListHost"
+                        Grid.Row="0"
+                        Visibility="Collapsed"
+                        BorderThickness="0,1,0,0"
+                        BorderBrush="{DynamicResource Brush.OverlayBorder}">
+                    <ListBox x:Name="ResultList"
+                             MaxHeight="360"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Focusable="False"
+                             ItemContainerStyle="{StaticResource BarItemStyle}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel" />
+                </Border>
+
+                <Border x:Name="OverlayHost"
+                        Grid.Row="0"
+                        Visibility="Collapsed"
+                        BorderThickness="0,1,0,0"
+                        BorderBrush="{DynamicResource Brush.OverlayBorder}">
+                    <StackPanel>
+                        <TextBlock x:Name="OverlayTitle" FontSize="11" Margin="14,8,14,4"
+                                   Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                        <ListBox x:Name="OverlayList"
+                                 MaxHeight="320"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 ItemContainerStyle="{StaticResource BarItemStyle}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 PreviewMouseLeftButtonUp="OnOverlayClick"
+                                 MouseMove="OnOverlayMouseMove">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Height="36" Opacity="{Binding Opacity}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid Grid.Column="0" Width="20" Height="20" Margin="6,0,10,0" VerticalAlignment="Center">
+                                            <Image Source="{Binding Icon}" Visibility="{Binding IconVisibility}"
+                                                   Width="18" Height="18" Stretch="Uniform" />
+                                            <TextBlock Text="{Binding Glyph}" Visibility="{Binding GlyphVisibility}"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                       FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                                        </Grid>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Title}" FontSize="13.5"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource Brush.OverlayText}" />
+                                            <TextBlock Text="{Binding Subtitle}" FontSize="11" Margin="0,1,0,0"
+                                                       Visibility="{Binding SubtitleVisibility}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="Footer"
+                        Grid.Row="1"
+                        Visibility="Collapsed"
+                        BorderThickness="0,1,0,0"
+                        BorderBrush="{DynamicResource Brush.OverlayBorder}"
+                        Padding="14,4">
+                    <TextBlock x:Name="FooterText"
+                               FontSize="11"
+                               Text="↑↓ 选择 · Enter 填入对话框 · Alt+Enter 定位文件 · Tab 切换范围 · Esc 关闭"
+                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

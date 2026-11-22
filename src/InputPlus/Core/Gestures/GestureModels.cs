@@ -102,49 +102,10 @@ public sealed class MouseGesture
     /// <summary>导入时无法自动翻译的说明（例如 Lua 脚本），显示在列表里提醒用户。</summary>
     public string Note { get; set; } = "";
 
-    /// <summary>
-    /// 美化后的标准图形（Gesture Template / Prototype）：口径与 <see cref="Path"/> 相同，
-    /// x0,y0,x1,y1… 已归一化到 0~1000。
-    ///
-    /// 空 = 这条手势还没美化过（老数据，或者用户把美化关掉了）。有值时：
-    ///   · 列表缩略图、创建预览、触发后的覆盖层替换都画它；
-    ///   · 识别也用它当模板（<see cref="GestureEngine.ShapeOf"/> 优先取它）——
-    ///     美化经过语义守门，和原轨迹在识别器里是同一个手势。
-    /// 原始轨迹另存 <see cref="RawPath"/>，随时可以重新美化。
-    /// </summary>
-    public List<int> Beauty { get; set; } = new();
-
-    /// <summary>美化前的原始轨迹（Raw Stroke），口径同 <see cref="Path"/>；调试与"重新美化"用。</summary>
-    public List<int> RawPath { get; set; } = new();
-
-    /// <summary>这条模板是用哪一档美化出来的（off / light / medium / strong）；空 = 没美化过。</summary>
-    public string BeautyLevel { get; set; } = "";
-
-    /// <summary>美化算法版本：算法改了口径就 +1，旧模板据此重新生成。</summary>
-    public int BeautyVersion { get; set; }
-
+    /// <summary>轨迹点数（识别/界面显示用）。</summary>
     public int PathPointCount => Path.Count / 2;
 
     public bool HasPath => Path.Count >= 4;
-
-    /// <summary>有没有可用的美化模板。</summary>
-    public bool HasBeauty => Beauty is { Count: >= 4 };
-
-    /// <summary>有没有存下"美化前"的原始轨迹（重新美化 / 恢复原样要用）。</summary>
-    public bool HasRaw => RawPath is { Count: >= 4 };
-
-    /// <summary>美化模板的点列；没有时返回空表（调用方别再自己判空集合）。</summary>
-    public List<GestureMath.Pt> BeautyPoints()
-    {
-        var list = new List<GestureMath.Pt>(Beauty?.Count / 2 ?? 0);
-        if (Beauty == null) return list;
-        for (int i = 0; i + 1 < Beauty.Count; i += 2)
-            list.Add(new GestureMath.Pt(Beauty[i], Beauty[i + 1]));
-        return list;
-    }
-
-    /// <summary>显示 / 识别用的形状：有美化模板就美化模板，否则退回原始轨迹。</summary>
-    public List<GestureMath.Pt> DisplayPoints() => HasBeauty ? BeautyPoints() : Points();
 
     /// <summary>通配手势：任何方向都能触发（FlowMouse 的 <c>*</c>）。</summary>
     public bool IsWildcard => Pattern == GesturePattern.Wildcard;
@@ -205,10 +166,6 @@ public sealed class MouseGesture
         Chord = Chord,
         Kind = Kind,
         Path = new List<int>(Path),
-        Beauty = new List<int>(Beauty),
-        RawPath = new List<int>(RawPath),
-        BeautyLevel = BeautyLevel,
-        BeautyVersion = BeautyVersion,
         Pattern = Pattern,
         Wheel = Wheel,
         Corner = Corner,
@@ -232,10 +189,6 @@ public sealed class MouseGesture
         Chord = other.Chord;
         Kind = other.Kind;
         Path = new List<int>(other.Path);
-        Beauty = new List<int>(other.Beauty);
-        RawPath = new List<int>(other.RawPath);
-        BeautyLevel = other.BeautyLevel;
-        BeautyVersion = other.BeautyVersion;
         Pattern = other.Pattern;
         Wheel = other.Wheel;
         Corner = other.Corner;
@@ -385,43 +338,6 @@ public sealed class GestureOptions
     /// 形状不变，只是线条顺了。出厂开着，可在「鼠标手势 → 手势设置」里关掉。
     /// </summary>
     public bool SmoothStrokes { get; set; } = true;
-
-    /* ───────── 手势美化（v1.7.0） ─────────
-     *
-     * 创建手势时把手绘轨迹规整成标准图形（<see cref="MouseGesture.Beauty"/>），
-     * 触发时先原样画、匹配成功后替换成这个图形。
-     *
-     * 默认全开：美化只改"看起来的样子"，不改识别阈值 —— 守门（方向串 + 形状距离）
-     * 不过就退回原始轨迹，所以对存量手势是只赚不赔。
-     */
-
-    /// <summary>创建手势时做轨迹美化（Stroke Beautification）。关掉就保存原始轨迹，和以前一样。</summary>
-    public bool BeautifyOnCreate { get; set; } = true;
-
-    /// <summary>美化强度：off / light / medium / strong（见 <see cref="StrokeBeautyLevels"/>）。</summary>
-    public string BeautifyLevel { get; set; } = StrokeBeautyLevels.IdMedium;
-
-    /// <summary>解析后的美化强度；写了不认识的词按 medium 处理。</summary>
-    public StrokeBeautyLevel BeautyLevel
-    {
-        get => StrokeBeautyLevels.Parse(BeautifyLevel);
-        set => BeautifyLevel = StrokeBeautyLevels.ToId(value);
-    }
-
-    /// <summary>
-    /// 匹配成功后把屏幕上的原始轨迹替换成美化模板（Match-then-Replace）。
-    /// 关掉就是老行为：手画那条线留着，只显示手势名称。
-    /// </summary>
-    public bool BeautifyOnMatch { get; set; } = true;
-
-    /// <summary>替换过渡时长（毫秒）：0 = 直接切换；夹在 0~600。</summary>
-    public int BeautifyTransitionMs { get; set; } = 140;
-
-    /// <summary>
-    /// 旧手势（没有美化模板）在第一次被用到时按当前设置回填一份。
-    /// 关掉则老手势永远保持原样，只能用「重新美化」手动处理。
-    /// </summary>
-    public bool BeautifyBackfill { get; set; } = true;
 
     /// <summary>轨迹颜色（#RRGGBB）。</summary>
     public string TrailColor { get; set; } = "#3B82F6";

@@ -151,6 +151,12 @@ public sealed partial class HotkeyEngine : IDisposable
     private int _lastRepeatVk = -1;
     private DateTime _lastRepeatTime = DateTime.MinValue;
 
+    /* 修饰键单键绑定（caps_lalt = 只看文件夹 这类）的去重记录。
+     * 同一个物理动作可能先发具体码 0xA4、再发通用码 0x12，两次都命中同一条绑定，
+     * 250ms 内只认第一次，否则按一下会执行两遍。 */
+    private string _lastModifierCombo = "";
+    private DateTime _lastModifierAt = DateTime.MinValue;
+
 
 
     /// <summary>按住期间的判定周期（毫秒）。长按阈值精度依赖它。</summary>

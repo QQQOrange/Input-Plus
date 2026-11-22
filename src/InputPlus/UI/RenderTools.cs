@@ -156,6 +156,17 @@ public static class RenderTools
                平时没人会截图给它，回归时它的排版坏了也发现不了。 */
             if (page == "qbar" && main.GetPage("qbar") is InputPlus.UI.Views.QbarSettingsView qv)
             {
+                /* 先把建议采集跑起来：这样右栏底部那两张卡的统计行是真实数字，
+                   而不是"还没采集完"。采集在后台线程，最多等 3 秒。 */
+                try
+                {
+                    host.Suggestions?.Start();
+                    var warmDeadline = DateTime.UtcNow.AddSeconds(3);
+                    while (host.Suggestions is { IsWarm: false } && DateTime.UtcNow < warmDeadline)
+                        System.Threading.Thread.Sleep(40);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染前启动建议失败：" + ex.Message); }
+
                 try
                 {
                     Pump(200);
@@ -195,6 +206,30 @@ public static class RenderTools
                     Pump(160);
                 }
                 catch (Exception ex) { CoreLog.Warn("渲染 Qbar 文件搜索卡失败：" + ex.Message); }
+
+                /* 「文件对话框浮层」现在是「文件搜索」页里的一张独立卡（v1.3.13 从右栏搬过来）：
+                   切到该标签并滚到卡片再拍，排版挤坏（复选框换行、滑块标签重叠）只有靠图能看出来。 */
+                try
+                {
+                    qv.ScrollToFileDialogBarForRender();
+                    Pump(260);
+                    Save(main, Path.Combine(outDir, "qbar-filedialog-settings.png"));
+                    qv.SelectTabForRender("search");
+                    Pump(120);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染文件对话框设置卡失败：" + ex.Message); }
+
+                try
+                {
+                    qv.SelectTabForRender("files");
+                    Pump(220);
+                    qv.ScrollFilesToCardForRender(5);
+                    Pump(240);
+                    Save(main, Path.Combine(outDir, "qbar-suggestions-settings.png"));
+                    qv.SelectTabForRender("search");
+                    Pump(160);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染建议设置卡失败：" + ex.Message); }
 
                 /* 展开后的文件搜索窗口：它只在按了展开按钮之后才存在，
                    平时连编译期都看不出来长啥样。这里用一个固定查询拍一张，
@@ -295,10 +330,6 @@ public static class RenderTools
                     dlg.Show();
                     Pump(320);
                     Save(dlg, Path.Combine(outDir, "gestures-prefs.png"));
-                    /* 美化卡夹在外观与参数之间，滚到它再拍一张。 */
-                    dlg.ScrollOptionsToBeautyForRender();
-                    Pump(220);
-                    Save(dlg, Path.Combine(outDir, "gestures-prefs-beauty.png"));
                     /* 参数卡在最底下：滚到底再拍一张，免得只有外观那半截。 */
                     dlg.ScrollOptionsToEndForRender();
                     Pump(220);
@@ -768,7 +799,8 @@ public static class RenderTools
                         Pump(220);
                         SaveElement(hits, Path.Combine(outDir, "keys-binding-search.png"));
                         File.WriteAllText(Path.Combine(outDir, "keys-binding-search-placement.txt"),
-                            kv.DescribeBindingSearchPlacement() + "\n" + kv.DescribeBindingSearchField());
+                            kv.DescribeBindingSearchPlacement() + "\n" + kv.DescribeBindingSearchField()
+                            + "\n" + kv.DescribeDegeneratePlacement());
                     }
                     else
                     {
@@ -1077,6 +1109,31 @@ public static class RenderTools
             DumpUntranslatedAudit(qbar, Path.Combine(outDir, "untranslated-win-qbar-panel.txt"), "Qbar 面板");
         }
         count++;
+
+        /* 空态建议：这是「搜索前建议」唯一的视觉证据 —— 分组标题、徽标、
+           行高、虚拟化列表的空隙都在这张图里。
+           采集走后台线程，这里最多等 3 秒；等不到就渲染空列表，
+           图仍然有效（只是不能当验收证据），不会把 --render 卡死。 */
+        if (host.Suggestions != null)
+        {
+            try
+            {
+                host.Suggestions.Start();
+                var deadline = DateTime.UtcNow.AddSeconds(3);
+                while (!host.Suggestions.IsWarm && DateTime.UtcNow < deadline)
+                    System.Threading.Thread.Sleep(40);
+
+                qbar.Open("");
+                qbar.ParkOffScreenForRender();
+                Pump(320);
+                qbar.Height = qbar.ActualHeight;
+                qbar.UpdateLayout();
+                Pump(120);
+                Save(qbar, Path.Combine(outDir, "qbar-empty-suggestions.png"));
+                count++;
+            }
+            catch (Exception ex) { CoreLog.Warn("渲染空态建议失败：" + ex.Message); }
+        }
 
         // 标签形态：输入 "bd " 之后 bd 变成标签，输入框只剩搜索词
         qbar.OpenForRender("bd");

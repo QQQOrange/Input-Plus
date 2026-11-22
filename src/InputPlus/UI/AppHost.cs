@@ -42,6 +42,12 @@ public sealed partial class AppHost : IDisposable
     public WindowBindingService Bindings { get; }
     public QbarService Qbar { get; }
 
+    /// <summary>文件对话框浮层：任意程序弹出"打开/保存"对话框时贴在下沿的搜索栏。</summary>
+    public Core.FileDialog.FileDialogBarService FileDialogBar { get; }
+
+    /// <summary>搜索前建议：Qbar 空态的那一组"最近文件/文件夹/应用"。</summary>
+    public Core.Suggestions.SuggestionsService? Suggestions { get; }
+
     /// <summary>鼠标手势：钩子里接管起始键、识别笔画、执行动作。</summary>
     public GestureService Gestures { get; }
 
@@ -115,6 +121,28 @@ public sealed partial class AppHost : IDisposable
 
         Qbar = new QbarService(() => Settings, () => Clipboard.History, () => Actions.Items);
 
+        /* 文件对话框浮层：只在这一层建一次，SettingsChanged 时按开关重挂。
+         * 它在 headless（自检/渲染/诊断）模式下不启动 —— 那些模式没有真实桌面，
+         * 装全局监听会让自检互相干扰。 */
+        FileDialogBar = new Core.FileDialog.FileDialogBarService(
+            () => Settings, Application.Current?.Dispatcher ?? _dispatcher)
+        {
+            PersistSettings = SaveSettings,
+            OpenSettings = ShowFileDialogSettings,
+        };
+
+        /* 搜索前建议：采集在它自己的后台线程里跑，这里只负责建实例 + 把
+         * "隐藏/还原要落盘"这件事接回主进程的保存出口（配置写失败要能回滚）。 */
+        Suggestions = new Core.Suggestions.SuggestionsService(() => Settings)
+        {
+            SettingsPersist = SaveSettings,
+        };
+        Suggestions.Notified += (message, _) => Notify(message);
+        SettingsChanged += () =>
+        {
+            try { Suggestions?.Apply(); } catch (Exception ex) { CoreLog.Swallow(ex, "应用搜索前建议设置"); }
+        };
+
         /* 后台预热「常用网址」的 favicon：图标下载好之后会落到磁盘缓存，
          * 进设置页时第一帧就是真图标，不会先画首字母再闪一下。
          * 只排队、不等结果，启动速度不受影响。 */
@@ -146,7 +174,19 @@ public sealed partial class AppHost : IDisposable
         Scroll.Attach(Gestures.Hook);
         SettingsChanged += () =>
         {
-            try { Scroll.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "应用平滑滚动设置"); }
+            try
+            {
+                Scroll.ApplySettings();
+                /* 钩子可能在启动阶段短暂装不上（别的鼠标钩子先占、桌面切换等），
+                 * 设置一变就自愈一次；Attach 是幂等的（同一个 hook 直接返回）。 */
+                Gestures.EnsureMouseHook();
+                Scroll.Attach(Gestures.Hook);
+            }
+            catch (Exception ex) { CoreLog.Swallow(ex, "应用平滑滚动设置"); }
+        };
+        SettingsChanged += () =>
+        {
+            try { FileDialogBar.Apply(); } catch (Exception ex) { CoreLog.Swallow(ex, "应用文件对话框浮层设置"); }
         };
 
         /* 按住拖拽：独立的一套键盘/鼠标钩子（引擎是 HoldDrag 原样搬过来的），
@@ -414,6 +454,29 @@ public sealed partial class AppHost : IDisposable
 
         Engine.Start(installHook: !hookHostReady);
         if (Settings.Global.ShowTrayIcon) CreateTray();
+
+        /* 文件对话框浮层：装 WinEvent 监听 + 热键。诊断模式（--selftest/--render…）
+         * 一律不装 —— 它们没有真实桌面，装了只会和自检互相干扰。 */
+        if (!Core.CliFlags.IsDiagnostic(Environment.GetCommandLineArgs().Skip(1)))
+        {
+            try { FileDialogBar.Start(); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "启动文件对话框浮层"); }
+
+            /* 浮层预热：启动空闲时把窗口建好、离屏显示一次再藏起来。
+             * 这样第一遇到对话框时不再承担 XAML/模板/首次布局的成本 ——
+             * 那是冷启动"对话框出来了、浮条要等一会儿才冒出来"的主因。
+             * ApplicationIdle 优先级、失败只记日志，不挡启动。 */
+            _dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { FileDialogBar.WarmUp(); }
+                catch (Exception ex) { CoreLog.Swallow(ex, "预热文件对话框浮层"); }
+            }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+
+            /* 建议采集同样是"后台线程 + 懒加载"：Start() 立刻返回，
+             * 首屏靠缓存，第一次真采集在后台跑完再发 Changed。 */
+            try { Suggestions?.Start(); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "启动搜索前建议"); }
+        }
 
         /* 启动善后：上一次如果被强杀/崩溃，系统里可能还留着"按下去没抬起来"的
          * 修饰键或鼠标键（表现是 Win 粘住、点击变成多选、鼠标像一直按着）。

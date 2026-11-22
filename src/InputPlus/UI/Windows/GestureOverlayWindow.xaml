@@ -47,34 +47,6 @@
               StrokeEndLineCap="Round"
               IsHitTestVisible="False" />
 
-        <!-- 美化模板（「匹配后替换」用）：三层笔法与上面完全一致，只是 opacity
-             由换图时的过渡动画驱动。画在 Trail 之后 = 盖在实时轨迹上面，淡入时
-             新旧两条线交叉过渡，看起来就是轨迹"收拢成标准形"。 -->
-        <Path x:Name="TemplateShadowPath"
-              Stroke="#14000000"
-              StrokeThickness="5"
-              StrokeLineJoin="Round"
-              StrokeStartLineCap="Round"
-              StrokeEndLineCap="Round"
-              Opacity="0"
-              IsHitTestVisible="False" />
-        <Path x:Name="TemplateBorderPath"
-              Stroke="#B3FFFFFF"
-              StrokeThickness="3.5"
-              StrokeLineJoin="Round"
-              StrokeStartLineCap="Round"
-              StrokeEndLineCap="Round"
-              Opacity="0"
-              IsHitTestVisible="False" />
-        <Path x:Name="TemplatePath"
-              Stroke="#FF3B82F6"
-              StrokeThickness="1.5"
-              StrokeLineJoin="Round"
-              StrokeStartLineCap="Round"
-              StrokeEndLineCap="Round"
-              Opacity="0"
-              IsHitTestVisible="False" />
-
         <!-- 起始超时：光标尖端一个红圆，照 WGestures 2 的 B/X.cs:21-28 画 ——
              24×24 的框内缩 4px 得到直径 16 的圆，纯红填充 + 白色 2px 描边，没有阴影。 -->
         <Ellipse x:Name="TimeoutDot"

@@ -16,6 +16,7 @@ using InputPlus.Core.Icons;
 using InputPlus.Core.Qbar;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Suggestions;
 using InputPlus.Core.Windows;
 using InputPlus.UI.Theme;
 
@@ -65,6 +66,24 @@ public partial class QbarWindow : Window
      *   _menuActions      菜单行 id → 动作。行本身只是个 QbarResult，
      *                     不能用委托直接挂（列表绑定的是数据），所以按 id 查表。
      */
+    /* ---- 拖动面板（物理像素，跨 DPI 不用换算） ----
+     *   _dragging      正在拖的手势里
+     *   _dragMoved     这次手势真的移动过（只是点一下空白处不该写盘）
+     *   _dragCursor    按下那一刻的光标位置
+     *   _dragWindowRect按下那一刻的窗口矩形
+     */
+    private bool _dragging;
+    private bool _dragMoved;
+    private Core.Interop.NativeMethods.POINT _dragCursor;
+    private Core.Interop.NativeMethods.RECT _dragWindowRect;
+    private DispatcherTimer? _dragPoll;
+
+    private const int VK_LBUTTON = 0x01;
+    private const int VK_ESCAPE = 0x1B;
+
+    /// <summary>这个键此刻是否被按住（查物理状态，不受 UIPI / 钩子影响）。</summary>
+    private static bool IsDown(int vk) => (Core.Interop.NativeMethods.GetAsyncKeyState(vk) & 0x8000) != 0;
+
     private QbarItem? _menuFile;
     private List<QbarItem> _menuReturnItems = new();
     private int _menuReturnIndex;
@@ -99,7 +118,22 @@ public partial class QbarWindow : Window
         Deactivated += OnDeactivated;
         Activated += (_, _) => FocusInputNow();
         PreviewKeyDown += OnWindowKeyDown;
-        Results.SelectionChanged += (_, _) => UpdateHint();
+        Results.SelectionChanged += (_, _) =>
+        {
+            UpdateHint();
+            SyncSuggestionSelection();
+        };
+
+        /* 建议在后台线程采集完会发一次 Changed。只有"空输入的空态"需要重画：
+         * 用户已经在打字时列表里是搜索结果，不能被迟到的建议覆盖（红线 6）。 */
+        if (_host.Suggestions != null) _host.Suggestions.Changed += OnSuggestionsChanged;
+        /* 拖动面板空白处改位置。
+         *
+         * 不用 Window.DragMove()：它把拖动交给系统模态移动循环（SendMessage WM_NCLBUTTONDOWN），
+         * 那种循环只认"真鼠标"的移动消息，注入/重定向的鼠标事件在第一下之后就断了 ——
+         * 自己跟踪 GetCursorPos + SetWindowPos，位置算得清、拖到屏幕边上也好夹。 */
+        Panel.PreviewMouseLeftButtonDown += OnPanelMouseDown;
+        Panel.PreviewMouseMove += OnPanelMouseMove;   // 只管光标形状，拖动由定时器驱动
 
         // 构造函数里建一次，之后只 Start/Stop：DispatcherTimer 反复 new 会挂在
         // Dispatcher 的计时器列表上，长期开着面板会慢慢积累。
@@ -459,8 +493,12 @@ public partial class QbarWindow : Window
         => x < left || x >= right || y < top || y >= bottom;
 
     private SolidColorBrush? _panelBrush;
-    private SolidColorBrush? _borderBrush;
     private string _styleStamp = "";
+
+    // 面板主色 + 用户设的不透明度：TintFill 的画笔按这两项算，
+    // 有模糊底图时还要再压一次（见 ApplyPanelTint）。
+    private Color _panelColor;
+    private double _panelOpacity;
 
     /// <summary>
     /// 判断面板底色是深是浅，并据此推出一整套前景色。
@@ -691,16 +729,18 @@ public partial class QbarWindow : Window
             if (stamp == _styleStamp) return;
             _styleStamp = stamp;
 
-            var accent = (Color)ColorConverter.ConvertFromString(q.AccentColor);
-            _borderBrush = new SolidColorBrush(accent);
-            _borderBrush.Freeze();
-            Panel.BorderBrush = _borderBrush;
+            /* 描边不再用强调色。
+             *
+             * 之前这里拿 q.AccentColor 画 1.5px 的框，默认是 #2B6CF6 ——
+             * 在深色面板上是"发光的蓝边"，在浅色面板上更扎眼，用户说"太突兀"。
+             * 描边的作用只是把面板和桌面分开，用主题自带的中性细线就够：
+             * 深色 #33FFFFFF / 浅色 #1F000000，一层很淡的白/黑，日夜都吃得住。 */
+            Panel.BorderBrush = (Brush)FindResource("Brush.OverlayBorder");
 
+            _panelColor = effectivePanel;
+            _panelOpacity = double.TryParse(q.PanelOpacity, out double op) ? Math.Clamp(op, 0.3, 1) : 0.96;
+            ApplyPanelTint();
             var panelColor = effectivePanel;
-            byte alpha = (byte)(double.TryParse(q.PanelOpacity, out double op) ? Math.Clamp(op, 0.3, 1) * 255 : 245);
-            _panelBrush = new SolidColorBrush(Color.FromArgb(alpha, panelColor.R, panelColor.G, panelColor.B));
-            _panelBrush.Freeze();
-            Panel.Background = _panelBrush;
 
             // 整套前景色按底色亮度推导，保证任何底色下文字都可读
             ApplyForegroundPalette(panelColor);
@@ -715,6 +755,100 @@ public partial class QbarWindow : Window
         catch (Exception ex)
         {
             CoreLog.Warn("Qbar 样式应用失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 把面板底色铺到 TintFill 上。
+    ///
+    /// 有模糊底图时必须把不透明度压低：用户设的是 0.96，那么厚的一层底色会把
+    /// 模糊糊死，等于白抓一张图（真机实测：0.82 时面板在纯色壁纸上看起来就是一块
+    /// 不透明的深色板，毛玻璃完全看不出来）。0.72 = 背后留 28% 的模糊透上来，
+    /// 既有玻璃感，字又不会被认出来 —— 真正让人读不出背后文字的是模糊半径，不是这层纱。
+    /// 没有底图时完全按用户设置来，否则"半透明面板"就变成了不透明面板。
+    /// </summary>
+    private void ApplyPanelTint()
+    {
+        if (_panelOpacity <= 0) return;
+        bool blurred = BackdropFill.Background is ImageBrush;
+        double op = blurred ? Math.Min(_panelOpacity, 0.72) : _panelOpacity;
+        byte alpha = (byte)Math.Round(Math.Clamp(op, 0.3, 1) * 255);
+
+        _panelBrush = new SolidColorBrush(Color.FromArgb(alpha, _panelColor.R, _panelColor.G, _panelColor.B));
+        _panelBrush.Freeze();
+        TintFill.Background = _panelBrush;
+        Panel.Background = Brushes.Transparent;
+    }
+
+    /// <summary>
+    /// 抓一张"面板背后的桌面"做毛玻璃底图。
+    ///
+    /// Qbar 是分层窗口（要有圆角和透明），拿不到 DWM 的亚克力，只能自己拍一张。
+    /// 拍的时候必须把自己排除掉，否则拍到的"背后"就是面板自己 —— 先试
+    /// WDA_EXCLUDEFROMCAPTURE（Win10 2004+ 支持分层窗口），系统不认这条就
+    /// 把窗口藏 50ms 再拍（老系统上会闪一下，但只在打开/拖完的那一帧）。
+    ///
+    /// 只在面板真的显示在屏幕上时才有意义：--render 把窗口摆在 -32000，
+    /// 自检可能根本没桌面，这些情况直接跳过。
+    /// </summary>
+    private void RefreshBackdrop()
+    {
+        try
+        {
+            if (_closing || !IsVisible) return;
+            if (Left < -2000 || Top < -2000) return;                 // 离屏渲染
+            if (ActualWidth < 40 || ActualHeight < 40) return;
+
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            Point tl = PointToScreen(new Point(0, 0));
+            Point br = PointToScreen(new Point(ActualWidth, ActualHeight));
+
+            System.Windows.Media.Imaging.BitmapSource? shot;
+            if (BackdropBlur.TryExcludeFromCapture(hwnd))
+            {
+                try
+                {
+                    shot = BackdropBlur.Capture(tl, br);
+                }
+                finally
+                {
+                    // 只在这几毫秒里把自己藏起来，拍完立刻恢复，否则面板在录屏里是空的
+                    BackdropBlur.RestoreCapture(hwnd);
+                }
+            }
+            else
+            {
+                double saved = Opacity;
+                Opacity = 0;
+                try
+                {
+                    // 让合成器把"透明的一帧"推上去再拍，否则拍到的仍是我们自己
+                    System.Threading.Thread.Sleep(50);
+                    shot = BackdropBlur.Capture(tl, br);
+                }
+                finally
+                {
+                    Opacity = saved;
+                }
+            }
+
+            if (shot == null) return;
+
+            var brush = new ImageBrush(shot)
+            {
+                Stretch = Stretch.Fill,
+                AlignmentX = AlignmentX.Left,
+                AlignmentY = AlignmentY.Top,
+            };
+            brush.Freeze();
+            BackdropFill.Background = brush;
+            ApplyPanelTint();
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("Qbar 背景模糊失败：" + ex.Message);
         }
     }
 
@@ -747,6 +881,231 @@ public partial class QbarWindow : Window
         if (_host == null || _escInterceptor == null) return;
         if (ReferenceEquals(_host.Engine.KeyInterceptor, _escInterceptor))
             _host.Engine.KeyInterceptor = null;
+    }
+
+    /* ---- 拖动面板改位置 ----
+     * 用户诉求：面板能手拖，拖完下次唤出就在那儿，设置里还能一键回默认位置。
+     * 位置存成**工作区比例**（QbarOptions.PositionX/PositionY），不是像素：
+     * 换分辨率、改缩放、插拔副屏之后像素会跑到屏幕外，比例还认得。 */
+
+    /// <summary>
+    /// 面板上按下左键：**空白处**才开始拖，按在控件上照常交给控件。
+    ///
+    /// 用排除法而不是"只认某块拖拽区"：面板大部分面积是输入框和结果列表，
+    /// 只认几块的话用户几乎找不到能按的地方；反过来无条件 DragMove 又会变成
+    /// "想点结果却把面板拖走了"。
+    /// </summary>
+    private void OnPanelMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left || _closing) return;
+        if (IsInteractiveDragSource(e.OriginalSource as DependencyObject)) return;
+
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        if (!Core.Interop.NativeMethods.GetCursorPos(out _dragCursor)) return;
+        if (!Core.Interop.NativeMethods.GetWindowRect(hwnd, out _dragWindowRect)) return;
+
+        _dragging = true;
+        _dragMoved = false;
+        Panel.Cursor = GrabClosedCursor;   // 按住的那一下立刻变握拳
+        e.Handled = true;                  // 别让这次按下再被当成"点空白处"
+
+        _dragPoll ??= CreateDragPoll();
+        _dragPoll.Start();
+    }
+
+    /* 为什么自己轮询，而不是 DragMove() / MouseMove 事件：
+     *
+     *   · Window.DragMove() 把拖动交给系统模态移动循环，那个循环只认硬件送来的
+     *     移动消息；指针一旦被重定向/注入，第一下之后窗口就卡在原地。
+     *   · 靠 WPF 的 MouseMove 也不行：面板捕获鼠标期间，任何一次按键状态同步
+     *     都会补发一个 MouseLeftButtonUp，拖动当场结束（实测 158ms 后就被打断）。
+     *
+     * 每 15ms 直接读物理光标位置和左键状态，窗口跟着走；松手、按 Esc
+     * 都在这里判定，不依赖事件有没有送达。 */
+    private DispatcherTimer CreateDragPoll()
+    {
+        // Input 优先级：界面在渲染时也别让拖动掉帧
+        var timer = new DispatcherTimer(DispatcherPriority.Input)
+        {
+            Interval = TimeSpan.FromMilliseconds(15),
+        };
+        timer.Tick += (_, _) => PollDrag();
+        return timer;
+    }
+
+    private void PollDrag()
+    {
+        if (!_dragging) { _dragPoll?.Stop(); return; }
+
+        if (_closing || !IsVisible) { EndPanelDrag(cancel: true); return; }
+        if (IsDown(VK_ESCAPE)) { EndPanelDrag(cancel: true); return; }
+        if (!IsDown(VK_LBUTTON)) { EndPanelDrag(cancel: false); return; }
+        if (!Core.Interop.NativeMethods.GetCursorPos(out var cur)) return;
+
+        // 用光标位移推窗口位置，而不是用相对窗口的坐标：
+        // 窗口一动，同一物理点在窗口坐标系里的值也变了，只有屏幕坐标差是不变量。
+        int dx = cur.X - _dragCursor.X;
+        int dy = cur.Y - _dragCursor.Y;
+        if (!_dragMoved && Math.Abs(dx) < 3 && Math.Abs(dy) < 3) return;   // 手抖不算拖
+
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        _dragMoved = true;
+        Core.Interop.NativeMethods.SetWindowPos(hwnd, IntPtr.Zero,
+            _dragWindowRect.Left + dx, _dragWindowRect.Top + dy, 0, 0,
+            Core.Interop.NativeMethods.SWP_NOSIZE | Core.Interop.NativeMethods.SWP_NOZORDER
+            | Core.Interop.NativeMethods.SWP_NOACTIVATE);
+    }
+
+    /* ---- 拖动指针 ----
+     * Windows 只带"指向用"的手形（Cursors.Hand，食指指着），没有抓取手势那对
+     * 张开手 / 握拳。所以自带两张 48px 的 .cur，打包成 Resource 现读。
+     * 读不出来就退回系统指针，功能不受影响。 */
+    private static Cursor? _grabOpenCursor;
+    private static Cursor? _grabClosedCursor;
+
+    private static Cursor GrabOpenCursor =>
+        _grabOpenCursor ??= LoadCursorAsset("Assets/cursors/grab-open.cur", Cursors.Hand);
+
+    private static Cursor GrabClosedCursor =>
+        _grabClosedCursor ??= LoadCursorAsset("Assets/cursors/grab-closed.cur", Cursors.SizeAll);
+
+    private static Cursor LoadCursorAsset(string relative, Cursor fallback)
+    {
+        try
+        {
+            var info = Application.GetResourceStream(new Uri("pack://application:,,,/" + relative));
+            if (info != null) return new Cursor(info.Stream);
+            CoreLog.Warn("鼠标指针没打进程序：" + relative);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("读鼠标指针失败（" + relative + "）：" + ex.Message);
+        }
+        return fallback;
+    }
+
+    /// <summary>
+    /// 收尾：正常松手就记住位置；Esc / 面板被收走不算数，退回按下时的位置。
+    /// </summary>
+    private void EndPanelDrag(bool cancel)
+    {
+        if (!_dragging && !_dragMoved) return;
+        _dragging = false;
+        _dragPoll?.Stop();
+
+        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+        if (cancel)
+        {
+            if (_dragMoved && hwnd != IntPtr.Zero)
+            {
+                Core.Interop.NativeMethods.SetWindowPos(hwnd, IntPtr.Zero,
+                    _dragWindowRect.Left, _dragWindowRect.Top, 0, 0,
+                    Core.Interop.NativeMethods.SWP_NOSIZE | Core.Interop.NativeMethods.SWP_NOZORDER
+                    | Core.Interop.NativeMethods.SWP_NOACTIVATE);
+            }
+        }
+        else if (_dragMoved)
+        {
+            RememberPosition();
+
+            /* 手可以拖出屏幕：比例已经夹回 0..1，这里再把窗口摆回夹取后的位置，
+             * 否则"松手在屏幕外"会留下一半看不见的面板。 */
+            QbarOptions q = _host.Settings.Qbar;
+            Core.Windows.ScreenPlacement.PlaceAt(this, q.PositionX, q.PositionY);
+        }
+
+        _dragMoved = false;
+        Panel.Cursor = GrabOpenCursor;   // 松手还指着面板：回到"能抓"
+
+        if (!cancel && IsVisible)
+        {
+            Input.Focus();           // 拖完继续打字：别把焦点留在面板上
+            Keyboard.Focus(Input);
+
+            /* 拖到别处之后，背后已经是另一片桌面了，不重拍就会把原来那块
+             * 桌面的模糊图拖着一路走 —— 看着像面板下面贴着一张照片。 */
+            RefreshBackdrop();
+        }
+    }
+
+    /// <summary>空白处的光标形状：能抓 / 抓着 / 普通箭头（指针在控件上时）。</summary>
+    private void OnPanelMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_closing || _dragging) return;
+
+        /* Cursor 会往子元素继承，所以指针移到输入框/结果行/按钮上时必须清掉，
+         * 否则文本框里也显示手形 —— 看着像能拖，实际是选字。 */
+        bool onBlank = !IsInteractiveDragSource(e.OriginalSource as DependencyObject);
+        Panel.Cursor = onBlank ? GrabOpenCursor : null;
+    }
+
+    /// <summary>这个落点会不会自己处理鼠标事件（输入框选字、按钮、列表行、滚动条）。</summary>
+    private static bool IsInteractiveDragSource(DependencyObject? source)
+    {
+        for (DependencyObject? d = source; d != null; d = ParentOf(d))
+        {
+            if (d is System.Windows.Controls.Primitives.TextBoxBase) return true;
+            if (d is System.Windows.Controls.Primitives.ButtonBase) return true;
+            if (d is System.Windows.Controls.Primitives.ScrollBar) return true;
+            if (d is System.Windows.Controls.Primitives.Thumb) return true;
+            if (d is ListBoxItem) return true;
+            if (d is ListBox) return true;
+            if (d is ScrollViewer) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 安全地往上找父级。
+    ///
+    /// 不能直接用 VisualTreeHelper.GetParent：鼠标移过标题里的 Run（Inline 文本）时
+    /// 传进来的 OriginalSource 是 ContentElement，不是 Visual，WPF 会抛
+    /// InvalidOperationException（"Run 不是 Visual 或 Visual3D"），
+    /// 而这是鼠标移动事件 —— 抛一次就足以让界面线程崩掉、整个程序重启。
+    /// ContentElement 用 FrameworkContentElement.Parent 走逻辑树。
+    /// </summary>
+    private static DependencyObject? ParentOf(DependencyObject d)
+    {
+        try
+        {
+            if (d is Visual || d is System.Windows.Media.Media3D.Visual3D)
+                return VisualTreeHelper.GetParent(d);
+        }
+        catch (InvalidOperationException)
+        {
+            // 极少数内容元素混在可视树里，退回逻辑树
+        }
+
+        if (d is FrameworkContentElement fce) return fce.Parent;
+        if (d is FrameworkElement fe) return fe.Parent;
+        return null;
+    }
+
+    /// <summary>把面板当前位置量成比例写回设置（落盘，下次打开直接用它）。</summary>
+    private void RememberPosition()
+    {
+        if (_host == null) return;
+        if (!Core.Windows.ScreenPlacement.TryGetFraction(this, out double fx, out double fy)) return;
+
+        QbarOptions q = _host.Settings.Qbar;
+        q.CustomPosition = true;
+        q.PositionX = Math.Round(fx, 4);
+        q.PositionY = Math.Round(fy, 4);
+        _host.SaveSettings();
+    }
+
+    /// <summary>设置页点「恢复默认位置」之后调用：清掉自定义位置，下次唤出回到默认摆位。</summary>
+    public void ResetPosition()
+    {
+        if (_host == null) return;
+        QbarOptions q = _host.Settings.Qbar;
+        q.CustomPosition = false;
+        q.PositionX = 0.5;
+        q.PositionY = 0.3;
+        _host.SaveSettings();
     }
 
     public void Open(string? prefill = null)
@@ -785,8 +1144,15 @@ public partial class QbarWindow : Window
             try { _ = new WindowInteropHelper(this).EnsureHandle(); } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
 
             var fg = Core.Interop.NativeMethods.GetForegroundWindow();
-            if (!Core.Windows.ScreenPlacement.Place(this, Core.Windows.ScreenPlacement.Anchor.UpperCenter,
-                    target: fg))
+
+            /* 拖动过的面板落回用户自己放的位置（比例存在设置里，换分辨率也认得）；
+             * 没拖过就走默认的"前台窗口所在屏、上方 22% 居中"。 */
+            QbarOptions pos = _host.Settings.Qbar;
+            bool placed = pos.CustomPosition
+                ? Core.Windows.ScreenPlacement.PlaceAt(this, pos.PositionX, pos.PositionY, target: fg)
+                : Core.Windows.ScreenPlacement.Place(this, Core.Windows.ScreenPlacement.Anchor.UpperCenter,
+                    target: fg);
+            if (!placed)
             {
                 // 拿不到显示器信息时退回旧算法（至少保证在主屏上可见）
                 var wa = SystemParameters.WorkArea;
@@ -795,6 +1161,20 @@ public partial class QbarWindow : Window
             }
 
             Show();
+
+            /* 排完版再按同一个比例放一次。
+             *
+             * 面板是 SizeToContent 的：Show 之前 ActualHeight 还是 0，上面那次摆位只能拿
+             * XAML 里的 Width/Height 当尺寸 —— 实测 760x791.5 DIP，而真实高度是 397.5 DIP。
+             * 比例本身跟高度无关，但"别把面板顶出屏幕底边"的夹取要用真实高度：
+             * 高度用大了会把面板往上顶（实测贴底时偏 9 DIP）。
+             * 这里 UpdateLayout 之后高度才是真的；没碰到下边界时算出来的坐标跟上面
+             * 一模一样（不会有可见位移），只有贴着底边时才纠正。 */
+            if (placed && pos.CustomPosition)
+            {
+                try { UpdateLayout(); } catch { }   /* 预期内：布局型，失败即视为尺寸没拿到 */
+                Core.Windows.ScreenPlacement.PlaceAt(this, pos.PositionX, pos.PositionY, target: fg);
+            }
         }
 
         /* 抢前台 + 抢输入焦点。
@@ -851,6 +1231,9 @@ public partial class QbarWindow : Window
         if (IsActive)
             _imeApplied = ApplyImePreference();
         QueueImePreference(120);
+
+        // 摆位、布局、结果都定了，这时候拍的"背后"才对得上最终位置
+        RefreshBackdrop();
 
         PlayShowAnimation();
     }
@@ -1988,6 +2371,8 @@ public partial class QbarWindow : Window
         UpdateMode();
         UpdateHint();
         UpdateFacets();
+        UpdateGroupHeader();
+        SyncSuggestionSelection();
 
         /* 结果行的文字颜色必须在**列表项生成之后**才能刷。
          *
@@ -1996,6 +2381,55 @@ public partial class QbarWindow : Window
          * 这里等布局完成再补一遍。 */
         Dispatcher.BeginInvoke(new Action(() => ApplyRowPalette()),
             System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 空态分组标题（"最近文件"）。
+    /// 建议项和普通结果共用同一个列表（红线 6），所以标题只在这一档建议真的
+    /// 存在时才出现；用户一打字，QbarService 的 DefaultResults 不再被调用，
+    /// EmptyStateGroup 自然变空，标题跟着消失。
+    /// </summary>
+    private void UpdateGroupHeader()
+    {
+        string group = _host.Qbar.EmptyStateGroup;
+        bool show = group.Length > 0 && _items.Count > 0;
+        if (show) GroupHeaderText.Text = group;
+        GroupHeaderBox.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>把"当前选中的是不是建议行"同步给隐藏热键。</summary>
+    private void SyncSuggestionSelection()
+    {
+        int index = Results.SelectedIndex;
+        if (index < 0 || index >= _items.Count)
+        {
+            SuggestionsSelection.Clear();
+            return;
+        }
+
+        QbarResult result = _items[index].Result;
+        if (result.Suggestion.Length == 0)
+        {
+            SuggestionsSelection.Clear();
+            return;
+        }
+
+        /* 判断文件/文件夹用磁盘现状而不是扩展名：桌面上的快捷方式、
+         * 没有后缀的文件夹都靠扩展名猜不出来，写错黑名单会导致
+         * "隐藏了但还在"（文件夹进了文件黑名单就永远匹配不上）。 */
+        bool isFolder = Directory.Exists(result.Payload);
+        SuggestionsSelection.Set(result.Payload, isFolder, result.Suggestion);
+    }
+
+    private void OnSuggestionsChanged(RecSnapshot snapshot)
+    {
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!IsVisible) return;
+            if (Input.Text.Length != 0 || _chip != null) return;
+            if (_menuFile != null) return;   // 正在文件菜单里，别抽掉他的列表
+            RunQuery();
+        }), DispatcherPriority.Background);
     }
 
     // ---------------- 语义层：过滤器 / 分面 / 调试面板 ----------------
@@ -2689,6 +3123,27 @@ public partial class QbarWindow : Window
 
         AddLocal("复制路径", path, "\uE71B", () => CopyText(path));
         if (exists) AddLocal("属性", path, "\uE946", () => ShowProperties(path));
+
+        /* 只有建议行才给"不建议"：普通搜索结果里的文件是用户主动搜出来的，
+         * 把它藏掉等于让人下次搜不到，纯属帮倒忙。 */
+        if (owner.Result.Suggestion.Length > 0)
+        {
+            bool hideFolder = isDir;
+            AddLocal(hideFolder ? Loc.T("不建议此文件夹") : Loc.T("不建议此文件"), path, "\uE7BA", () =>
+            {
+                var service = _host.Suggestions;
+                if (service == null) return;
+                if (service.Hide(path, hideFolder, out string error))
+                {
+                    ToastWindow.Show(Loc.T("已隐藏，可在设置里还原"), "info");
+                    if (Input.Text.Length == 0) RunQuery();
+                }
+                else
+                {
+                    ToastWindow.Show(Loc.T("隐藏失败：") + error, "error");
+                }
+            });
+        }
         AddLocal("返回搜索结果", Loc.T("Esc"), "\uE72B", () => { });
 
         MenuHeaderText.Text = path;
@@ -3021,7 +3476,12 @@ public partial class QbarWindow : Window
                 QbarKind.File => "\uE8B7",
                 _ => "\uE756",
             };
-            Badge = result.Kind == QbarKind.Command ? result.Payload : result.KindLabel;
+            /* 建议行的小徽标显示"来源"（下载 / 桌面 / 最近，多来源命中时是
+             * "下载·桌面"），这是它和普通搜索结果唯一的视觉差别 ——
+             * 用 KindLabel（"文件"）的话，用户看不出这一行是"最近用过"的。 */
+            Badge = result.Suggestion.Length > 0 && result.Badge.Length > 0
+                ? result.Badge
+                : result.Kind == QbarKind.Command ? result.Payload : result.KindLabel;
             TitleSegments = BuildTitleSegments(result);
         }
 

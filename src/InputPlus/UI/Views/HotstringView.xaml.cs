@@ -29,6 +29,12 @@ public partial class HotstringView : UserControl
     /// <summary>刷新分组列表后要选中的组名（改名/新建后用它把选中状态带过去）。</summary>
     private string? _selectGroupAfterRefresh;
 
+    /* 用户最后停在哪个分组（「全部」= null，「未分组」= ""）。
+     * 新增别名用它兜底：分组列表在重建 ItemsSource 的瞬间没有选中项，
+     * 那一刻 CurrentGroup 是 null —— 新别名会被扔进「未分组」，
+     * 用户看到的就是"在分组里点新增，建出来的却不在这个组里"。 */
+    private string? _lastGroup;
+
     /// <summary>自动对齐前缀只做一次，避免迁移后再次触发。</summary>
     private bool _prefixAlignedOnce;
 
@@ -426,8 +432,9 @@ public partial class HotstringView : UserControl
     private void SyncEditorToSelection()
     {
         int selected = EntryList.SelectedItems.Count;
-        MoveButton.IsEnabled = selected > 0;
-        DeleteButton.IsEnabled = selected > 0;
+        bool canAct = CanActOnSelection(selected);
+        MoveButton.IsEnabled = canAct;
+        DeleteButton.IsEnabled = canAct;
         // 底部工具条 v1.6.3 起是图标按钮（Content 是字体里的字形），不能再往里写文字 ——
         // 写进去就变成「图标字体里没有的中文」= 一排空心方框。选中的条数改由提示与读屏名带出来。
         string moveTip = selected > 1 ? Loc.F("把选中的 {0} 条别名移到某个分组里", selected) : Loc.T("把选中的别名放到某个分组里（也可以直接把别名拖到左侧分组上）");
@@ -1210,6 +1217,9 @@ public partial class HotstringView : UserControl
         {
             RenameGroupButton.IsEnabled = row.IsReal;
             DeleteGroupButton.IsEnabled = row.IsReal;
+            /* 记住"用户最后真正停在哪一组"。「全部」不是组（Group=null），
+             * 但「未分组」是（Group=""）：两者都要记住，新增时才有确定落点。 */
+            _lastGroup = row.Group;
         }
 
         if (_suppress) return;
@@ -1242,15 +1252,10 @@ public partial class HotstringView : UserControl
     {
         if (_host == null || _suppress) return;
 
-        if (EntryList.SelectedItem is Row row)
-        {
-            if (!ReferenceEquals(row.Snippet, _editing)) LoadEditor(row.Snippet);
-        }
-        else
-        {
-            _editing = null;
-            ShowEditor(false);
-        }
+        /* 选中变了 = 「删除 / 移到分组」的可用状态也要跟着变。
+         * 以前这里只加载编辑区，按钮状态只在 Refresh()/换分组时算过 ——
+         * 于是在某个分组里点中一条别名，删除按钮还是灰的，点了没反应。 */
+        SyncEditorToSelection();
     }
 
     private void OnEditorChanged(object sender, RoutedEventArgs e)
@@ -1886,12 +1891,16 @@ public partial class HotstringView : UserControl
     {
         if (_host == null) return;
 
+        /* 落点：当前视图停在哪一组就建到哪一组（「全部」= 未分组）。
+         * 选中项在刷新过程中可能是 null，这时退回"最后停过的那一组"。 */
+        string targetGroup = TargetGroupForNewEntry();
+
         var entry = new Snippet
         {
             Trigger = "",       // 前缀等用户输入完触发词再补（ApplyAny 会用默认前缀）
             Text = "",
             Comment = Loc.T("新别名"),
-            Group = CurrentGroup ?? "",
+            Group = targetGroup,
             Enabled = true,
         };
 
@@ -1899,18 +1908,43 @@ public partial class HotstringView : UserControl
 
         Entries.Add(entry);
         _host.SaveSettings();
+        CoreLog.Info($"[别名] 新增：分组「{(entry.Group.Length == 0 ? "未分组" : entry.Group)}」"
+                     + $"（当前视图 {DescribeGroup(CurrentGroup)}）");
 
         _editing = entry;
+        /* 建完要让用户看见它落在哪：视图切到它所在的分组。 */
+        _selectGroupAfterRefresh = entry.Group;
         Refresh();
 
         /* ⚠ Refresh() 里的 SyncEditorToSelection 只在"选中的不是当前编辑项"时才 LoadEditor，
          * 而这里 _editing 已经等于新条目 —— 于是编辑区永远不显示，
          * 用户点了「新增」只看列表多一行、右边空空。必须显式打开一次。 */
         LoadEditor(entry);
+        if (EntryList.SelectedItem is Row added) EntryList.ScrollIntoView(added);
 
         KeyBox.Focus();
         KeyBox.CaretIndex = KeyBox.Text.Length;
     }
+
+    /// <summary>
+    /// 新别名该落在哪个分组：当前选中项优先；没有选中项（刷新瞬间）退回最后停过的那一组。
+    /// 「全部」= 未分组（""），不是"上一次的组"。
+    /// </summary>
+    private string TargetGroupForNewEntry()
+        => ResolveNewGroup(GroupList.SelectedItem is GroupRow, (GroupList.SelectedItem as GroupRow)?.Group, _lastGroup);
+
+    /// <summary>
+    /// 纯函数：新别名的落点。选中项存在时以它为准（「全部」→ ""），
+    /// 选中项缺失（分组列表重建的瞬间）才退回"最后停过的那一组"。
+    /// </summary>
+    internal static string ResolveNewGroup(bool hasSelection, string? selectedGroup, string? lastGroup)
+        => hasSelection ? (selectedGroup ?? "") : (lastGroup ?? "");
+
+    /// <summary>选中条数决定「删除 / 移到分组」是否可用（纯函数，自检覆盖）。</summary>
+    internal static bool CanActOnSelection(int selectedCount) => selectedCount > 0;
+
+    private static string DescribeGroup(string? group)
+        => group == null ? "全部" : group.Length == 0 ? "未分组" : group;
 
     private void OnDeleteClick(object sender, RoutedEventArgs e)
     {

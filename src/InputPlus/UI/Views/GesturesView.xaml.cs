@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -142,11 +142,6 @@ public partial class GesturesView
             _sortMode = GestureListOrder.Normalize(opts.ListSort);
             UpdateSortChecks();
             BuildTargets();
-            /* 存量手势的模板在这里补（「旧手势自动补算」那条文案承诺的就是这个时机）。
-               以前只有命中触发时才补，升级上来的手势在列表、预览、触发三处都看不到美化，
-               用户看到的就是「美化没生效」。已经算过的走 Skipped，不重复花时间。 */
-            var beauty = GestureBeauty.EnsureAll(_host.Settings.Gestures, opts, "手势列表补算");
-            if (beauty.Changed) _host.SaveSettings();
             LoadList(selectId: _current.Id);
         }
         finally { _loading = false; }
@@ -1084,12 +1079,9 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
     {
         return null;
     }
-    /* 缩略图优先画美化模板（任务四）：列表里看到的形状 = 触发时替换上去的那个形状。
-     * 没有模板（关闭美化 / 美化没过语义校验）才退回校正后的原始轨迹 —— 和以前一样。 */
-    List<GestureMath.Pt> list = g.HasBeauty
-        ? GestureMath.Resample(GestureMath.Normalize(g.BeautyPoints()), 24)
-        : GestureMath.Resample(
-            GestureMath.Normalize(InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(g.Points())), 24);
+    /* 缩略图画的是校正后的那一笔：和识别、回放用的是同一个形状。 */
+    List<GestureMath.Pt> list = GestureMath.Resample(
+        GestureMath.Normalize(InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(g.Points())), 24);
     if (list.Count < 2)
     {
         return null;
@@ -2471,11 +2463,6 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         if (string.IsNullOrWhiteSpace(candidate.AppPath) && _scope != EdgeTargetKey)
             candidate.AppPath = _scope;
 
-        /* 创建阶段美化（任务四）：录到的原始像素轨迹进 RawPath，Path 换成规整后的模板。
-         * 语义守门在 StrokeBeautifier 里做 —— 美化完如果认不出是同一个手势，就保留原样并写日志。 */
-        try { GestureBeauty.Apply(candidate, recorded.Raw, _host.Settings.GestureOptions, "录制"); }
-        catch (Exception ex) { CoreLog.Swallow(ex, "手势录制美化"); }
-
         /* 先把录到的笔画放进编辑器，保证用户立刻能看到这条轨迹；
          * 重复只阻止保存，不再把整笔丢掉（否则看起来像“录完是空的”）。 */
         _current = candidate;
@@ -2736,8 +2723,6 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         StopReplay();
         PreviewLine.Points.Clear();
         PatternBadge.Text = "";
-        /* 状态文字与两颗按钮要跟着每一笔走，包括"还没画出形状"的时候（那时它们是隐藏的）。 */
-        UpdateBeautyStatus();
 
         /* 没录过就什么都不画：框里空着，下面那颗「按住鼠标键画一笔（重新录制）」
          * 已经把下一步说清楚了，再叠一行灰字只是噪音。 */
@@ -2760,13 +2745,10 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         double h = PreviewCanvas.ActualHeight > 10 ? PreviewCanvas.ActualHeight : 118;
         const double pad = 14;
 
-        /* 预览 / 回放画的是"存下来之后会是什么样"：有美化模板就是模板本身，
-         * 没有再退回校正后的那一笔 —— 用户在详情里看到的就是识别时用的形状，
-         * 不会出现"预览是斜的、实际按竖线认"的错位。 */
-        var pts = _current.HasBeauty
-            ? GestureMath.Normalize(_current.BeautyPoints())
-            : GestureMath.Normalize(
-                InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(_current.Points()));
+        /* 预览 / 回放画的是"存下来之后会是什么样"：就是校正后的那一笔，
+         * 用户在详情里看到的就是识别时用的形状，不会出现"预览是斜的、实际按竖线认"的错位。 */
+        var pts = GestureMath.Normalize(
+            InputPlus.Core.Gestures.StrokeCanonicalizer.Canonicalize(_current.Points()));
         if (pts.Count < 2) return null;
 
         double minX = pts.Min(p => p.X), maxX = pts.Max(p => p.X);
@@ -2780,75 +2762,6 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         foreach (var p in pts)
             list.Add(new Point(offX + (p.X - minX) * scale, offY + (p.Y - minY) * scale));
         return list;
-    }
-
-    // ───────────────────────── 美化（任务四） ─────────────────────────
-
-    /// <summary>
-    /// 美化状态文字 + 「重新美化 / 恢复原始轨迹」两颗按钮的可用性。
-    /// 只对"笔画"类手势有意义；滚轮 / 角落 / 贴边这些没有轨迹，整块藏起来。
-    /// </summary>
-    private void UpdateBeautyStatus()
-    {
-        bool stroke = _current.Kind == "stroke" && _current.HasPath;
-        BeautyStatus.Visibility = stroke ? Visibility.Visible : Visibility.Collapsed;
-        RebuildBeautyButton.Visibility = stroke ? Visibility.Visible : Visibility.Collapsed;
-        UseRawButton.Visibility = stroke && _current.HasRaw ? Visibility.Visible : Visibility.Collapsed;
-        if (!stroke)
-        {
-            BeautyStatus.Text = "";
-            return;
-        }
-
-        string state = GestureBeauty.Describe(_current);
-        BeautyStatus.Text = _host != null && !_host.Settings.GestureOptions.BeautifyOnCreate
-            ? Loc.F("模板：{0}（创建时美化已关闭）", state)
-            : Loc.F("模板：{0}", state);
-    }
-
-    /// <summary>
-    /// 按当前强度把编辑器里这一笔重新整理一遍（原始轨迹优先，没有就用现在的 Path）。
-    /// 只改编辑器里的副本 —— 用户点保存才落盘；没能通过语义校验就保留原样并说清楚。
-    /// </summary>
-    private void OnRebuildBeautyClick(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        if (!_current.HasPath)
-        {
-            _host.Notify(Loc.T("这条手势还没有笔画，先录一笔"));
-            return;
-        }
-
-        var result = GestureBeauty.Rebuild(_current, _host.Settings.GestureOptions, "手动重新美化");
-        if (result == null || !result.Beautified)
-        {
-            _host.Notify(Loc.T("这一笔整理后会认成别的手势，已保留原始轨迹"));
-        }
-        else if (result.Fallback)
-        {
-            _host.Notify(Loc.F("已按「{0}」档重新整理（原档位过不了语义校验），保存后生效",
-                StrokeBeautifier.DisplayName(result.UsedLevel)));
-        }
-        else
-        {
-            _host.Notify(Loc.T("已重新整理成标准图形，保存后生效"));
-        }
-
-        DrawPreview();
-    }
-
-    /// <summary>「恢复原始轨迹」：把存档的原始笔画写回 Path，清掉美化模板。</summary>
-    private void OnUseRawClick(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-        if (!GestureBeauty.UseRaw(_current))
-        {
-            _host.Notify(Loc.T("这条手势没有可恢复的原始轨迹"));
-            return;
-        }
-
-        DrawPreview();
-        _host.Notify(Loc.T("已恢复录制时的原始轨迹，保存后生效"));
     }
 
     // ───────────────────────── 小工具 ─────────────────────────

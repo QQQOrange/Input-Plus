@@ -79,15 +79,15 @@ public static partial class SelfTest
         TestWg2Plus();
         TestGestureListOrder();
 
+        Section("中键菜单");
+        TestMiddleMenu();
+
         Section("笔画平滑");
         TestSmoothing();
         TestNativeFileIndex();
 
         Section("轨迹校正");
         TestGestureCanonical();
-
-        Section("手势美化");
-        TestGestureBeauty();
 
         Section("平滑滚动");
         TestSmoothScroll();
@@ -193,6 +193,7 @@ public static partial class SelfTest
 
         Section("别名前缀与找回");
         TestSnippetPrefixes();
+        TestHotstringGroupRules();
 
         Section("启动密码");
         TestStartupPassword();
@@ -254,6 +255,12 @@ public static partial class SelfTest
         Section("提权");
         TestElevation();
         TestElevationRoute();
+
+        Section("提权取词");
+        TestSelectionElevated();
+
+        Section("手势·shell 浮层");
+        TestShellOverlay();
 
         Section("热路径缓存");
         TestHotPathCaching();
@@ -366,6 +373,7 @@ public static partial class SelfTest
         TestLayerIsolation();
         TestHoldThreshold();
         TestLayerSurvivesIdle();
+        TestModifierOnlyBinding();
         TestModifierTriggerWithRepeat();
         TestContinuousVolumeRepeat();
         TestRepeatSurvivesPhysicalJitter();
@@ -417,6 +425,12 @@ public static partial class SelfTest
 
         Section("组合键引擎");
         TestEngine();
+
+        Section("文件对话框");
+        TestFileDialogBar();
+
+        Section("搜索前建议");
+        TestSuggestions();
 
         Section("更新");
         TestUpdateDigest();

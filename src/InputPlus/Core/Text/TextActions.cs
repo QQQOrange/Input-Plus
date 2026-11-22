@@ -56,11 +56,26 @@ public static class TextActions
     /// </summary>
     public static string GetSelectedText(int timeoutMs = DefaultTimeoutMs)
     {
+        /* 分流：前台是**管理员程序**、而我们是普通权限 —— 本地三条通道注定失败
+         * （UIA 拒绝低→高、WM_COPY 被 UIPI 拦、SendInput 也被拦），
+         * 这时直接问提权助手，省掉一整套必然失败的尝试（实测能省 600ms 左右）。
+         * 助手还没连上也没关系：TryGetSelectedText 会顺手把它拉起来，
+         * 这一次拿不到，下一次就全自动了。 */
+        if (!ElevationHelper.IsElevated && !InAnyHelper && ForegroundElevated())
+        {
+            string viaHigh = SelectionElevated.TryGetSelectedText();
+            if (!string.IsNullOrWhiteSpace(viaHigh))
+            {
+                CoreLog.Info($"[取词] 经提权助手取到 长度={viaHigh.Length}");
+                return viaHigh;
+            }
+        }
+
         string text = GetSelectedTextLocal(timeoutMs);
         if (!string.IsNullOrWhiteSpace(text)) return text;
 
         // 代理只为"管理员模式"而存在；代理自己不能再递归调用
-        if (!ElevationHelper.IsElevated || SelectionProxy.InHelper) return text;
+        if (!ElevationHelper.IsElevated || InAnyHelper) return text;
 
         string viaProxy = SelectionProxy.TryGetSelectedText();
         if (!string.IsNullOrWhiteSpace(viaProxy))
@@ -71,6 +86,25 @@ public static class TextActions
 
         return text;
     }
+
+    /// <summary>
+    /// 当前是不是跑在某个"取词辅助进程"里。
+    ///
+    /// 两个方向各有一个替身（<see cref="SelectionProxy"/>：提权主进程的普通权限代理；
+    /// <see cref="SelectionElevated"/>：普通主进程的提权助手），它们自己都不能再往下递归，
+    /// 否则一边提权一边降权会无限弹框。
+    /// </summary>
+    private static bool InAnyHelper => SelectionProxy.InHelper || SelectionElevated.InHelper;
+
+    /// <summary>
+    /// 前台窗口是不是提升进程。**用令牌判定**（<see cref="Core.App.ElevationState.ForegroundIsElevated"/>），
+    /// 不用 <see cref="InputSender.IsForegroundHigherIntegrity"/>：后者靠一次
+    /// SendMessageTimeout(WM_NULL) 探路，实测对某些被提升的窗口（例如 WinForms 程序）
+    /// 会返回"没被拦"，于是这条分流永远不触发 —— 用户看到的就是"管理员程序里取词没反应"。
+    /// 令牌判定是同一套注入路由早就信赖的证据，两个判断取或，谁先证明"对面更高"就听谁的。
+    /// </summary>
+    private static bool ForegroundElevated()
+        => InputSender.IsForegroundHigherIntegrity() || Core.App.ElevationState.ForegroundIsElevated();
 
     /// <summary>本地取词：UIA → WM_COPY → SendInput → 线程级注入 → Ctrl+Insert。</summary>
     public static string GetSelectedTextLocal(int timeoutMs = DefaultTimeoutMs)

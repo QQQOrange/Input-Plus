@@ -69,64 +69,26 @@ public sealed partial class ActionContext
          * 而在参数判断这一步。所以：空白参数一律归一成 null，回退去读选区。 */
         if (string.IsNullOrWhiteSpace(overrideText)) overrideText = null;
 
-        string? text = overrideText;
+        /* 取词 + "取不到就请用户手动 Ctrl+C" 统一走 CaptureThen：
+         * 拿得到就立刻把词交给引擎；拿不到就挂一条待办、**马上返回**，
+         * 等用户真的按下 Ctrl+C 时由剪贴板监听接着跑完（见 CaptureThen 的说明）。
+         * 这里绝不阻塞 —— 调用栈上就是动作队列那条 STA 线程。 */
+        return CaptureThen(Loc.T("搜索"), overrideText, 1000, text => SearchWithEngine(entry, text),
+            "没有取到选中的文字 —— 先选中要搜索的内容再按这个键");
+    }
 
-        if (text == null)
-        {
-            text = CaptureSelectionText();
-            if (!string.IsNullOrWhiteSpace(text))
-                CoreLog.Info($"[搜索] 已取到选中文字 长度={text.Length}");
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            /* 所有程序化通道都失败时的**保底**：请用户亲自按一下 Ctrl+C。
-             * 真实按键不会被 Chromium / Electron 过滤，也不受 UIPI 影响，
-             * 拿到内容就立刻用它搜索 —— 这样"直接搜索"在任何程序里都能用。
-             *
-             * 提示里必须带上**前台是哪个程序**：不带的话用户只知道"没反应"，
-             * 我们也只能靠猜。 */
-            string where = ForegroundAppLabel();
-            if (InputSender.IsForegroundHigherIntegrity())
-            {
-                Notify(Loc.F("没读到选中文字：{0} 以管理员身份运行，系统不允许读取它的选区。" +
-                             "请按一下 Ctrl+C，我马上用它搜索", where));
-            }
-            else if (Core.ElevationHelper.IsElevated)
-            {
-                Notify(Loc.F("没读到选中文字（{0} × 管理员模式）。请按一下 Ctrl+C，我马上用它搜索", where));
-            }
-            else
-            {
-                Notify(Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它搜索", where));
-            }
-
-            var waitManualCopy = ManualCopyWaitForTest
-                                 ?? new Func<int, string>(Text.TextActions.WaitForManualCopy);
-            /* 5 秒太短：提示刚弹出来、眼睛刚看到、手还没按下去就超时了。
-             * 真实按键不受任何过滤，值得多等一会儿。 */
-            text = waitManualCopy(ManualCopyWaitMs);
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            Notify("没有取到选中的文字 —— 先选中要搜索的内容再按这个键");
-            return true;
-        }
-
+    /// <summary>
+    /// 把取到的词交给引擎并打开浏览器。
+    ///
+    /// 从 <see cref="SearchSelection"/> 里抽出来的唯一原因：手动复制保底现在是
+    /// "挂待办、稍后接着跑"，这段尾巴必须能被第二次调用。
+    /// </summary>
+    private void SearchWithEngine(QEntry entry, string text)
+    {
         text = text.Trim();
 
-        // 太长的话不截断会撑爆 GET 请求长度，也会让搜索页体验很差
-        const int maxLen = 1000;
-        if (text.Length > maxLen)
-        {
-            /* 截断不能把代理对（emoji 等）劈成两半：
-             * 半截代理项会让 Uri.EscapeDataString 直接抛 UriFormatException，
-             * 表现是"按了搜索，提示正在搜索，然后什么都没打开"。 */
-            int cut = maxLen;
-            if (char.IsHighSurrogate(text[cut - 1])) cut--;
-            text = text[..cut];
-        }
+        /* 长度上限（1000 字，且不会劈开代理对）由 CaptureThen 统一截断 ——
+         * 这里不再复制一份，免得两个常量各自漂移。 */
 
         string encoded;
         try
@@ -154,7 +116,7 @@ public sealed partial class ActionContext
             /* 自定义引擎忘了写 {q} 时，不能把关键词默默丢掉 ——
              * 那样只会打开搜索引擎首页，用户看到的就是"没搜"。
              * 按最常见的约定补一个 q 参数。 */
-            CoreLog.Warn($"[搜索] 引擎 {engineKey} 的地址里没有 {{q}}，改为追加 q 参数");
+            CoreLog.Warn($"[搜索] 引擎 {entry.Key} 的地址里没有 {{q}}，改为追加 q 参数");
             url = entry.Value + (entry.Value.Contains('?') ? "&q=" : "?q=") + encoded;
         }
 
@@ -166,9 +128,9 @@ public sealed partial class ActionContext
          * 内容）时，用户只会看到浏览器打开了一个不相干的结果页，
          * 完全不知道搜的是哪段字。带上预览就能一眼看出来。 */
         Notify(Loc.F("正在搜索「{0}」…", Preview(text)));
-        CoreLog.Info($"[搜索] {engineKey} → {url}");
+        CoreLog.Info($"[搜索] {entry.Key} → {url}");
         OpenUrlRaw(url);   // 已编码，跳过规范化避免搜索词被解码/截断
-        return true;
+        return;
     }
 
     /// <summary>
@@ -203,11 +165,13 @@ public sealed partial class ActionContext
 
         /* 文件名/标题很少超过 200 字。整段网页正文塞进 Qbar 输入框，
          * 结果只会是一屏无关文件，还把过滤器 chip 和输入框一起挤变形。 */
-        if (!TryCaptureWord(Loc.T("搜文件"), overrideText, 300, out string text)) return true;
-
-        CoreLog.Info($"[文件搜索] 过滤器={filter.Id} 词长={text.Length}");
-        RequestQbarFileSearch(filter.Id, text);
-        return true;
+        /* 直接把过滤器 Id 和词交给 Qbar。以前这里是先 TryCaptureWord 拿到词、
+         * 再开面板，于是"取不到词"时面板根本不出现 —— 用户按一下，除了等就是等。 */
+        return CaptureThen(Loc.T("搜文件"), overrideText, 300, text =>
+        {
+            CoreLog.Info($"[文件搜索] 过滤器={filter.Id} 词长={text.Length}");
+            RequestQbarFileSearch(filter.Id, text);
+        });
     }
 
     /* ── 查词 ───────────────────────────────────────────────────────
@@ -229,16 +193,16 @@ public sealed partial class ActionContext
     /// <param name="overrideText">自检用：直接指定要查的词</param>
     public bool LookupSelectionInDictionary(string? overrideText = null)
     {
-        if (!TryCaptureWord(Loc.T("查词"), overrideText, DictionaryMaxLen, out string word)) return true;
+        return CaptureThen(Loc.T("查词"), overrideText, DictionaryMaxLen, word =>
+        {
+            QbarCommand? template = DictionaryLauncher.EffectiveCommand(Settings().Qbar.Commands);
+            DictionaryLaunchResult run = DictionaryLauncher.Launch(word, template);
+            CoreLog.Info($"[查词] 词长={word.Length} 目标={(run.External ? "欧路词典" : "网页词典")}");
 
-        QbarCommand? template = DictionaryLauncher.EffectiveCommand(Settings().Qbar.Commands);
-        DictionaryLaunchResult run = DictionaryLauncher.Launch(word, template);
-        CoreLog.Info($"[查词] 词长={word.Length} 目标={(run.External ? "欧路词典" : "网页词典")}");
-
-        /* 外部程序成功时 launcher 不给文案（它只负责启动），这里补一句"查的是哪个词"；
-           走网页时那条"没装欧路"的说明由 launcher 带上来，别覆盖掉。 */
-        Notify(run.Ok && run.External ? Loc.F("查词：{0}", Preview(word)) : run.Message);
-        return true;
+            /* 外部程序成功时 launcher 不给文案（它只负责启动），这里补一句"查的是哪个词"；
+               走网页时那条"没装欧路"的说明由 launcher 带上来，别覆盖掉。 */
+            Notify(run.Ok && run.External ? Loc.F("查词：{0}", Preview(word)) : run.Message);
+        });
     }
 
     /// <summary>
@@ -247,51 +211,150 @@ public sealed partial class ActionContext
     /// </summary>
     public bool SearchSelectionWithDictionary(string? overrideText = null)
     {
-        if (!TryCaptureWord(Loc.T("查词"), overrideText, DictionaryMaxLen, out string word)) return true;
-        CoreLog.Info($"[查词] 交给 Qbar 面板 词长={word.Length}");
-        RequestQbarDictionary(word);
-        return true;
+        return CaptureThen(Loc.T("查词"), overrideText, DictionaryMaxLen, word =>
+        {
+            CoreLog.Info($"[查词] 交给 Qbar 面板 词长={word.Length}");
+            RequestQbarDictionary(word);
+        });
     }
 
     /// <summary>
-    /// 取一小段要处理的文字：选区 → 请用户按 Ctrl+C → 截断。
+    /// 取一小段要处理的文字，取到就交给 <paramref name="continueWith"/> 接着跑。
+    ///
+    /// 与旧的 TryCaptureWord 只差一处，但那一处就是"卡死"的根因：
+    /// 取不到文字时不再在本线程死等 8 秒（WaitForManualCopy 是 Thread.Sleep 循环），
+    /// 而是把"拿到文字之后要跑的那段"存成待办、**立刻返回**；
+    /// 等用户真的按下 Ctrl+C，剪贴板监听把内容交回来接着跑
+    /// （AppHost.OnClipboardChanged → <see cref="ClipboardCaptured"/>）。
+    ///
+    /// 为什么非改不可：这些动作跑在动作队列那条 STA 线程上（ActionQueue），
+    /// 它被钉住 8 秒，之后每一条热键 / 手势 / Qbar 动作都排在后面 ——
+    /// 用户看到的就是"按一下直接搜索，整个软件卡死"。
+    /// 而"取不到选区"恰恰是这套功能最常见的场景：在资源管理器里选中文件，
+    /// 剪贴板里是文件列表、不是文本，UIA 也给不出选区，于是每次都走 8 秒兜底。
+    ///
     /// <paramref name="action"/> 只影响提示里的动词（"搜文件" / "查词"），
     /// 提示本身必须和别的取词路径一模一样 —— 用户不该因为换了条功能就看到不同的解释。
     /// </summary>
-    private bool TryCaptureWord(string action, string? overrideText, int maxLen, out string text)
+    /// <param name="emptyHint">彻底取不到时的那句提示；不传就用通用的那句</param>
+    private bool CaptureThen(string action, string? overrideText, int maxLen,
+        Action<string> continueWith, string? emptyHint = null)
     {
-        text = "";
         if (string.IsNullOrWhiteSpace(overrideText)) overrideText = null;
         string? captured = overrideText ?? CaptureSelectionText();
 
         if (string.IsNullOrWhiteSpace(captured))
         {
-            string where = ForegroundAppLabel();
-            Notify(InputSender.IsForegroundHigherIntegrity()
-                ? Loc.F("没读到选中文字：{0} 以管理员身份运行，系统不允许读取它的选区。请按一下 Ctrl+C，我马上用它{1}", where, action)
-                : Core.ElevationHelper.IsElevated
-                    ? Loc.F("没读到选中文字（{0} × 管理员模式）。请按一下 Ctrl+C，我马上用它{1}", where, action)
-                    : Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它{1}", where, action));
+            NotifyMissingSelection(action);
 
-            var waitManualCopy = ManualCopyWaitForTest
-                                 ?? new Func<int, string>(Text.TextActions.WaitForManualCopy);
-            captured = waitManualCopy(ManualCopyWaitMs);
+            /* 自检：注入的假实现是同步的，这里也必须同步 ——
+             * 自检没有剪贴板监听，挂待办等于这一步永远不跑。 */
+            if (ManualCopyWaitForTest != null)
+            {
+                captured = ManualCopyWaitForTest(ManualCopyWaitMs);
+            }
+            else
+            {
+                _pendingManualCopy = new PendingManualCopy(
+                    action,
+                    DateTime.UtcNow.AddMilliseconds(ManualCopyWaitMs),
+                    text =>
+                    {
+                        string t = ClampText(text.Trim(), maxLen);
+                        if (t.Length > 0) continueWith(t);
+                    });
+
+                CoreLog.Info($"[取词] 没读到选区，已挂起等用户按 Ctrl+C（最多 {ManualCopyWaitMs}ms）· {action}");
+                return true;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(captured))
         {
-            Notify(Loc.F("没取到要{0}的文字 —— 先选中它再按这个键", action));
-            return false;
+            Notify(emptyHint ?? Loc.F("没取到要{0}的文字 —— 先选中它再按这个键", action));
+            return true;
         }
 
-        text = captured.Trim();
-        if (text.Length > maxLen)
+        string final = ClampText(captured.Trim(), maxLen);
+        if (final.Length == 0) return true;
+        continueWith(final);
+        return true;
+    }
+
+    /// <summary>按字符上限截断，绝不把代理对（emoji 等）劈成两半。</summary>
+    private static string ClampText(string text, int maxLen)
+    {
+        if (maxLen <= 0 || text.Length <= maxLen) return text;
+        int cut = maxLen;
+        if (char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut];
+    }
+
+    /// <summary>
+    /// "没读到选中文字"的三层提示（对方提权 / 自己是管理员 / 普通），
+    /// 三句只差最后那个动词。
+    /// </summary>
+    private void NotifyMissingSelection(string action)
+    {
+        string where = ForegroundAppLabel();
+
+        /* 前台是管理员程序（而我们是普通权限）这一支，现在有了提权助手，
+         * 提示要跟着状态走，否则用户还会以为"这个功能就是不能用"：
+         *   · 助手已连上 → 真的读不出来（目标程序自绘选区/UIA 不给），只能手动复制；
+         *   · 用户刚取消授权 → 本次不再弹窗；
+         *   · 刚申请 → 告诉他点「是」以后就自动了，现在也能直接 Ctrl+C。 */
+        /* 令牌判定优先：SendMessageTimeout 探路对某些被提升的窗口会漏判
+         * （实测 WinForms 程序），那样用户只会拿到"没读到选中文字"的普通文案，
+         * 根本不知道该授权一次。 */
+        if (InputSender.IsForegroundHigherIntegrity() || Core.App.ElevationState.ForegroundIsElevated())
         {
-            int cut = maxLen;
-            if (char.IsHighSurrogate(text[cut - 1])) cut--;   // 别把 emoji 劈成半个
-            text = text[..cut];
+            Notify(Core.Text.SelectionElevated.IsConnected
+                ? Loc.F("没读到选中文字：{0} 是管理员程序，提权助手也读不出它的选区。请按一下 Ctrl+C，我马上用它{1}", where, action)
+                : Core.Text.SelectionElevated.Declined
+                    ? Loc.F("没读到选中文字：{0} 以管理员身份运行，刚才的管理员授权被取消了。请按一下 Ctrl+C，我马上用它{1}", where, action)
+                    : Loc.F("没读到选中文字：{0} 以管理员身份运行，普通权限读不了它的选区。已弹出一次管理员授权，点「是」之后再按一次这个键就能自动读；现在也可以直接按 Ctrl+C{1}", where, action));
+            return;
         }
-        return text.Length > 0;
+
+        Notify(Core.ElevationHelper.IsElevated
+            ? Loc.F("没读到选中文字（{0} × 管理员模式）。请按一下 Ctrl+C，我马上用它{1}", where, action)
+            : Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它{1}", where, action));
+    }
+
+    /// <summary>挂着的一条"等用户手动 Ctrl+C"：超过 ExpireAt 就作废。</summary>
+    private sealed record PendingManualCopy(string Action, DateTime ExpireAt, Action<string> Continue);
+
+    private PendingManualCopy? _pendingManualCopy;
+
+    /// <summary>
+    /// 剪贴板里出现了新内容 —— 由 AppHost 的剪贴板监听在 UI 线程调用。
+    /// 有挂着的待办就接着把它跑完；没有就什么都不做（这是绝大多数时候）。
+    /// </summary>
+    public void ClipboardCaptured(string? text)
+    {
+        var pending = _pendingManualCopy;
+        if (pending == null) return;
+
+        if (DateTime.UtcNow > pending.ExpireAt)
+        {
+            _pendingManualCopy = null;
+            CoreLog.Info($"[取词] 手动复制等太久了，放弃这次「{pending.Action}」");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (ClipboardPaster.IsSelfWrite(text)) return;   // 我们自己写进剪贴板的内容不算用户复制
+
+        _pendingManualCopy = null;
+        CoreLog.Info($"[取词] 收到手动复制的内容，继续「{pending.Action}」 长度={text.Length}");
+        try
+        {
+            pending.Continue(text);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "手动复制后续动作");
+        }
     }
 
     /// <summary>
@@ -323,50 +386,31 @@ public sealed partial class ActionContext
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(overrideText)) overrideText = null;
-        string? text = overrideText ?? CaptureSelectionText();
-        if (string.IsNullOrWhiteSpace(text))
+        /* 查词的字数上限（2000，只防手滑全选）和去空白都在 CaptureThen 里做。 */
+        return CaptureThen(Loc.T("查词"), overrideText, 2000, text =>
         {
-            string where = ForegroundAppLabel();
-            Notify(InputSender.IsForegroundHigherIntegrity()
-                ? Loc.F("没读到选中文字：{0} 以管理员身份运行，系统不允许读取它的选区。请按一下 Ctrl+C，我马上用它查词", where)
-                : Loc.F("没读到选中文字（{0}）。请按一下 Ctrl+C，我马上用它查词", where));
-
-            var waitManualCopy = ManualCopyWaitForTest
-                                 ?? new Func<int, string>(Text.TextActions.WaitForManualCopy);
-            text = waitManualCopy(ManualCopyWaitMs);
-        }
-
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            Notify(Loc.T("没有取到选中的文字 —— 先选中要查询的内容再按这个键"));
-            return true;
-        }
-
-        text = text.Trim();
-        if (text.Length > 2000) text = text[..2000];   // 参数不是网址，长度上限只防手滑全选
-
-        /* 拦截钩子只替换"真正启动程序"这一步，成功文案照发 ——
-         * 否则自检看到的是一半流程，用户看到的那句反馈反而没人测。 */
-        if (RunQbarCommandInterceptForTest != null)
-        {
-            RunQbarCommandInterceptForTest(command, text);
-        }
-        else
-        {
-            QbarCommandResult run = QbarCommandStore.Execute(command, text, null, null);
-            if (!run.Ok)
+            /* 拦截钩子只替换"真正启动程序"这一步，成功文案照发 ——
+             * 否则自检看到的是一半流程，用户看到的那句反馈反而没人测。 */
+            if (RunQbarCommandInterceptForTest != null)
             {
-                // 失败文案由 QbarCommandStore 分好层（找不到程序 / 提权被取消 / 路径非法），别在这里糊成一句
-                Notify(run.Message);
-                return true;
+                RunQbarCommandInterceptForTest(command, text);
             }
-        }
+            else
+            {
+                QbarCommandResult run = QbarCommandStore.Execute(command, text, null, null);
+                if (!run.Ok)
+                {
+                    // 失败文案由 QbarCommandStore 分好层（找不到程序 / 提权被取消 / 路径非法），别在这里糊成一句
+                    Notify(run.Message);
+                    return;
+                }
+            }
 
-        string name = string.IsNullOrWhiteSpace(command.Title) ? command.Keyword : command.Title;
-        Notify(Loc.F("用「{0}」查「{1}」…", name, Preview(text)));
-        CoreLog.Info($"[命令搜索] {name} ← {Preview(text)}");
-        return true;
+            string name = string.IsNullOrWhiteSpace(command.Title) ? command.Keyword : command.Title;
+            Notify(Loc.F("用「{0}」查「{1}」…", name, Preview(text)));
+            CoreLog.Info($"[命令搜索] {name} ← {Preview(text)}");
+        },
+            Loc.T("没有取到选中的文字 —— 先选中要查询的内容再按这个键"));
     }
 
     /// <summary>
