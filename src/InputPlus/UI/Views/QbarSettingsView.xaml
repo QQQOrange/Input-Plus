@@ -107,7 +107,7 @@
                     <TabItem Header="{loc:T '固定项'}" Tag="pinned" />
                     <!-- 中键菜单独立成一页：它是一整条功能的三个开关（总开关 / 用哪份 / 范围），
                          塞进别的标签只会被当成那页的一个小选项。 -->
-                    <TabItem Header="{loc:T '中键菜单'}" Tag="middle" />
+                    <TabItem Header="{loc:T '附加菜单'}" Tag="middle" />
                 </TabControl>
 
                 <!-- 过滤框：按关键字或备注模糊搜索当前标签下的条目（「文件搜」标签下整块隐藏） -->
@@ -179,7 +179,7 @@
                                           VerticalAlignment="Center" FontSize="12"
                                           Visibility="{Binding MiddleMenuVisibility}"
                                           IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
-                                          ToolTip="{loc:T '勾上后这一条会出现在中键菜单里（网址会自动取网页标题作备注与网站图标）。'}"
+                                          ToolTip="{loc:T '勾上后这一条会出现在附加菜单里（网址会自动取网页标题作备注与网站图标）。'}"
                                           Click="OnEntryMiddleMenuClick" />
                             </Grid>
                         </DataTemplate>

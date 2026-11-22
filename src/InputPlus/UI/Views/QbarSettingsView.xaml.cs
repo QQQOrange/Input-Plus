@@ -2073,7 +2073,7 @@ public partial class QbarSettingsView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(10, 0, 4, 0),
             FontSize = 12,
-            ToolTip = Loc.T("勾上后这条命令会出现在中键菜单的「命令」二级菜单里。"),
+            ToolTip = Loc.T("勾上后这条命令会出现在附加菜单的「命令」二级菜单里。"),
         };
         middle.Click += (_, e) =>
         {
