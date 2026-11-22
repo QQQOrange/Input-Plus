@@ -160,7 +160,12 @@ internal static class MiddleMenuPolicy
             pinnedCount++;
 
             bool isUrl = IsUrl(target);
-            string title = string.IsNullOrWhiteSpace(pinned.Comment) ? LeafOf(target) : pinned.Comment.Trim();
+            /* 只显示**备注**：这是用户在 Qbar 里给这一条起的名字。
+             * 备注空时才退回关键字（否则菜单里会出现一行空白）。
+             * 内容（Value：路径/网址）一律不显示 —— 那是实现细节，不该占菜单的行。 */
+            string title = !string.IsNullOrWhiteSpace(pinned.Comment)
+                ? pinned.Comment.Trim()
+                : (!string.IsNullOrWhiteSpace(pinned.Key) ? pinned.Key.Trim() : LeafOf(target));
 
             /* 备注：网址显示抓回来的网页标题（还没抓到就先空着，菜单不闪）；
              * 文件/文件夹显示它自己的路径，长路径靠菜单里的省略号截。 */
@@ -232,7 +237,13 @@ internal static class MiddleMenuPolicy
         }
 
         // ④ 打开设置（永远最后一条）
-        AddTop(new GestureMenuItem { Title = Loc.T("打开设置"), Action = "openSettings", Arg = "" });
+        AddTop(new GestureMenuItem
+        {
+            Title = Loc.T("打开设置"),
+            Glyph = "\uE713",   // 和软件里其它"设置"入口同一个齿轮字形
+            Action = "openSettings",
+            Arg = "",
+        });
 
         return def;
     }

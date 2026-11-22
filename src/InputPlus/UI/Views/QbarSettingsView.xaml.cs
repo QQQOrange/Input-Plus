@@ -2050,7 +2050,7 @@ public partial class QbarSettingsView : UserControl
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var middle = new CheckBox
         {
-            Content = Loc.T("中键"),
+            Content = Loc.T("附加菜单"),
             IsChecked = command.ShowInMiddleMenu,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(10, 0, 4, 0),

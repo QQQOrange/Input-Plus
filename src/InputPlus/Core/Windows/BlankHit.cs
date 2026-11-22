@@ -124,7 +124,21 @@ internal static class BlankHit
          * （Progman）。动态壁纸、多显示器、Win11 的 WorkerW 换宿主时类名会变，
          * 但"root 是 shell 窗口"这一条始终成立。 */
         bool rootIsShell = root != IntPtr.Zero && root == NativeMethods.GetShellWindow();
-        if (IsDesktopClass(cls, rootCls) || rootIsShell)
+
+        /* 第三方桌面 / Launcher：它们的窗口不属于 Progman/WorkerW，但整块屏都是"桌面"。
+         * 这里只认**由 explorer.exe 撑起来的顶层窗口**（shell 宿主、部分 launcher 就是这么挂的），
+         * 不去猜别的进程 —— 猜错就等于在全屏游戏里乱弹菜单。 */
+        bool rootIsExplorer = false;
+        if (!rootIsShell && root != IntPtr.Zero)
+        {
+            NativeMethods.GetWindowThreadProcessId(root, out uint rootPid);
+            if (rootPid != 0)
+            {
+                string exe = WindowService.GetProcessPath(rootPid);
+                rootIsExplorer = exe.EndsWith("\\explorer.exe", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        if (IsDesktopClass(cls, rootCls) || rootIsShell || rootIsExplorer)
         {
             /* 指针在桌面上：可能是图标列表，也可能只是桌面背景（壁纸/多显示器拼缝）。
              * 列表控件问得到就精确问，问不到就当空白 —— 桌面上没有别的东西会误伤。 */

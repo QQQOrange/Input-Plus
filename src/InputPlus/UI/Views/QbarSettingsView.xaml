@@ -175,7 +175,7 @@
 
                                 <!-- 中键菜单开关：勾上这一条就出现在中键菜单里（标题用备注、图标用真实图标）。
                                      用 ToggleSwitch 是为了和设置页其它开关一致；Click 里落盘。 -->
-                                <CheckBox Grid.Column="4" Content="{loc:T '中键'}" Margin="12,0,0,0"
+                                <CheckBox Grid.Column="4" Content="{loc:T '附加菜单'}" Margin="12,0,0,0"
                                           VerticalAlignment="Center" FontSize="12"
                                           Visibility="{Binding MiddleMenuVisibility}"
                                           IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
