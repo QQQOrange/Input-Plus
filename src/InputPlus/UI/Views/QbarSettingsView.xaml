@@ -141,11 +141,12 @@
                           Margin="0,10,0,0" SelectionChanged="OnEntrySelected"
                           GridViewColumnHeader.Click="OnColumnHeaderClick"
                           FontFamily="{StaticResource Font.Ui}"
-                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          SizeChanged="OnEntryListSizeChanged"
                           ItemContainerStyle="{StaticResource RowItem}">
                     <ListView.View>
                         <GridView AllowsColumnReorder="False">
-                            <GridViewColumn Header="{loc:T '关键字'}" Width="210">
+                            <GridViewColumn x:Name="KeyColumn" Header="{loc:T '关键字'}" Width="140">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <Grid Margin="0,3" VerticalAlignment="Center">
@@ -181,7 +182,7 @@
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
 
-                            <GridViewColumn Header="{loc:T '内容'}" Width="240">
+                            <GridViewColumn x:Name="ValueColumn" Header="{loc:T '内容'}" Width="380">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Value}" TextTrimming="CharacterEllipsis"
@@ -191,7 +192,7 @@
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
 
-                            <GridViewColumn Header="{loc:T '备注'}" Width="170">
+                            <GridViewColumn x:Name="NoteColumn" Header="{loc:T '备注'}" Width="150">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Comment}" TextTrimming="CharacterEllipsis"
@@ -201,7 +202,7 @@
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
 
-                            <GridViewColumn Header="{loc:T '附加菜单'}" Width="96">
+                            <GridViewColumn x:Name="MenuColumn" Header="{loc:T '附加菜单'}" Width="92">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <CheckBox FontSize="12" VerticalAlignment="Center" Margin="0,3"

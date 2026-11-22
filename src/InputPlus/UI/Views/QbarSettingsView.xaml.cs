@@ -427,7 +427,20 @@ public partial class QbarSettingsView : UserControl
         BindEditor(vm.Entry);
     }
 
-    // ─────────────────── 列表列头：排序 ───────────────────
+    // ─────────────────── 列表列头：排序与列宽 ───────────────────
+
+    /// <summary>
+    /// 四列要在一屏里放下：关键字最窄、内容吃掉剩下的宽度（备注与附加菜单固定）。
+    /// 只在列表宽度变化时重算内容列，用户手动拖过的其它列宽保持不动。
+    /// </summary>
+    private void OnEntryListSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        double key = KeyColumn.Width;
+        double note = NoteColumn.Width;
+        double menu = MenuColumn.Width;
+        double rest = e.NewSize.Width - key - note - menu - 26;   // 26 ≈ 内边距 + 竖向滚动条
+        ValueColumn.Width = Math.Max(160, rest);
+    }
 
     private List<EntryVm>? _entryItems;
     private int _sortColumn = -1;
