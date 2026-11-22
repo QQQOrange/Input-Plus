@@ -133,9 +133,14 @@
                 <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这一张表：
                      列头来自 GridView，点击列头排序（再点切换升降序），列宽用鼠标拖列头之间的分隔线即可 ——
                      和资源管理器同一套手感，不自己造。 -->
+                <!-- 四个列表（搜索指令 / 启动程序 / 常用网址 / 固定项）共用这一张表：
+                     列头来自 GridView，点击列头排序（再点切换升降序），列宽拖列头分隔线即可。
+                     单元格里的文字全部用主题样式（Text.Body / Text.Secondary / Text.Tertiary），
+                     纵向内边距和左栏其它列表一致，不再是一副"外挂表格"的样子。 -->
                 <ListView Grid.Row="2" x:Name="EntryList" Background="Transparent" BorderThickness="0"
                           Margin="0,10,0,0" SelectionChanged="OnEntrySelected"
                           GridViewColumnHeader.Click="OnColumnHeaderClick"
+                          FontFamily="{StaticResource Font.Ui}"
                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
                           ItemContainerStyle="{StaticResource RowItem}">
                     <ListView.View>
@@ -143,22 +148,26 @@
                             <GridViewColumn Header="{loc:T '关键字'}" Width="210">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Grid>
+                                        <Grid Margin="0,3" VerticalAlignment="Center">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <Grid Grid.Column="0" Width="20" Height="20" Margin="0,0,8,0" VerticalAlignment="Center">
+                                            <Grid Grid.Column="0" Width="20" Height="20" Margin="0,0,8,0"
+                                                  VerticalAlignment="Center">
                                                 <Border Background="{Binding LetterBrush}" CornerRadius="5"
                                                         Visibility="{Binding NoIconVisibility}">
                                                     <TextBlock Text="{Binding Initial}" FontSize="10" FontWeight="SemiBold"
-                                                               Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                               Foreground="White" HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
                                                 </Border>
-                                                <Image Source="{Binding Icon}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                                                <Image Source="{Binding Icon}" Stretch="Uniform"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"
                                                        Visibility="{Binding HasIconVisibility}" />
                                             </Grid>
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Key}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                <TextBlock Text="{Binding Key}" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource Brush.Accent}" />
                                                 <Border Background="{DynamicResource Brush.AccentSoft}" CornerRadius="4"
                                                         Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center"
@@ -176,8 +185,8 @@
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Value}" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" Margin="0,0,8,0"
-                                                   Foreground="{DynamicResource Brush.TextSecondary}" />
+                                                   VerticalAlignment="Center" Margin="0,3"
+                                                   Style="{StaticResource Text.Body}" />
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
@@ -186,7 +195,8 @@
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Comment}" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" Style="{StaticResource Text.Tertiary}" />
+                                                   VerticalAlignment="Center" Margin="0,3"
+                                                   Style="{StaticResource Text.Tertiary}" />
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
@@ -194,7 +204,7 @@
                             <GridViewColumn Header="{loc:T '附加菜单'}" Width="96">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <CheckBox Content="{loc:T '附加菜单'}" FontSize="12" VerticalAlignment="Center"
+                                        <CheckBox FontSize="12" VerticalAlignment="Center" Margin="0,3"
                                                   Visibility="{Binding MiddleMenuVisibility}"
                                                   IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
                                                   ToolTip="{loc:T '勾上后这一条会出现在附加菜单里。'}"
