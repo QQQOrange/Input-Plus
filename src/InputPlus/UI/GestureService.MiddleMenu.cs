@@ -246,6 +246,20 @@ public sealed partial class GestureService
                 win.Closed += (_, _) => OnMiddleMenuClosed(win);
                 _middleMenu = win;
                 win.Show();
+
+                /* 拿到键盘焦点：Esc / 1..9 / ↑↓ 全靠它。
+                 *
+                 * 为什么 Show() 不够：这一下窗口不是用户点击唤起的，我们进程也不是前台进程
+                 * （前台还是他刚才在用的那个程序）。Windows 的前台锁定会直接拒绝
+                 * Show() 内部的 SetForegroundWindow —— 窗口照样 Topmost 显示，
+                 * 但键盘焦点留在原程序里，于是"菜单出来了，Esc 关不掉、数字键没反应"，
+                 * 连 Deactivated（点别处收起）都不会触发。
+                 * 这里复用仓库里那套三级阶梯（热键唤出 Qbar 用的同一个函数），
+                 * 默认只走前两级，不改任何全局系统设置。 */
+                var handle = new System.Windows.Interop.WindowInteropHelper(win).Handle;
+                if (handle != IntPtr.Zero && !WindowService.ForceForeground(handle))
+                    CoreLog.Warn("[中键菜单] 抢前台失败：Esc / 数字键可能按不到");
+
             }
             catch (Exception ex)
             {
