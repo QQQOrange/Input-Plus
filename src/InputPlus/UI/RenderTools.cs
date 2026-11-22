@@ -178,6 +178,45 @@ public static class RenderTools
                     attach.Show();
                     Pump(300);
                     Save(attach, Path.Combine(outDir, "attach-menu.png"));
+
+                    /* 反例专用：四个汉字 + 二级菜单箭头（"历史记录 ▸"）。
+                       这正是用户说"连历史记录四个字都显示不全"的那一行，
+                       菜单宽度改过之后必须有一张图能一眼看出来它到底是全的还是被截的。 */
+                    var wideDef = new InputPlus.Core.Scripting.GestureMenuDef
+                    {
+                        Id = "render.wide",
+                        Name = "",
+                        Hint = "",
+                        HideTitle = true,
+                    };
+                    wideDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                    {
+                        Title = "历史记录",
+                        Glyph = "\uE81C",
+                        Action = "",
+                        Children = new List<InputPlus.Core.Scripting.GestureMenuItem>
+                        {
+                            new() { Title = "最近打开的文件", Action = "" },
+                        },
+                    });
+                    wideDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                    {
+                        Title = "打开设置",
+                        Glyph = "\uE713",
+                        Action = "openSettings",
+                    });
+                    var wide = new GestureMenuWindow(wideDef, InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -32000,
+                        Top = -32000,
+                    };
+                    wide.Show();
+                    Pump(260);
+                    Save(wide, Path.Combine(outDir, "attach-menu-wide.png"));
+                    wide.Close();
+
                     attach.Close();
                     Pump(120);
                 }

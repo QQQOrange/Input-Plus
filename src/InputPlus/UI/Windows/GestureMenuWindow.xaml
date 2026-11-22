@@ -107,10 +107,10 @@
     </Window.Resources>
 
     <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求）。
-         v1.3.31：192 → 128，用户点名"左右宽度还是太宽，再少 1/3"。
-         192 × 2/3 = 128。宽了字放不下就靠省略号截，菜单不跟着内容变宽。
-         二级菜单（SubPopup）另给 MinWidth，不受这一条约束。 -->
-    <Border Margin="14" Width="128"
+         128 的时候"历史记录"这四个字 + 右侧二级菜单箭头已经放不下，标题被省略号截成"历史记…"；
+         160 是能稳稳放下四到六个汉字、又不至于像 192 那样空出半条街的宽度。
+         更长的标题照旧省略号截，菜单不跟着内容变宽。二级菜单（SubPopup）另给 MinWidth。 -->
+    <Border Margin="14" Width="160"
             Padding="6" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"

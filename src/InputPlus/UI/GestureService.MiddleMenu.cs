@@ -214,7 +214,7 @@ public sealed partial class GestureService
             pending = _middleTap;
             _middleTap = default;
         }
-        if (!pending.Armed || !pending.Probe.IsBlank) return;
+        if (!pending.Armed) return;
 
         var (px, py) = CursorPos();
         double dx = px - pending.Start.X;
@@ -222,9 +222,29 @@ public sealed partial class GestureService
         double moved = Math.Sqrt(dx * dx + dy * dy);
 
         /* 用和手势同一个门槛（MinMove，可调 4~400）。
-         * 达到门槛 = 用户其实在划 —— 只是他没给中键配任何手势，那就什么都不发生。 */
+         * 达到门槛 = 用户其实在划 —— 这一整下按手势处理（按下与抬起都已配对吞掉）。 */
         int minMove = Math.Max(4, Settings().GestureOptions.MinMove);
-        if (moved >= minMove) return;
+        if (moved >= minMove)
+        {
+            AttachDiag("  -> 划了一笔：交给手势");
+            return;
+        }
+
+        if (!pending.Probe.IsBlank)
+        {
+            /* 没落在桌面空白处（压在图标上 / 别的窗口 / 判定不出空白）。
+             *
+             * 这一下本来就不该被我们吃掉，但**按下时已经吞了**（那一刻必须按"可能是手势"处理），
+             * 只吞不还就是用户说的"中键功能好像失效"：既没弹菜单，原生中键也没了。
+             * 现在确认它只是点了一下 → 补发一次原生中键，浏览器的自动滚动 /
+             * 资源管理器与桌面原有的中键行为照旧。
+             *
+             * 补发用的是 InputSender（带 InjectionTag），我们自己的钩子认得出这是注入的，不会再套娃。 */
+            AttachDiag("  -> 非空白点击：补发原生中键");
+            try { InputPlus.Core.Input.InputSender.Tap(vk); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：补发原生中键"); }
+            return;
+        }
 
         MiddleMenuOpen(Settings());
     }
