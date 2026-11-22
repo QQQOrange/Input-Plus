@@ -75,10 +75,19 @@ public sealed class QbarCommand
     public bool RunAsAdmin { get; set; }
     public bool Silent { get; set; }
 
+    /// <summary>
+    /// 这一条命令是否出现在中键菜单的「命令」二级菜单里。
+    ///
+    /// 出厂 false：内置命令有十几条（新文件/新目录/词典…），全塞进菜单等于把菜单变成
+    /// 一个滚动列表。用户勾哪几条，就只出现哪几条。
+    /// </summary>
+    public bool ShowInMiddleMenu { get; set; }
+
     public QbarCommand Clone() => new QbarCommand
     {
         Id = Id, Keyword = Keyword, Title = Title, Path = Path, Parameter = Parameter,
         WorkingDirectory = WorkingDirectory, RunAsAdmin = RunAsAdmin, Silent = Silent,
+        ShowInMiddleMenu = ShowInMiddleMenu,
     };
 }
 

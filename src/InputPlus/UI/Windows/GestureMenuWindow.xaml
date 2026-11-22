@@ -12,15 +12,18 @@
         SnapsToDevicePixels="True" UseLayoutRounding="True"
         Loaded="OnLoaded" PreviewKeyDown="OnPreviewKeyDown">
     <!--
-        手势菜单的弹出菜单（v1.5.0）。
+        手势菜单的弹出菜单（v1.5.0；v1.3.17 起支持图标、备注与悬停二级菜单）。
 
         窗口自己完全透明，圆角和投影都画在里面这层 Border 上 ——
         AllowsTransparency 的窗口只能靠"透明窗口 + 内部一块自绘卡片"做非矩形外观。
         Margin="14" 是留给投影的：窗口边界会把圆角外的像素裁掉，投影必须留在窗口里面，
         不流这圈边距的话阴影四周会被切齐，看着像一块硬边。
+
+        窗口没有标题栏、不可缩放、不可拖动（WindowStyle=None + ResizeMode=NoResize）：
+        它一出现就钉在光标处，用户要求"不能移动"。
     -->
     <Window.Resources>
-        <!-- 一行条目：左边图标（没有图标就退回 1..9 的序号）+ 中间标题 + 右边预留位 -->
+        <!-- 一行条目：图标（没有图标退回 1..9 序号）/ 标题 + 备注 / 右侧二级箭头 -->
         <DataTemplate x:Key="EntryTemplate">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -29,31 +32,47 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Grid Grid.Column="0" Width="24" Margin="2,0,8,0">
+                <Grid Grid.Column="0" Width="22" Margin="1,0,9,0">
+                    <!-- 三选一：真实图标 > 字形 > 序号。同一时刻只会显示一个。 -->
+                    <Image Source="{Binding Icon}" Width="18" Height="18" Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding IconVisibility}" />
                     <TextBlock x:Name="GlyphText" Text="{Binding Glyph}"
-                               FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
                                Foreground="{DynamicResource Brush.TextSecondary}"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Visibility="Collapsed" />
+                               Visibility="{Binding GlyphVisibility}" />
                     <TextBlock x:Name="IndexText" Text="{Binding Index}" FontSize="11"
                                Foreground="{DynamicResource Brush.TextTertiary}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding IndexVisibility}" />
                 </Grid>
 
-                <TextBlock Grid.Column="1" Text="{Binding Title}"
-                           Style="{StaticResource Text.Body}"
-                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" Style="{StaticResource Text.Body}"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    <!-- 备注：网址显示网页标题、文件显示路径。空的时候整行折叠，行高不变。 -->
+                    <TextBlock Text="{Binding Note}" FontSize="11" Margin="0,1,0,0"
+                               Foreground="{DynamicResource Brush.TextTertiary}"
+                               TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding NoteVisibility}" />
+                </StackPanel>
 
-                <!-- 第三列留给"右侧说明"：v1.5.0 不显示东西，列留着让标题的可用宽度稳定 -->
-                <TextBlock Grid.Column="2" Visibility="Collapsed" />
+                <!-- 有二级菜单时显示箭头；没有就整列空着，标题宽度不变 -->
+                <TextBlock Grid.Column="2" Text="&#xE76C;" Margin="10,0,2,0"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10"
+                           Foreground="{DynamicResource Brush.TextTertiary}"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding ArrowVisibility}" />
             </Grid>
-            <DataTemplate.Triggers>
-                <DataTrigger Binding="{Binding HasGlyph}" Value="True">
-                    <Setter TargetName="GlyphText" Property="Visibility" Value="Visible" />
-                    <Setter TargetName="IndexText" Property="Visibility" Value="Collapsed" />
-                </DataTrigger>
-            </DataTemplate.Triggers>
         </DataTemplate>
+
+        <!-- 行容器：沿用主题的 RowItem（悬停 / 选中 / 圆角），只额外挂"悬停展开二级菜单" -->
+        <Style x:Key="MenuRow" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
+            <EventSetter Event="MouseEnter" Handler="OnRowMouseEnter" />
+            <EventSetter Event="MouseLeave" Handler="OnRowMouseLeave" />
+        </Style>
     </Window.Resources>
 
     <Border Margin="14" MinWidth="200" MaxWidth="360"
@@ -66,7 +85,8 @@
         </Border.Effect>
 
         <StackPanel>
-            <!-- 标题行：菜单名 + 说明小字（说明可为空） -->
+            <!-- 标题行：只有菜单名。v1.3.17 起不再显示任何说明/介绍文字
+                 （用户要求"中键菜单上不能显示中键菜单的相关介绍"），Hint 为空时整块折叠。 -->
             <StackPanel Margin="10,5,10,0">
                 <TextBlock x:Name="MenuTitleText" Style="{StaticResource Text.Body}" FontWeight="SemiBold"
                            TextTrimming="CharacterEllipsis" />
@@ -86,7 +106,7 @@
             <ListBox x:Name="ItemList"
                      Background="Transparent" BorderThickness="0" Padding="0"
                      Focusable="True" FocusVisualStyle="{x:Null}"
-                     ItemContainerStyle="{StaticResource RowItem}"
+                     ItemContainerStyle="{StaticResource MenuRow}"
                      ItemTemplate="{StaticResource EntryTemplate}"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      PreviewMouseLeftButtonUp="OnEntryClick" />
@@ -94,6 +114,27 @@
             <TextBlock x:Name="EmptyText" Text="{loc:T '这个菜单还没有条目'}"
                        Style="{StaticResource Text.Tertiary}" Margin="12,6,12,10"
                        Visibility="Collapsed" />
+
+            <!-- 二级菜单：贴着父项右侧展开，鼠标悬停就到，离开父项也不会立刻收 ——
+                 用户从父项挪到子项的过程会先离开父项，收早了根本点不到。
+                 放在 StackPanel 里是因为 Window 只能有一个子级；Popup 本身不占布局。 -->
+            <Popup x:Name="SubPopup" AllowsTransparency="True" StaysOpen="True"
+                   PopupAnimation="None" Placement="Right" HorizontalOffset="2" VerticalOffset="-8">
+                <Border Padding="6" CornerRadius="12" Margin="12"
+                        Background="{DynamicResource Brush.Surface}"
+                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.18" Color="Black" />
+                    </Border.Effect>
+                    <ListBox x:Name="SubList" Background="Transparent" BorderThickness="0" Padding="0"
+                             Focusable="False" FocusVisualStyle="{x:Null}"
+                             ItemContainerStyle="{StaticResource RowItem}"
+                             ItemTemplate="{StaticResource EntryTemplate}"
+                             MinWidth="180" MaxWidth="320"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             PreviewMouseLeftButtonUp="OnSubEntryClick" />
+                </Border>
+            </Popup>
         </StackPanel>
     </Border>
 </Window>

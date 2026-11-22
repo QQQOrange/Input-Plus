@@ -105,6 +105,9 @@
                     <TabItem Header="{loc:T '启动程序'}" Tag="run" />
                     <TabItem Header="{loc:T '常用网址'}" Tag="web" />
                     <TabItem Header="{loc:T '固定项'}" Tag="pinned" />
+                    <!-- 中键菜单独立成一页：它是一整条功能的三个开关（总开关 / 用哪份 / 范围），
+                         塞进别的标签只会被当成那页的一个小选项。 -->
+                    <TabItem Header="{loc:T '中键菜单'}" Tag="middle" />
                 </TabControl>
 
                 <!-- 过滤框：按关键字或备注模糊搜索当前标签下的条目（「文件搜」标签下整块隐藏） -->
@@ -140,6 +143,8 @@
                                     <ColumnDefinition Width="120" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <!-- 「显示在中键菜单」：只有「固定项」标签里可见，其它标签整列折叠 -->
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
                                 <!-- 二选一：有图标只显示图标，没有图标只显示首字母色块。
@@ -167,6 +172,15 @@
                                            Foreground="{DynamicResource Brush.TextSecondary}" />
                                 <TextBlock Grid.Column="3" Text="{Binding Comment}" VerticalAlignment="Center"
                                            Style="{StaticResource Text.Tertiary}" />
+
+                                <!-- 中键菜单开关：勾上这一条就出现在中键菜单里（标题用备注、图标用真实图标）。
+                                     用 ToggleSwitch 是为了和设置页其它开关一致；Click 里落盘。 -->
+                                <CheckBox Grid.Column="4" Content="{loc:T '中键'}" Margin="12,0,0,0"
+                                          VerticalAlignment="Center" FontSize="12"
+                                          Visibility="{Binding MiddleMenuVisibility}"
+                                          IsChecked="{Binding ShowInMiddleMenu, Mode=OneWay}"
+                                          ToolTip="{loc:T '勾上后这一条会出现在中键菜单里（网址会自动取网页标题作备注与网站图标）。'}"
+                                          Click="OnEntryMiddleMenuClick" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -179,6 +193,74 @@
                     <TextBlock x:Name="EntryHint" Style="{StaticResource Text.Tertiary}" VerticalAlignment="Center"
                                Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="380" />
                 </StackPanel>
+
+                <!-- 中键菜单：三个开关 + 一句说明（说明只在设置页里出现，菜单本身不显示任何介绍）。 -->
+                <Grid x:Name="MiddleMenuPanel" Grid.Row="1" Grid.RowSpan="3" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Margin="0,4,10,10">
+                            <Border Style="{StaticResource Card}" Padding="18,16">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:T '中键菜单'}" Style="{StaticResource Text.H2}" Margin="0,0,0,4" />
+                                    <TextBlock Text="{loc:T '在桌面或资源管理器文件夹的空白处单击中键，弹出一个可点的小菜单。内容是：勾了「中键」的固定项、历史记录（= 搜索前建议）、勾了「中键」的命令，最后是打开设置。点在图标、文件或别的程序上不会弹。'}"
+                                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
+
+                                    <Grid Margin="0,18,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '启用中键菜单'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '出厂是关的：中键在浏览器里是自动滚动、在资源管理器里能开新标签，默认接管等于改掉一颗常用的键。'}"
+                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                        <CheckBox Grid.Column="1" x:Name="MiddleMenuEnabledBox" Style="{StaticResource ToggleSwitch}"
+                                                  VerticalAlignment="Center" Click="OnMiddleMenuToggleChanged" />
+                                    </Grid>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,14,0,0" />
+
+                                    <Grid Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '弹出哪个菜单'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '「内置」= 上面那句说的结构，每次现拼；也可以直接用「菜单管理」里配好的那一份。'}"
+                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1" x:Name="MiddleMenuPickBox" Style="{StaticResource ComboBox.Base}"
+                                                  MinWidth="220" VerticalAlignment="Center"
+                                                  SelectionChanged="OnMiddleMenuPicked" />
+                                    </Grid>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,14,0,0" />
+
+                                    <Grid Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '生效范围'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '只在桌面，还是桌面 + 资源管理器文件夹窗口。别的程序里中键永远不被接管。'}"
+                                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <RadioButton x:Name="MiddleMenuScopeDesktopRadio" GroupName="MiddleMenuScope"
+                                                         Content="{loc:T '仅桌面'}"
+                                                         Checked="OnMiddleMenuScopeChanged" />
+                                            <RadioButton x:Name="MiddleMenuScopeAllRadio" GroupName="MiddleMenuScope" Margin="0,6,0,0"
+                                                         Content="{loc:T '桌面 + 资源管理器'}"
+                                                         Checked="OnMiddleMenuScopeChanged" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
 
                 <!-- 文件搜：Qbar 文件搜索的全部设置都在这一页。
                      为什么单独一页：过滤器和优先级规则是「列表 + 逐条编辑」型数据，

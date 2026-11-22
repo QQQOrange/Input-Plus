@@ -82,15 +82,36 @@ public sealed class GestureMenuItem
     /// <summary>条目左侧的图标字形（Segoe MDL2 Assets 的字符，可空）。</summary>
     public string Glyph { get; set; } = "";
 
+    /// <summary>
+    /// 第二行小字（备注）。网址条目用它显示抓回来的网页标题；
+    /// 空串时菜单里不占那一行，行高和以前一样。
+    /// </summary>
+    public string Note { get; set; } = "";
+
+    /// <summary>
+    /// 真实图标来源：磁盘路径（文件 / 文件夹 / 程序），或网址（取 favicon）。
+    /// 为空时菜单回落到 <see cref="Glyph"/>，再回落到 1..9 的序号。
+    /// </summary>
+    public string IconPath { get; set; } = "";
+
     public string Action { get; set; } = "";
 
     public string Arg { get; set; } = "";
+
+    /// <summary>
+    /// 非空 = 这一条是**二级菜单的父项**：鼠标悬停自动展开，自己不带动作。
+    /// （中键菜单目前只有「历史记录」和「命令」两组走二级。）
+    /// </summary>
+    public List<GestureMenuItem> Children { get; set; } = new();
 
     public GestureMenuItem Clone() => new()
     {
         Title = Title,
         Glyph = Glyph,
+        Note = Note,
+        IconPath = IconPath,
         Action = Action,
-        Arg = Arg
+        Arg = Arg,
+        Children = Children.Select(c => c.Clone()).ToList()
     };
 }

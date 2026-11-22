@@ -66,90 +66,8 @@ public partial class GestureOptionsView : UserControl
             UpdateColorSwatches();
             SyncWg2Controls(opts);
             SyncLabelStyle(_host.Settings.GestureLabel);
-            SyncMiddleMenu(_host.Settings);
         }
         finally { _loading = false; }
-    }
-
-    // ─────────────────── 中键菜单（v1.3.16） ───────────────────
-
-    /// <summary>把中键菜单那三个控件灌成当前配置（只读配置，不触发保存）。</summary>
-    private void SyncMiddleMenu(AppSettings s)
-    {
-        MiddleMenuEnabledBox.IsChecked = s.MiddleClickMenuEnabled;
-
-        /* 下拉每次重建：菜单管理里加了/删了菜单，回到这一页就该看到最新的。
-         * 重建期间 _loading 还是 true（Sync 的外层），所以 SelectionChanged 不会写盘。 */
-        MiddleMenuPickBox.Items.Clear();
-        MiddleMenuPickBox.Items.Add(new ComboBoxItem
-        {
-            Content = Loc.T("内置：收藏 / 最近 / 命令 / 设置"),
-            Tag = "",
-        });
-        foreach (var menu in s.GestureMenus)
-        {
-            MiddleMenuPickBox.Items.Add(new ComboBoxItem
-            {
-                Content = menu.DisplayName,
-                Tag = menu.Id,
-            });
-        }
-
-        /* 指向的菜单可能已经被删了：这时下拉停在第一项（内置）。
-         * 不在这里顺手改配置 —— 用户只是打开设置页看一眼，不该被悄悄改掉值。 */
-        string wanted = (s.MiddleClickMenuId ?? "").Trim();
-        int index = 0;
-        for (int i = 1; i < MiddleMenuPickBox.Items.Count; i++)
-        {
-            if (MiddleMenuPickBox.Items[i] is ComboBoxItem item &&
-                string.Equals(item.Tag as string, wanted, StringComparison.OrdinalIgnoreCase))
-            {
-                index = i;
-                break;
-            }
-        }
-        MiddleMenuPickBox.SelectedIndex = index;
-
-        var scope = MiddleMenuScope.ToScope(s.MiddleClickMenuScope);
-        MiddleMenuScopeDesktopRadio.IsChecked = scope == MiddleClickMenuScope.Desktop;
-        MiddleMenuScopeAllRadio.IsChecked = scope == MiddleClickMenuScope.DesktopAndExplorer;
-
-        UpdateMiddleMenuAvailability();
-    }
-
-    /// <summary>总开关关着时，下面两项变灰 —— 免得用户以为"选了菜单却没反应"。</summary>
-    private void UpdateMiddleMenuAvailability()
-    {
-        bool on = MiddleMenuEnabledBox.IsChecked == true;
-        MiddleMenuPickBox.IsEnabled = on;
-        MiddleMenuScopeDesktopRadio.IsEnabled = on;
-        MiddleMenuScopeAllRadio.IsEnabled = on;
-    }
-
-    private void OnMiddleMenuToggleChanged(object sender, RoutedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        _host.Settings.MiddleClickMenuEnabled = MiddleMenuEnabledBox.IsChecked == true;
-        UpdateMiddleMenuAvailability();
-        _host.SaveSettings();
-    }
-
-    private void OnMiddleMenuPicked(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        _host.Settings.MiddleClickMenuId =
-            (MiddleMenuPickBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
-        _host.SaveSettings();
-    }
-
-    private void OnMiddleMenuScopeChanged(object sender, RoutedEventArgs e)
-    {
-        if (_loading || _host == null) return;
-        _host.Settings.MiddleClickMenuScope = MiddleMenuScope.ToStorage(
-            MiddleMenuScopeDesktopRadio.IsChecked == true
-                ? MiddleClickMenuScope.Desktop
-                : MiddleClickMenuScope.DesktopAndExplorer);
-        _host.SaveSettings();
     }
 
     /// <summary>渲染工具用：滚回顶上（内容现在分三张卡，没有折叠面板了）。</summary>
@@ -518,3 +436,4 @@ public partial class GestureOptionsView : UserControl
 
     private static System.Drawing.Color? PickColor(string initial) => ColorSwatch.Pick(initial);
 }
+    /// <summary>

@@ -128,33 +128,82 @@ public static partial class SelfTest
             if (normalized) Check("老配置：Normalize 能跑通", true);
         }
 
-        // ── 菜单内容：全部来自现有数据源，最后一条是打开设置 ───────
+        // ── 菜单内容（v1.3.17 结构）：固定项 / 历史记录 / 命令 / 打开设置 ───
         var s = new AppSettings { MiddleClickMenuEnabled = true };
-        s.FileDialogBar.Favorites.Add(new FavoriteDirectory { Name = "工作目录", Path = @"D:\work" });
-        s.FileDialogBar.Favorites.Add(new FavoriteDirectory { Path = @"D:\no-name" });
+        s.Qbar.Pinned.Add(new QEntry { Key = "工作", Value = @"D:\work", ShowInMiddleMenu = true });
+        s.Qbar.Pinned.Add(new QEntry { Key = "没勾", Value = @"D:\ignored", ShowInMiddleMenu = false });
+        s.Qbar.Pinned.Add(new QEntry
+        {
+            Key = "官网",
+            Value = "https://example.com/",
+            ShowInMiddleMenu = true,
+            Comment = "示例站",
+        });
         s.Qbar.Commands.Add(new QbarCommand
         {
             Id = "c1",
             Keyword = "nt",
             Title = "记事本",
             Path = @"C:\Windows\notepad.exe",
+            ShowInMiddleMenu = true,
+        });
+        s.Qbar.Commands.Add(new QbarCommand
+        {
+            Id = "c2",
+            Keyword = "np",
+            Title = "不勾的命令",
+            Path = @"C:\Windows\notepad.exe",
+            ShowInMiddleMenu = false,
         });
 
-        var def = MiddleMenuPolicy.Build(s);
+        var history = new List<MiddleMenuSuggestion>
+        {
+            new("报告.docx", @"D:\报告.docx", false),
+            new("Bing", "https://bing.com", true),
+        };
+        var titles = new Dictionary<string, string> { ["https://example.com/"] = "示例站首页" };
+
+        var def = MiddleMenuPolicy.Build(s, history, titles);
         Check("菜单：有内容", def.Items.Count > 0, def.Items.Count.ToString());
-        Check("菜单：收藏进菜单", def.Items.Any(i => i.Action == "openFile" && i.Arg == @"D:\work"));
-        Check("菜单：收藏没写备注时用路径末段", def.Items.Any(i => i.Title == "no-name"));
-        Check("菜单：自定义命令走「运行命令」",
-            def.Items.Any(i => i.Action == "runProgram" && i.Arg.Contains("notepad.exe")));
+        Check("菜单：标题栏不写介绍（Hint 为空）", def.Hint.Length == 0, def.Hint);
+
+        // 固定项：只收勾了的，且文件夹走 openFile、网址走 webPage
+        Check("菜单：勾了中键的固定项进菜单",
+            def.Items.Any(i => i.Arg == @"D:\work" && i.Action == "openFile"));
+        Check("菜单：没勾的固定项不进菜单", def.Items.All(i => i.Arg != @"D:\ignored"));
+        Check("菜单：网址固定项走「直达网址」",
+            def.Items.Any(i => i.Arg == "https://example.com/" && i.Action == "webPage"));
+        Check("菜单：网址备注用抓回来的网页标题",
+            def.Items.Any(i => i.Arg == "https://example.com/" && i.Note == "示例站首页"));
+        Check("菜单：文件夹条目带图标来源",
+            def.Items.Any(i => i.Arg == @"D:\work" && i.IconPath.Length > 0));
+
+        // 历史记录 ▸ 搜索前建议（二级）
+        var hist = def.Items.FirstOrDefault(i => i.Children.Count > 0 && i.Title == Loc.T("历史记录"));
+        Check("菜单：有「历史记录」二级菜单", hist != null, "没找到");
+        Check("菜单：历史记录里是建议的内容", hist != null && hist.Children.Count == 2,
+            hist == null ? "-" : hist.Children.Count.ToString());
+        Check("菜单：历史记录里网址走 webPage",
+            hist != null && hist.Children.Any(c => c.Action == "webPage" && c.Arg == "https://bing.com"));
+
+        // 命令 ▸ 只收勾了的
+        var cmds = def.Items.FirstOrDefault(i => i.Children.Count > 0 && i.Title == Loc.T("命令"));
+        Check("菜单：有「命令」二级菜单", cmds != null, "没找到");
+        Check("菜单：命令二级里只出现勾选的",
+            cmds != null && cmds.Children.Count == 1 && cmds.Children[0].Title == "记事本",
+            cmds == null ? "-" : string.Join(",", cmds.Children.Select(c => c.Title)));
+        Check("菜单：命令走「运行命令」",
+            cmds != null && cmds.Children.All(c => c.Action == "runProgram"));
+
         Check("菜单：最后一条是打开设置",
             def.Items.Count > 0 && def.Items[def.Items.Count - 1].Action == "openSettings",
             def.Items.Count == 0 ? "空" : def.Items[def.Items.Count - 1].Action);
-        Check("菜单：条目标题都不为空", def.Items.All(i => !string.IsNullOrWhiteSpace(i.Title)));
+        Check("菜单：一级条目标题都不为空", def.Items.All(i => !string.IsNullOrWhiteSpace(i.Title)));
 
-        // 收藏塞 10 条 → 必须按 12 上限截断，且"打开设置"不能被挤掉
+        // 固定项塞满 → 必须按 12 上限截断，且"打开设置"不能被挤掉
         for (int i = 0; i < 10; i++)
-            s.FileDialogBar.Favorites.Add(new FavoriteDirectory { Name = "f" + i, Path = @"D:\f" + i });
-        var capped = MiddleMenuPolicy.Build(s);
+            s.Qbar.Pinned.Add(new QEntry { Key = "f" + i, Value = @"D:\f" + i, ShowInMiddleMenu = true });
+        var capped = MiddleMenuPolicy.Build(s, history, titles);
         Check("菜单：超过上限时截断到 MaxItems",
             capped.Items.Count <= GestureMenuDef.MaxItems, capped.Items.Count.ToString());
         Check("菜单：截断后仍然保留打开设置",

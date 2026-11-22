@@ -224,7 +224,7 @@ public partial class QbarSettingsView : UserControl
         string filter = FilterBox?.Text?.Trim() ?? "";
         var all = CurrentList().ToList();
         int total = all.Count;
-        var items = QEntry.Filter(all, filter).Select(e => new EntryVm(e, _tab != "run")).ToList();
+        var items = QEntry.Filter(all, filter).Select(e => new EntryVm(e, _tab != "run", _tab == "pinned")).ToList();
         EntryList.ItemsSource = items;
         if (items.Count > 0) EntryList.SelectedIndex = 0;
         _suppress = false;
@@ -368,7 +368,14 @@ public partial class QbarSettingsView : UserControl
         {
             _tab = tag;
             bool files = tag == "files";
+            bool middle = tag == "middle";
             ShowFilesTab(files);
+            MiddleMenuPanel.Visibility = middle ? Visibility.Visible : Visibility.Collapsed;
+            if (middle)
+            {
+                SyncMiddleMenu();
+                return;
+            }
             if (files)
             {
                 /* 进这一页就把两套列表和索引状态刷新一次：
@@ -390,6 +397,91 @@ public partial class QbarSettingsView : UserControl
         BindEditor(vm.Entry);
     }
 
+    // ─────────────────── 中键菜单（v1.3.17） ───────────────────
+
+    /// <summary>
+    /// 把中键菜单那三个控件灌成当前配置。只读配置，不触发保存。
+    ///
+    /// 这一页原来在「鼠标手势 → 手势设置」里，用户要求搬到 Qbar 面板 ——
+    /// 中键菜单的内容（固定项 / 建议 / 命令）本来就全在 Qbar 里配，放一起才找得到。
+    /// </summary>
+    private void SyncMiddleMenu()
+    {
+        if (_host == null) return;
+        var s = _host.Settings;
+        _suppress = true;
+        try
+        {
+            MiddleMenuEnabledBox.IsChecked = s.MiddleClickMenuEnabled;
+
+            /* 下拉每次重建：菜单管理里加了/删了菜单，回到这一页就该看到最新的。 */
+            MiddleMenuPickBox.Items.Clear();
+            MiddleMenuPickBox.Items.Add(new ComboBoxItem { Content = Loc.T("内置（固定项 / 历史记录 / 命令 / 设置）"), Tag = "" });
+            foreach (var menu in s.GestureMenus)
+                MiddleMenuPickBox.Items.Add(new ComboBoxItem { Content = menu.DisplayName, Tag = menu.Id });
+
+            string wanted = (s.MiddleClickMenuId ?? "").Trim();
+            int index = 0;
+            for (int i = 1; i < MiddleMenuPickBox.Items.Count; i++)
+            {
+                if (MiddleMenuPickBox.Items[i] is ComboBoxItem item &&
+                    string.Equals(item.Tag as string, wanted, StringComparison.OrdinalIgnoreCase))
+                { index = i; break; }
+            }
+            MiddleMenuPickBox.SelectedIndex = index;
+
+            var scope = MiddleMenuScope.ToScope(s.MiddleClickMenuScope);
+            MiddleMenuScopeDesktopRadio.IsChecked = scope == MiddleClickMenuScope.Desktop;
+            MiddleMenuScopeAllRadio.IsChecked = scope == MiddleClickMenuScope.DesktopAndExplorer;
+            UpdateMiddleMenuAvailability();
+        }
+        finally { _suppress = false; }
+    }
+
+    private void UpdateMiddleMenuAvailability()
+    {
+        bool on = MiddleMenuEnabledBox.IsChecked == true;
+        MiddleMenuPickBox.IsEnabled = on;
+        MiddleMenuScopeDesktopRadio.IsEnabled = on;
+        MiddleMenuScopeAllRadio.IsEnabled = on;
+    }
+
+    private void OnMiddleMenuToggleChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        _host.Settings.MiddleClickMenuEnabled = MiddleMenuEnabledBox.IsChecked == true;
+        UpdateMiddleMenuAvailability();
+        _host.SaveSettings();
+    }
+
+    private void OnMiddleMenuPicked(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        _host.Settings.MiddleClickMenuId =
+            (MiddleMenuPickBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+        _host.SaveSettings();
+    }
+
+    private void OnMiddleMenuScopeChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        _host.Settings.MiddleClickMenuScope = MiddleMenuScope.ToStorage(
+            MiddleMenuScopeDesktopRadio.IsChecked == true
+                ? MiddleClickMenuScope.Desktop
+                : MiddleClickMenuScope.DesktopAndExplorer);
+        _host.SaveSettings();
+    }
+
+    /// <summary>固定项行尾那个「中键」勾选框：改的是条目自己的 ShowInMiddleMenu。</summary>
+    private void OnEntryMiddleMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        if (sender is not CheckBox box || box.DataContext is not EntryVm vm) return;
+        vm.Entry.ShowInMiddleMenu = box.IsChecked == true;
+        _host.SaveSettings();
+    }
+
+
     private void OnAddClick(object sender, RoutedEventArgs e)
     {
         if (_host == null) return;
@@ -398,7 +490,7 @@ public partial class QbarSettingsView : UserControl
         _host.SaveSettings();
         _suppress = true;
         EntryList.ItemsSource = null;
-        var items = CurrentList().Select(x => new EntryVm(x, _tab != "run")).ToList();
+        var items = CurrentList().Select(x => new EntryVm(x, _tab != "run", _tab=="pinned")).ToList();
         EntryList.ItemsSource = items;
         EntryList.SelectedIndex = items.Count - 1;
         _suppress = false;
@@ -876,6 +968,9 @@ public partial class QbarSettingsView : UserControl
     private void ShowFilesTab(bool on)
     {
         FileSearchPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        /* 「中键菜单」是第三种页面：条目的列表/编辑区整块让给它。
+         * 统一在这里收掉，免得两个面板同时可见。 */
+        MiddleMenuPanel.Visibility = Visibility.Collapsed;
         if (on) SyncTocToScroll();
         Visibility entryUi = on ? Visibility.Collapsed : Visibility.Visible;
         EntriesFilter.Visibility = entryUi;
@@ -1848,6 +1943,26 @@ public partial class QbarSettingsView : UserControl
         Grid.SetColumn(badge, 2);
         grid.Children.Add(badge);
 
+        /* 「中键」勾选框：勾上的命令会出现在中键菜单的「命令」二级菜单里。
+         * 放在行尾（徽标右边），和固定项那一列的语义、位置保持一致。 */
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var middle = new CheckBox
+        {
+            Content = Loc.T("中键"),
+            IsChecked = command.ShowInMiddleMenu,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+            FontSize = 12,
+            ToolTip = Loc.T("勾上后这条命令会出现在中键菜单的「命令」二级菜单里。"),
+        };
+        middle.Click += (_, e) =>
+        {
+            e.Handled = true;   // 别再触发整行的"打开这条命令"
+            OnCommandMiddleMenuToggle(command, middle.IsChecked == true);
+        };
+        Grid.SetColumn(middle, 3);
+        grid.Children.Add(middle);
+
         var row = new Border
         {
             Height = 50,
@@ -1865,6 +1980,30 @@ public partial class QbarSettingsView : UserControl
             OnCommandRowClick(command, builtin);
         };
         return row;
+    }
+
+    /// <summary>
+    /// 命令行尾的「中键」勾选框。
+    ///
+    /// 内置命令在设置里没有实体条目（它们来自 QbarCommandStore.Builtins），
+    /// 所以第一次勾选时按它的 Id 落一份覆盖副本 —— Effective() 本来就是按 Id 合并的，
+    /// 副本一旦存在就以副本为准。副作用是这条命令会从「内置」组挪到「自己的命令」组，
+    /// 这正是本程序里"改过内置项"的既有表现，不另造例外。
+    /// </summary>
+    private void OnCommandMiddleMenuToggle(QbarCommand command, bool on)
+    {
+        if (_host == null) return;
+        var list = _host.Settings.Qbar.Commands;
+        QbarCommand? live = list.FirstOrDefault(c =>
+            string.Equals(c.Id, command.Id, StringComparison.OrdinalIgnoreCase));
+        if (live == null)
+        {
+            live = command.Clone();
+            list.Add(live);
+        }
+        live.ShowInMiddleMenu = on;
+        _host.SaveSettings();
+        RefreshCommandList(rebindEditor: false);
     }
 
     private void OnCommandRowClick(QbarCommand command, bool builtin)
@@ -2748,9 +2887,12 @@ public partial class QbarSettingsView : UserControl
 
     private sealed class EntryVm : System.ComponentModel.INotifyPropertyChanged
     {
-        public EntryVm(QEntry entry, bool loadIcon)
+        public EntryVm(QEntry entry, bool loadIcon, bool pinned = false)
         {
             Entry = entry;
+            /* 「显示在中键菜单」只对固定项有意义：别的标签里没有中键菜单这一说，
+             * 显示出来只会让人以为勾了会把搜索引擎塞进菜单。 */
+            MiddleMenuVisibility = pinned ? Visibility.Visible : Visibility.Collapsed;
 
             /* 网站/搜索引擎显示品牌图标；启动程序列表不预取图标——
              * 程序图标只在 Qbar 搜到 exe/lnk 时按需提取，
@@ -2804,6 +2946,12 @@ public partial class QbarSettingsView : UserControl
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
         public QEntry Entry { get; }
+
+        /// <summary>这一条会不会出现在中键菜单里（只有固定项能勾）。</summary>
+        public bool ShowInMiddleMenu => Entry.ShowInMiddleMenu;
+
+        /// <summary>勾选框的可见性：只有「固定项」标签里才显示。</summary>
+        public System.Windows.Visibility MiddleMenuVisibility { get; }
         public string Key => Entry.Key;
         public string Value => Entry.Value;
         public string Comment => Entry.DisplayName;   // 默认引擎那条的备注要跟着语言走

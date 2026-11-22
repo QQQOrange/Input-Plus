@@ -225,21 +225,25 @@ public sealed partial class GestureService
     {
         if (_middleMenu != null) return;
 
-        GestureMenuDef? def;
-        try { def = MiddleMenuPolicy.Build(settings); }
-        catch (Exception ex)
-        {
-            CoreLog.Swallow(ex, "中键菜单：拼菜单");
-            return;
-        }
-        if (def == null || def.Items.Count == 0) return;
-
         /* 建窗必须在界面线程：WPF 对象绑定在创建它的 Dispatcher 上。
          * 钩子线程 new 出来的窗口之后每次 Show 都会抛线程亲和性异常，
-         * 而那条异常会被 Ui() 吞掉 —— 表现就是"按了没反应"（覆盖层那边踩过一次，见 EnsureOverlay）。 */
+         * 而那条异常会被 Ui() 吞掉 —— 表现就是"按了没反应"（覆盖层那边踩过一次，见 EnsureOverlay）。
+         *
+         * 拼菜单也一起搬进来：里面的「历史记录」要读建议缓存、图标要查 shell，
+         * 这些都不该占着钩子线程做。 */
         Ui(() =>
         {
             if (_middleMenu != null) return;
+
+            GestureMenuDef? def;
+            try { def = MiddleMenuPolicy.Build(settings, MiddleMenuHistory(), MiddleMenuUrlTitles(settings)); }
+            catch (Exception ex)
+            {
+                CoreLog.Swallow(ex, "中键菜单：拼菜单");
+                return;
+            }
+            if (def == null || def.Items.Count == 0) return;
+
             try
             {
                 var win = new GestureMenuWindow(def, ActionCatalog.TitleOf);
@@ -268,6 +272,81 @@ public sealed partial class GestureService
             }
         });
     }
+
+    // ── 历史记录（= 搜索前建议）与网址标题 ─────────────────────────
+
+    /// <summary>
+    /// 二级菜单「历史记录」的内容：直接用 Qbar 空面板那一屏建议。
+    ///
+    /// 为什么不自己再采集一套：那一屏就是「用户最近真正用过的文件/文件夹」，
+    /// 已经做过缓存与去抖（首屏 0.3ms）；再写一套只会两边不一致。
+    /// 服务没就绪（启动早期 / 关掉了建议）时返回空，菜单里干脆不出现这一项。
+    /// </summary>
+    private IReadOnlyList<MiddleMenuSuggestion> MiddleMenuHistory()
+    {
+        var list = new List<MiddleMenuSuggestion>();
+        try
+        {
+            var screen = _host.Suggestions?.FirstScreen(8);
+            if (screen == null) return list;
+            foreach (var rec in screen)
+            {
+                if (rec == null || string.IsNullOrWhiteSpace(rec.Path)) continue;
+                list.Add(new MiddleMenuSuggestion(rec.Name, rec.Path, MiddleMenuPolicy.IsUrl(rec.Path)));
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：取历史记录"); }
+        return list;
+    }
+
+    /* 网址标题缓存：键是网址，值是抓回来的 <title>。
+     * 只放内存：这是"锦上添花"的显示数据，丢了下次再抓就行，不值得写盘。 */
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> UrlTitleCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /* 正在抓的网址：同一个网址只发一次请求，菜单连开十次也不会打十次网络。 */
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> UrlTitleInFlight = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 给固定项里的网址准备备注：有缓存就用缓存，没有就**顺手排一个后台抓取**，
+    /// 这次先不显示，下次打开菜单时标题就在了。
+    ///
+    /// 为什么不在拼菜单时同步抓：那是在 UI 线程上，一次网络往返就能让"点一下中键"
+    /// 变成"卡半秒才弹菜单"。用户要的是立刻出现。
+    /// </summary>
+    private IReadOnlyDictionary<string, string> MiddleMenuUrlTitles(AppSettings settings)
+    {
+        var titles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var pinned in (settings.Qbar?.Pinned ?? new List<QEntry>()))
+            {
+                if (pinned == null || !pinned.ShowInMiddleMenu) continue;
+                string url = (pinned.Value ?? "").Trim();
+                if (!MiddleMenuPolicy.IsUrl(url)) continue;
+
+                if (UrlTitleCache.TryGetValue(url, out string? cached) && !string.IsNullOrWhiteSpace(cached))
+                {
+                    titles[url] = cached;
+                    continue;
+                }
+
+                if (!UrlTitleInFlight.TryAdd(url, 1)) continue;
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        string? title = WebTitleFetcher.Fetch(url);
+                        if (!string.IsNullOrWhiteSpace(title)) UrlTitleCache[url] = title.Trim();
+                    }
+                    catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：抓网页标题"); }
+                    finally { UrlTitleInFlight.TryRemove(url, out _); }
+                });
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：整理网址标题"); }
+        return titles;
+    }
+
 
     private void OnMiddleMenuClosed(GestureMenuWindow win)
     {

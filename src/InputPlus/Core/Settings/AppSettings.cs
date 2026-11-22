@@ -373,6 +373,15 @@ public sealed class QEntry
     /// <summary>Run 条目：启动参数。</summary>
     public string Arguments { get; set; } = "";
 
+    /// <summary>
+    /// 这一条是否出现在中键菜单里（只有「固定项」用得上）。
+    ///
+    /// 为什么是**每个条目自己**的开关而不是整张表一个开关：固定项里通常混着
+    /// "每天必点的几个目录"和"留作备查的网址"，用户要的正是这种粒度。
+    /// 出厂 false —— 老配置升级上来中键菜单不会被塞满一堆没挑过的东西。
+    /// </summary>
+    public bool ShowInMiddleMenu { get; set; }
+
     /// <summary>标签上显示的名字：优先用备注，其次用关键字。</summary>
     /// <summary>
     /// 界面上显示的备注。
@@ -393,6 +402,7 @@ public sealed class QEntry
         Key = Key, Value = Value, Comment = Comment, IconPath = IconPath,
         EngineIcon = EngineIcon,
         RunAsAdmin = RunAsAdmin, Arguments = Arguments,
+        ShowInMiddleMenu = ShowInMiddleMenu,
     };
 }
 
