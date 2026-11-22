@@ -171,7 +171,7 @@ internal static class MiddleMenuPolicy
              * 文件/文件夹显示它自己的路径，长路径靠菜单里的省略号截。 */
             string note = isUrl
                 ? (urlTitles != null && urlTitles.TryGetValue(target, out string? t) ? t : "")
-                : target;
+                : "";   // 文件/文件夹不写第二行：菜单里只留备注（用户明确要求）
 
             AddTop(new GestureMenuItem
             {
