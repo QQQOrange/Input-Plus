@@ -499,7 +499,7 @@ public sealed partial class GestureService : IDisposable
         /* 任务栏/托盘是 Explorer 自己吃右键的地方：我们一旦把 down 吞掉，
          * 再注入一次右键，Explorer 往往不认（尤其是托盘图标的弹出菜单），
          * 表现为“任务栏闪一下、菜单没出来”。这里干脆不接管任务栏上的右键。 */
-        if (down && !injected && IsShellTaskbarAtCursor()) return false;
+        if (down && !injected && IsShellTaskbarAtCursor()) { AttachDiag("  -> 任务栏"); return false; }
 
         lock (_gate)
         {
@@ -602,7 +602,7 @@ public sealed partial class GestureService : IDisposable
             var (app, targetWindow) = ResolveTarget(opts);
             /* 用户在「作用目标」里给某个程序点了“禁用手势”：
              * 这个程序里连全局手势也不触发，右键/侧键原样交给系统。 */
-            if (IsTargetDisabled(app)) return false;
+            if (IsTargetDisabled(app)) { AttachDiag("  -> IsTargetDisabled " + app); return false; }
 
             var (px, py) = CursorPos();
             int cornerAt = CornerAt(px, py, opts.CornerSize);
@@ -613,7 +613,7 @@ public sealed partial class GestureService : IDisposable
              * 特殊目标（任务栏→桌面）→ 应用程序 → 所属分组 → 全局。 */
             var specials = SpecialTargetsAt();
             var triggers = new GestureTriggerMap(opts);
-            if (triggers.IsBlocked(app, specials.Desktop, specials.Taskbar)) return false;
+            if (triggers.IsBlocked(app, specials.Desktop, specials.Taskbar)) { AttachDiag("  -> triggers.IsBlocked"); return false; }
             string triggerKey = TriggerKeyOf(vk, cornerAt);
             if (triggerKey.Length > 0 &&
                 !triggers.Allows(app, specials.Desktop, specials.Taskbar, triggerKey))

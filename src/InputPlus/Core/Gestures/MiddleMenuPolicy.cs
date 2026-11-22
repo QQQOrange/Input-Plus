@@ -198,6 +198,7 @@ internal static class MiddleMenuPolicy
             AddTop(new GestureMenuItem
             {
                 Title = Loc.T("历史记录"),
+                Glyph = "\uE81C",
                 Action = "",
                 Children = historyChildren,
             });
@@ -224,6 +225,7 @@ internal static class MiddleMenuPolicy
             AddTop(new GestureMenuItem
             {
                 Title = Loc.T("命令"),
+                Glyph = "\uE756",
                 Action = "",
                 Children = commandChildren,
             });

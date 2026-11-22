@@ -79,7 +79,7 @@
     </Window.Resources>
 
     <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求），288 是"标题 + 备注 + 箭头"能放下又不显宽的值。 -->
-    <Border Margin="14" Width="288"
+    <Border Margin="14" Width="192"
             Padding="6" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"

@@ -429,7 +429,8 @@ public sealed class GestureMenuEntry
         Glyph = (item.Glyph ?? "").Trim();
         Note = (item.Note ?? "").Trim();
         /* 只有 1..9 能直接按键选中，第 10 条以后不给序号（给了也按不到） */
-        Index = index < 9 ? (index + 1).ToString() : "";
+        /* 序号不再显示（用户要求）：1..9 的快捷选中仍然有效，只是不在行首写数字。 */
+        Index = "";
         /* 图标按"有则显示"排优先级：真实图标 > 字形 > 序号。
          * 三者互斥，模板里各绑一个 Visibility，取反在现场算好，XAML 里不用写转换器。 */
         Icon = ResolveIcon(item.IconPath ?? "", item.Action);

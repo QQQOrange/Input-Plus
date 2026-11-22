@@ -120,7 +120,11 @@ internal static class BlankHit
         IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
         string rootCls = root == IntPtr.Zero ? "" : (WindowService.ClassNameOf(root) ?? "");
 
-        if (IsDesktopClass(cls, rootCls))
+        /* 桌面的判定用**句柄**兜底一次：GetShellWindow() 返回的就是桌面宿主窗口
+         * （Progman）。动态壁纸、多显示器、Win11 的 WorkerW 换宿主时类名会变，
+         * 但"root 是 shell 窗口"这一条始终成立。 */
+        bool rootIsShell = root != IntPtr.Zero && root == NativeMethods.GetShellWindow();
+        if (IsDesktopClass(cls, rootCls) || rootIsShell)
         {
             /* 指针在桌面上：可能是图标列表，也可能只是桌面背景（壁纸/多显示器拼缝）。
              * 列表控件问得到就精确问，问不到就当空白 —— 桌面上没有别的东西会误伤。 */
@@ -150,7 +154,7 @@ internal static class BlankHit
             return new BlankProbe(uia, HitKind.ExplorerItems, hwnd, uia == BlankVerdict.Blank ? "UIA：空白" : "UIA：命中元素/超时");
         }
 
-        return BlankProbe.NotBlank($"不是桌面也不是资源管理器列表（类名 {cls}）");
+        return BlankProbe.NotBlank($"不是桌面也不是资源管理器列表（类名 {cls} / root={rootCls}）");
     }
 
     /// <summary>

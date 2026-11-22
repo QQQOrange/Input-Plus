@@ -184,7 +184,7 @@ public sealed partial class GestureService
             Blank: probe.IsBlank,
             HasMiddleGesture: hasMiddleGesture));
 
-        AttachDiag($"arm-decide: kind={probe.Kind} blank={probe.IsBlank} scope={inScope} fgFull={FullscreenBlocksMiddleMenu()} action={action}");
+        AttachDiag($"arm-decide: kind={probe.Kind} blank={probe.IsBlank} scope={inScope} fgFull={FullscreenBlocksMiddleMenu()} action={action} why={probe.Why}");
         bool take = action is MiddleMenuAction.StartGesture or MiddleMenuAction.SwallowTap;
         if (!take) return false;
 
@@ -516,16 +516,19 @@ public sealed partial class GestureService
         });
     }
     // ── 临时诊断（INPUTPLUS_ATTACH_DIAG=1 时才写）：排查"鼠标唤不出"断在哪一步 ──
-    private static readonly bool AttachDiagOn = Environment.GetEnvironmentVariable("INPUTPLUS_ATTACH_DIAG") == "1";
+
 
     internal static void AttachDiag(string message)
     {
-        if (!AttachDiagOn) return;
+        /* 始终写：用户复现一次，我读这个文件就能看到真实类名与判定结果。
+         * 只在"附加菜单"这条路径上写（中键/侧键/键盘唤出），一次点击最多三行，
+         * 并限制 256KB 自截断，不会无限长大。 */
         try
         {
-            System.IO.File.AppendAllText(
-                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-attach-diag.log"),
-                DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine);
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-attach-diag.log");
+            var info = new System.IO.FileInfo(path);
+            if (info.Exists && info.Length > 256 * 1024) System.IO.File.Delete(path);
+            System.IO.File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine);
         }
         catch { }
     }
