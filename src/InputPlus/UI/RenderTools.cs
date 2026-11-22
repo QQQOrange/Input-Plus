@@ -130,6 +130,36 @@ public static class RenderTools
                 catch (Exception ex) { CoreLog.Warn("渲染 Qbar 条目表四个标签失败：" + ex.Message); }
             }
 
+            /* 文件对话框浮层：只有真的弹出「打开 / 保存」对话框时才看得见，平时连截图都没有。
+               宽度是固定的（对话框 3/5），这里手工塞几行长短差别很大的数据离屏拍一张 ——
+               专看「图标 | 文件名 | 地址 | 快捷键」四列的对齐和地址的中间省略。 */
+            if (page == "qbar")
+            {
+                try
+                {
+                    var bar = new FileDialogBarWindow
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -32000,
+                        Top = -32000,
+                        Width = 720,
+                        Height = 380,
+                    };
+                    bar.SetRowsForRender();
+                    bar.Show();
+                    Pump(500);
+                    Save(bar, Path.Combine(outDir, "filedialog-bar.png"));
+                    /* 脚注面包屑只在鼠标悬停时出现，单独拍一张才看得到 */
+                    bar.ShowBreadcrumbForRender(3);
+                    Pump(160);
+                    Save(bar, Path.Combine(outDir, "filedialog-bar-hover.png"));
+                    bar.Close();
+                    Pump(120);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染文件对话框浮层失败：" + ex.Message); }
+            }
+
             /* 附加菜单（中键唤出）：宽度、行距、圆角都是照着眼睛调出来的，
                不留下离屏截图，下次改坏了没人看得见。 */
             if (page == "qbar")

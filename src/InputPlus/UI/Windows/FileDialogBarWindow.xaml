@@ -46,10 +46,16 @@
         </Style>
 
         <DataTemplate DataType="{x:Type local:BarRow}">
+            <!-- 一行 = 图标 | 文件名 | 地址 | 快捷键。
+                 文件名从图标右边起（左对齐），地址和快捷键**靠右**对齐；
+                 地址用 MiddleTrimTextBlock 做中间省略 —— 路径的有用信息在两头
+                 （盘符 / 最后两级目录），末尾省略正好把最有用那截削掉。
+                 1 : 1.7 的列宽比是照 Listary 那张脸量的：短名字不抢地，长地址也留得住尾巴。 -->
             <Grid Height="34">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" MinWidth="60" />
+                    <ColumnDefinition Width="1.7*" MinWidth="80" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Grid Grid.Column="0" Width="20" Height="20" Margin="6,0,10,0" VerticalAlignment="Center">
@@ -64,35 +70,30 @@
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
                 </Grid>
-                <Grid Grid.Column="1" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               Text="{Binding Title}"
-                               FontSize="14"
-                               TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource Brush.OverlayText}" />
-                    <TextBlock Grid.Column="1"
-                               Text="{Binding Subtitle}"
-                               FontSize="12"
-                               Margin="10,0,8,0"
-                               TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
-                </Grid>
-                <Border Grid.Column="2"
-                        CornerRadius="4"
-                        Padding="6,1"
-                        Margin="0,0,6,0"
-                        VerticalAlignment="Center"
-                        Background="{DynamicResource Brush.OverlayAccentSoft}"
-                        Visibility="{Binding BadgeVisibility}">
-                    <TextBlock Text="{Binding Badge}"
-                               FontSize="11"
-                               Foreground="{DynamicResource Brush.OverlayAccentText}" />
-                </Border>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Title}"
+                           FontSize="14"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource Brush.OverlayAccentText}" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding SubtitleDisplay}"
+                           ToolTip="{Binding Subtitle}"
+                           FontSize="12"
+                           Margin="12,0,10,0"
+                           VerticalAlignment="Center"
+                           TextAlignment="Right"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                <!-- 快捷键：最右边一列淡字，不套胶囊底 —— 一屏八个 "Ctrl+N" 全带底色
+                     会把整列压成一条色带，反而喧宾夺主。 -->
+                <TextBlock Grid.Column="3"
+                           Text="{Binding Badge}"
+                           FontSize="11"
+                           Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Visibility="{Binding BadgeVisibility}"
+                           Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
             </Grid>
         </DataTemplate>
         <DataTemplate DataType="{x:Type fd:QuickSwitchRow}">
@@ -241,7 +242,9 @@
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              VirtualizingPanel.IsVirtualizing="True"
                              VirtualizingPanel.VirtualizationMode="Recycling"
-                             VirtualizingPanel.ScrollUnit="Pixel" />
+                             VirtualizingPanel.ScrollUnit="Pixel"
+                             MouseMove="OnResultHover"
+                             MouseLeave="OnResultLeave" />
                 </Border>
 
                 <Border x:Name="OverlayHost"
@@ -298,10 +301,19 @@
                         BorderThickness="0,1,0,0"
                         BorderBrush="{DynamicResource Brush.OverlayBorder}"
                         Padding="14,4">
-                    <TextBlock x:Name="FooterText"
-                               FontSize="11"
-                               Text="↑↓ 选择 · Enter 填入对话框 · Alt+Enter 定位文件 · Tab 切换范围 · Esc 关闭"
-                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                    <Grid>
+                        <!-- 默认这一行是快捷键提示；鼠标停到某一条上就换成那一条的地址面包屑，
+                             最后一级（真正要看的那个目录 / 文件名）加粗并用主文字色。 -->
+                        <TextBlock x:Name="FooterText"
+                                   FontSize="11"
+                                   Text="↑↓ 选择 · Enter 填入对话框 · Alt+Enter 定位文件 · Tab 切换范围 · Esc 关闭"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                        <TextBlock x:Name="FooterPath"
+                                   FontSize="11"
+                                   Visibility="Collapsed"
+                                   TextTrimming="CharacterEllipsis" />
+                    </Grid>
                 </Border>
             </Grid>
         </Border>

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -21,6 +22,28 @@ public sealed class BarRow : System.ComponentModel.INotifyPropertyChanged
     public string Glyph { get; init; } = "\uE7C3";
     public string Title { get; init; } = "";
     public string Subtitle { get; init; } = "";
+
+    /// <summary>
+    /// 地址列显示的文本：太长时**保留头尾、中间省略**。
+    ///
+    /// 为什么不用 <c>TextTrimming="CharacterEllipsis"</c>：末尾省略正好把"最后两级目录"削掉，
+    /// 而那恰恰是路径里最有用的部分。地址列的宽度由 1 : 1.7 的星号列决定，
+    /// 12px 字号下大约放得下 40 个西文字符 —— 这里按 12 + 24 的字数预算切，
+    /// 剩下的宽度差交给 CharacterEllipsis 兜底（浮层被挤到很窄时）。
+    /// 完整路径挂在 ToolTip 上，脚注里也有面包屑。
+    /// </summary>
+    public string SubtitleDisplay => MiddleTrim(Subtitle, AddressHeadChars, AddressTailChars);
+
+    private const int AddressHeadChars = 12;
+    private const int AddressTailChars = 24;
+
+    /// <summary>保留头 head 个字符 + 尾 tail 个字符，中间换成省略号。</summary>
+    internal static string MiddleTrim(string text, int head, int tail)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        if (text.Length <= head + tail + 2) return text;
+        return text[..head] + "…" + text[^tail..];
+    }
     public string Badge { get; init; } = "";
     public Visibility BadgeVisibility => string.IsNullOrEmpty(Badge) ? Visibility.Collapsed : Visibility.Visible;
 
@@ -456,13 +479,20 @@ public partial class FileDialogBarWindow : Window
             if (Math.Abs(Width - widthDip) > 0.5) Width = widthDip;
 
             /* 内容有最小宽度（目录 chip + 输入框 + ★/🕘/≡）。对话框小的时候
-             * 3/5 装不下，右边按钮会被裁到窗口外 —— 量一次最小宽度再撑开。 */
+             * 3/5 装不下，右边按钮会被裁到窗口外 —— 量一次最小宽度再撑开。
+             *
+             * ⚠ 只量**输入行**（InputGrid），绝不能再量 OuterGrid：
+             *   结果列表一出来，行里那些长路径会让 OuterGrid.DesiredSize 一路涨，
+             *   于是每搜一次这条浮层就左右撑开一次 —— 用户看到的就是"开始搜索之后宽度剧烈增加"。
+             *   地址列的中间省略与列宽分配已经保证任何长度的路径都塞得进去，
+             *   宽度只该由对话框决定。 */
             try
             {
-                if (OuterGrid != null)
+                if (InputGrid != null)
                 {
-                    OuterGrid.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                    double needDip = OuterGrid.DesiredSize.Width;
+                    InputGrid.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    /* + 22 InputGrid 左右外边距 + 2 面板描边 + 16 阴影留白 */
+                    double needDip = InputGrid.DesiredSize.Width + 40;
                     double capDip = work.Width / scale - 16;
                     if (needDip > Width + 0.5 && capDip > Width)
                         Width = Math.Min(needDip, capDip);
@@ -894,6 +924,171 @@ public partial class FileDialogBarWindow : Window
                 image => Dispatcher.BeginInvoke(new Action(() => row.SetIcon(image))));
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "加载文件对话框结果图标"); }
+    }
+
+    /// <summary>
+    /// 渲染 / 自检用：塞几行长度差别很大的示例，专门看
+    /// "图标 | 文件名 | 地址 | 快捷键" 四列的对齐和地址的中间省略。
+    /// </summary>
+    internal void SetRowsForRender()
+    {
+        string veryLong = @"C:\Users\64381\AppData\Local\Packages\Microsoft.Windows.Explorer_8wekyb3d8bbwe"
+                          + @"\LocalState\BreadcrumbBar\缓存目录\第二级\第三级\第四级\⑤号文件夹";
+        SetRows(new[]
+        {
+            new DialogSelection(@"D:\software\图吧工具箱202601\data\文件夹说明.txt", false, "文件夹说明.txt", "Ctrl+1"),
+            new DialogSelection(@"C:\Users\64381\AppData\Local\Temp\inputplus\缓存\文件夹说明.txt", false, "文件夹说明.txt", "Ctrl+2"),
+            new DialogSelection(@"\\nas-01\共享\项目\2026\第三季度\投标资料\文件1741661830504(1)(1).xlsx", false, "文件1741661830504(1)(1).xlsx", "Ctrl+4"),
+            new DialogSelection(veryLong + @"\超长路径用来验证中间省略.txt", false, "超长路径用来验证中间省略.txt", "Ctrl+3"),
+            new DialogSelection(@"C:\Users\64381\OneDrive\桌面\简历文件", true, "简历文件", "Ctrl+5"),
+            new DialogSelection(@"D:\something\WPS Cloud\WPSDrive\3629...\应用\微信文件", true, "微信文件", "Ctrl+6"),
+        });
+    }
+
+    /// <summary>渲染用：手动摆出"鼠标停在第 N 行"的脚注，截图才看得到面包屑。</summary>
+    internal void ShowBreadcrumbForRender(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= _rows.Count) return;
+        ShowPathBreadcrumb(_rows[rowIndex].Item.Path);
+    }
+
+    /* ---------------- 脚注：鼠标停在哪一条，就显示那一条的地址面包屑 ----------------
+       列表里地址那一列是中间省略的（空间有限），脚注这一行给的是**完整路径**，
+       最后一级（真正要看的目录 / 文件名）加粗 + 主文字色：一眼能看出"我要的东西在哪一层"。
+       不悬停时恢复成快捷键提示，不占额外空间，也不改浮层高度（同一行里换内容）。 */
+
+    private void OnResultHover(object sender, MouseEventArgs e)
+    {
+        BarRow? row = RowUnder(e.OriginalSource as DependencyObject);
+        if (row == null) { RestoreFooterHint(); return; }
+        ShowPathBreadcrumb(row.Item.Path);
+    }
+
+    private void OnResultLeave(object sender, MouseEventArgs e) => RestoreFooterHint();
+
+    private BarRow? RowUnder(DependencyObject? source)
+    {
+        if (source == null || ResultList == null) return null;
+        try
+        {
+            var container = ItemsControl.ContainerFromElement(ResultList, source) as ListBoxItem;
+            return container?.DataContext as BarRow;
+        }
+        catch { return null; }
+    }
+
+    private void RestoreFooterHint()
+    {
+        if (FooterText == null || FooterPath == null) return;
+        FooterPath.Inlines.Clear();
+        FooterPath.Visibility = Visibility.Collapsed;
+        FooterText.Visibility = Visibility.Visible;
+    }
+
+    private void ShowPathBreadcrumb(string? path)
+    {
+        if (FooterPath == null || FooterText == null) return;
+        var segments = SplitPathSegments(path ?? "");
+        if (segments.Count == 0) { RestoreFooterHint(); return; }
+
+        /* 太长的路径只留"根 + 最后几级"：面包屑的重点永远在最后一级，
+           整串硬塞进去会被 TextTrimming 从尾部裁掉 —— 恰好把加粗的那一段裁没。 */
+        bool dropped = false;
+        while (segments.Count > 4 && BreadcrumbChars(segments) > 78)
+        {
+            segments.RemoveAt(1);      // 只删中间层，根（盘符 / UNC）留着
+            dropped = true;
+        }
+
+        FooterPath.Inlines.Clear();
+
+        var icon = new Run("\uE8B7")
+        {
+            FontFamily = new System.Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 11,
+        };
+        icon.SetResourceReference(TextElement.ForegroundProperty, "Brush.OverlayTextTertiary");
+        FooterPath.Inlines.Add(icon);
+
+        var gap = new Run("  ");
+        gap.SetResourceReference(TextElement.ForegroundProperty, "Brush.OverlayTextTertiary");
+        FooterPath.Inlines.Add(gap);
+
+        for (int i = 0; i < segments.Count; i++)
+        {
+            bool last = i == segments.Count - 1;
+            if (i > 0 || (dropped && i == 1))
+            {
+                var sep = new Run("  >  ");
+                sep.SetResourceReference(TextElement.ForegroundProperty, "Brush.OverlayTextTertiary");
+                FooterPath.Inlines.Add(sep);
+            }
+            if (dropped && i == 1)
+            {
+                var skipped = new Run("…  >  ");
+                skipped.SetResourceReference(TextElement.ForegroundProperty, "Brush.OverlayTextTertiary");
+                FooterPath.Inlines.Add(skipped);
+            }
+
+            var run = new Run(segments[i]) { FontWeight = last ? FontWeights.SemiBold : FontWeights.Normal };
+            run.SetResourceReference(TextElement.ForegroundProperty,
+                last ? "Brush.OverlayText" : "Brush.OverlayTextTertiary");
+            FooterPath.Inlines.Add(run);
+        }
+
+        FooterText.Visibility = Visibility.Collapsed;
+        FooterPath.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>面包屑整串大约占多少字符（分隔符按 3 个算）。</summary>
+    private static int BreadcrumbChars(List<string> segments)
+    {
+        int total = Math.Max(0, segments.Count - 1) * 3;
+        foreach (string s in segments) total += s.Length;
+        return total;
+    }
+
+    /// <summary>
+    /// 把路径拆成面包屑的层级：`D:\a\b` → D: / a / b；
+    /// UNC 的 `\\host\share` 按"根 + 各级"拆，盘符那一级单独留下（它本身就是一层）。
+    /// </summary>
+    private static List<string> SplitPathSegments(string path)
+    {
+        var list = new List<string>();
+        string full = (path ?? "").Trim();
+        if (full.Length == 0) return list;
+
+        try
+        {
+            string trimmed = full.TrimEnd('\\', '/');
+            string root = Path.GetPathRoot(trimmed) ?? "";
+            if (root.Length > 0)
+            {
+                list.Add(root.TrimEnd('\\', '/'));       // "D:" / "\\\\host\\share"
+                string rest = trimmed.Length > root.Length ? trimmed[root.Length..] : "";
+                list.AddRange(rest.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries));
+            }
+            else
+            {
+                list.AddRange(full.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries));
+            }
+        }
+        catch
+        {
+            list.Clear();
+            list.Add(full);
+        }
+
+        /* UNC 根会拆出 \\host 和 share 两段，粘回去当一层，读起来才像资源管理器。 */
+        if (list.Count >= 2 && list[0].StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            string host = list[0];
+            list.RemoveAt(0);
+            if (list.Count > 0) list[0] = host + "\\" + list[0];
+            else list.Add(host);
+        }
+
+        return list;
     }
 
     private static BarRow ToRow(DialogSelection item)

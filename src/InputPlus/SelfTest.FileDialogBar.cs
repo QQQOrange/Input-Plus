@@ -110,6 +110,21 @@ public static partial class SelfTest
             Check("跟随：拖动中没有再算几何", bar.GeometryCount == 0, $"几何重算 {bar.GeometryCount} 次");
             Check("跟随：_inApply 期间没有排跟随", bar.FollowScheduledInApply == 0, $"{bar.FollowScheduledInApply} 次");
 
+            /* 「搜一次撑一次」的回归：结果列表上来之后，浮层宽度一个像素都不该变。
+             * 旧实现拿 OuterGrid.DesiredSize 量"内容最小宽度"，行里的长路径会把
+             * DesiredSize 一路顶大 —— 每搜一次浮层就左右各撑开一截。 */
+            double widthBeforeRows = bar.Width;
+            string longPath = @"D:\software\图吧工具箱202601\data\" + new string('长', 60) + @"\文件夹说明.txt";
+            bar.SetRows(new[]
+            {
+                new InputPlus.Core.FileDialog.DialogSelection(longPath, false, "文件夹说明.txt", "Ctrl+1"),
+                new InputPlus.Core.FileDialog.DialogSelection(@"C:\Users\64381\OneDrive\桌面\简历文件", true, "简历文件", "Ctrl+5"),
+            });
+            bar.UpdateLayout();
+            Check("跟随：结果再长也不改浮层宽度",
+                Math.Abs(bar.Width - widthBeforeRows) <= 0.5,
+                $"{widthBeforeRows:0.#} → {bar.Width:0.#} DIP");
+
             /* 把数字写进日志（PASS 行不带明细），交付报告直接引用这几行。 */
             double p50 = bar.LatencyP50Us, p99 = bar.LatencyP99Us;
             InputPlus.Core.CoreLog.Info($"[跟随度量] 新路径：{moves} 次移动 p50={p50:0}µs p99={p99:0}µs "
