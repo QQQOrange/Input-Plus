@@ -10,6 +10,11 @@ x86/
 publish/
 dist/
 *.dll
+# 例外：内置 Everything 的两颗 SDK DLL 是**构建必需**的内嵌资源（见 csproj 的 EmbeddedResource）。
+# 被上面的 *.dll 一起忽略时，本地因为有文件照样能编，全新检出的 CI 却会
+# CSC error CS1566 找不到 Everything64.dll —— v1.4 的 build/release 就是这么红的。
+!src/InputPlus/Assets/Everything/Everything64.dll
+!src/InputPlus/Assets/Everything/Everything32.dll
 *.pdb
 *.mdb
 *.opendb
