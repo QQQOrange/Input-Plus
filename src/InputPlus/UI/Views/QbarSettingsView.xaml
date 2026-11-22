@@ -164,9 +164,18 @@
                                            RenderOptions.BitmapScalingMode="HighQuality" />
                                 </Grid>
 
-                                <TextBlock Grid.Column="1" Text="{Binding Key}" FontWeight="SemiBold"
-                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource Brush.Accent}" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Key}" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource Brush.Accent}" />
+                                    <!-- 「默认」徽标：默认搜索引擎那一行（必应）自带，取代原来单独的一行「默认搜索」 -->
+                                    <Border Background="{DynamicResource Brush.AccentSoft}" CornerRadius="4"
+                                            Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding DefaultBadgeVisibility}">
+                                        <TextBlock Text="{loc:T '默认'}" FontSize="10"
+                                                   Foreground="{DynamicResource Brush.Accent}" />
+                                    </Border>
+                                </StackPanel>
                                 <TextBlock Grid.Column="2" Text="{Binding Value}" VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis" Margin="8,0,8,0"
                                            Foreground="{DynamicResource Brush.TextSecondary}" />

@@ -223,8 +223,22 @@ public partial class QbarSettingsView : UserControl
         // 匹配规则抽在 QEntry.Matches 里，自检能直接验。
         string filter = FilterBox?.Text?.Trim() ?? "";
         var all = CurrentList().ToList();
+        /* 默认搜索引擎原来是列表里单独的一行（备注"默认搜索"）。现在那行不再出现，
+         * 改成正牌必应行上的「默认」徽标 —— 同一个引擎没必要占两行。
+         * 这个 Key 必须在过滤掉之前取出来。 */
+        string defaultEngineKey = "";
+        if (_tab == "search")
+        {
+            defaultEngineKey = (all.FirstOrDefault(x =>
+                string.Equals((x.Comment ?? "").Trim(), "默认搜索", StringComparison.Ordinal))?.Key ?? "").Trim();
+            if (defaultEngineKey.Length > 0)
+                all = all.Where(x => !string.Equals((x.Comment ?? "").Trim(), "默认搜索", StringComparison.Ordinal)).ToList();
+        }
         int total = all.Count;
-        var items = QEntry.Filter(all, filter).Select(e => new EntryVm(e, _tab != "run", _tab == "pinned")).ToList();
+        var items = QEntry.Filter(all, filter)
+            .Select(e => new EntryVm(e, _tab != "run", _tab == "pinned",
+                defaultEngineKey.Length > 0 && string.Equals(e.Key, defaultEngineKey, StringComparison.Ordinal)))
+            .ToList();
         EntryList.ItemsSource = items;
         if (items.Count > 0) EntryList.SelectedIndex = 0;
         _suppress = false;
@@ -2989,12 +3003,13 @@ public partial class QbarSettingsView : UserControl
 
     private sealed class EntryVm : System.ComponentModel.INotifyPropertyChanged
     {
-        public EntryVm(QEntry entry, bool loadIcon, bool pinned = false)
+        public EntryVm(QEntry entry, bool loadIcon, bool pinned = false, bool isDefaultEngine = false)
         {
             Entry = entry;
-            /* 「显示在中键菜单」只对固定项有意义：别的标签里没有中键菜单这一说，
+            /* 「显示在附加菜单」只对固定项有意义：别的标签里没有附加菜单这一说，
              * 显示出来只会让人以为勾了会把搜索引擎塞进菜单。 */
             MiddleMenuVisibility = pinned ? Visibility.Visible : Visibility.Collapsed;
+            DefaultBadgeVisibility = isDefaultEngine ? Visibility.Visible : Visibility.Collapsed;
 
             /* 网站/搜索引擎显示品牌图标；启动程序列表不预取图标——
              * 程序图标只在 Qbar 搜到 exe/lnk 时按需提取，
@@ -3054,6 +3069,9 @@ public partial class QbarSettingsView : UserControl
 
         /// <summary>勾选框的可见性：只有「固定项」标签里才显示。</summary>
         public System.Windows.Visibility MiddleMenuVisibility { get; }
+
+        /// <summary>「默认」徽标的可见性：默认搜索引擎那一行（通常是必应）才有。</summary>
+        public System.Windows.Visibility DefaultBadgeVisibility { get; }
         public string Key => Entry.Key;
         public string Value => Entry.Value;
         public string Comment => Entry.DisplayName;   // 默认引擎那条的备注要跟着语言走
