@@ -69,13 +69,17 @@
         </DataTemplate>
 
         <!-- 行容器：沿用主题的 RowItem（悬停 / 选中 / 圆角），只额外挂"悬停展开二级菜单" -->
+        <!-- 行高收窄：主题的 RowItem 是给设置页列表用的，菜单要更紧凑（上下 3px 内边距、最小 28）。 -->
         <Style x:Key="MenuRow" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
+            <Setter Property="Padding" Value="10,3" />
+            <Setter Property="MinHeight" Value="28" />
             <EventSetter Event="MouseEnter" Handler="OnRowMouseEnter" />
             <EventSetter Event="MouseLeave" Handler="OnRowMouseLeave" />
         </Style>
     </Window.Resources>
 
-    <Border Margin="14" MinWidth="176" MaxWidth="288"
+    <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求），288 是"标题 + 备注 + 箭头"能放下又不显宽的值。 -->
+    <Border Margin="14" Width="288"
             Padding="6" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"

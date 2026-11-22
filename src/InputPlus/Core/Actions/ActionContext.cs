@@ -65,6 +65,12 @@ public sealed partial class ActionContext
         => QbarDictionaryRequested?.Invoke(word);
     public void RequestMathBoard() => MathBoardRequested?.Invoke();
     public void RequestOpenSettings() => SettingsRequested?.Invoke();
+
+    /// <summary>请求弹出附加菜单（键位绑定「附加菜单」动作时走这里）。</summary>
+    public void RequestAttachMenu() => AttachMenuRequested?.Invoke();
+
+    /// <summary>附加菜单请求的订阅点，由 AppHost 接。</summary>
+    public event Action? AttachMenuRequested;
     public void RequestHelp() => HelpRequested?.Invoke();
     public void RequestOpenMacros() => MacrosRequested?.Invoke();
     public void RequestOpenLuaScripts() => LuaScriptsRequested?.Invoke();

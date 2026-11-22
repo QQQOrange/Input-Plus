@@ -120,6 +120,7 @@ public sealed partial class GestureService
     internal bool MiddleMenuSwallowWhileOpen(int vk, bool down, bool injected)
     {
         if (injected || !IsMenuButton(vk)) return false;
+        AttachDiag($"menu-open-swallow: down={down}");
         if (_middleMenu == null) return false;
 
         if (down)
@@ -148,6 +149,7 @@ public sealed partial class GestureService
     /// </summary>
     private bool MiddleMenuArm(int vk, AppSettings settings, bool hasMiddleGesture)
     {
+        AttachDiag($"arm: vk=0x{vk:X2} hasGesture={hasMiddleGesture} enabled={settings?.MiddleClickMenuEnabled} buttons=[{string.Join(",", settings?.MiddleMenuMouseButtons ?? new List<string>())}]");
         if (!IsMenuButton(vk)) return false;
 
         /* 先无条件清掉上一笔留下的记录：手势画成功后 Finish 不会再读它，
@@ -182,6 +184,7 @@ public sealed partial class GestureService
             Blank: probe.IsBlank,
             HasMiddleGesture: hasMiddleGesture));
 
+        AttachDiag($"arm-decide: kind={probe.Kind} blank={probe.IsBlank} scope={inScope} fgFull={FullscreenBlocksMiddleMenu()} action={action}");
         bool take = action is MiddleMenuAction.StartGesture or MiddleMenuAction.SwallowTap;
         if (!take) return false;
 
@@ -399,6 +402,9 @@ public sealed partial class GestureService
         return IntPtr.Zero;
     }
 
+    /// <summary>动作「附加菜单」的入口：和键盘唤出同一条路径（全屏/例外仍然拦）。</summary>
+    internal void OpenAttachMenuFromAction() => MiddleMenuOpenFromKeyboard();
+
     /// <summary>
     /// 键盘唤出：**所有场景**都能弹（不受"只在桌面"限制），但全屏程序与例外程序除外。
     /// 位置仍然是鼠标处 —— 由 <c>PlaceAtCursor</c> 统一决定。
@@ -508,5 +514,19 @@ public sealed partial class GestureService
             try { win.Close(); }
             catch (Exception ex) { CoreLog.Swallow(ex, "关闭中键菜单"); }
         });
+    }
+    // ── 临时诊断（INPUTPLUS_ATTACH_DIAG=1 时才写）：排查"鼠标唤不出"断在哪一步 ──
+    private static readonly bool AttachDiagOn = Environment.GetEnvironmentVariable("INPUTPLUS_ATTACH_DIAG") == "1";
+
+    internal static void AttachDiag(string message)
+    {
+        if (!AttachDiagOn) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-attach-diag.log"),
+                DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine);
+        }
+        catch { }
     }
 }

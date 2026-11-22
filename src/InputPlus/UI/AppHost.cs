@@ -341,6 +341,8 @@ public sealed partial class AppHost : IDisposable
         Context.MacrosRequested += () => _dispatcher.BeginInvoke(() => ShowMainWindow("macros"));
         Context.LuaScriptsRequested += () => _dispatcher.BeginInvoke(() => ShowLuaScripts());
         Context.GestureMenusRequested += () => _dispatcher.BeginInvoke(() => ShowGestureMenus());
+        /* 动作「附加菜单」（基础分类）：和键盘唤出同一条路径，位置在鼠标处。 */
+        Context.AttachMenuRequested += () => _dispatcher.BeginInvoke(() => Gestures.OpenAttachMenuFromAction());
         Context.GestureMenuRequested += id => _dispatcher.BeginInvoke(() => ShowGestureMenu(id));
     }
 

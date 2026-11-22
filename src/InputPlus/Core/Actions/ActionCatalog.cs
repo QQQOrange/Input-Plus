@@ -166,6 +166,7 @@ public sealed class ActionCatalog
         c.Add("space", "基础", "空格", "发送空格", _ => Send(VK_Space), hidden: true);
         c.Add("backspace", "基础", "退格", "发送退格", _ => Send(VK_Back), hidden: true);
         c.Add("delete", "基础", "删除", "发送 Delete", _ => Send(VK_Delete), hidden: true);
+        c.Add("attachMenu", "基础", "附加菜单", "在鼠标位置弹出附加菜单（和键盘唤出同一套内容）", _ => { ctx.RequestAttachMenu(); return true; }, shortTitle: "附加菜单");
         c.Add("openSettings", "基础", "打开设置", "打开 Input Plus 设置窗口", _ => { ctx.RequestOpenSettings(); return true; }, shortTitle: "设置");
         c.Add("toggleEnabled", "基础", "启用/暂停", "临时暂停或恢复所有Input Plus热键", _ => { ctx.RequestToggleEnabled(); return true; }, shortTitle: "启暂停");
 
