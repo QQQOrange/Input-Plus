@@ -126,7 +126,7 @@
          160 是能稳稳放下四到六个汉字、又不至于像 192 那样空出半条街的宽度。
          更长的标题照旧省略号截，菜单不跟着内容变宽。二级菜单（SubPopup）另给 MinWidth。 -->
     <Border Margin="14" Width="160"
-            Padding="6" CornerRadius="14"
+            Padding="6,4,6,4" CornerRadius="14"
             Background="{DynamicResource Brush.Surface}"
             BorderBrush="{DynamicResource Brush.Border}"
             BorderThickness="1">
@@ -155,10 +155,12 @@
                 </StackPanel>
 
                 <!-- 收藏：把当前网页 / 当前文件夹 / 当前程序 变成一条 Qbar 固定项。
-                     点它 = 关掉菜单 + 弹「收藏到 Qbar」，所以在菜单里不需要第二个按钮。 -->
+                     点它 = 关掉菜单 + 弹「收藏到 Qbar」，所以在菜单里不需要第二个按钮。
+                     18×18 是刻意做小的（v1.5.5）：附加菜单没有标题，这行除了星标什么都不放，
+                     按 24 会把菜单头顶撑出一条比行还高的空白带（见 HeaderRow 的注释）。 -->
                 <Button x:Name="FavoriteButton" Grid.Column="1"
                         Style="{StaticResource Button.Icon}"
-                        Width="24" Height="24" FontSize="12" Padding="0"
+                        Width="18" Height="18" FontSize="12" Padding="0"
                         Content="&#xE734;"
                         ToolTip="{loc:T '收藏当前位置到 Qbar'}"
                         Visibility="Collapsed"

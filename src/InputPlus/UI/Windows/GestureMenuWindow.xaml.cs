@@ -90,6 +90,13 @@ public partial class GestureMenuWindow : Window
         TitleRow.Visibility = menu.HideTitle ? Visibility.Collapsed : Visibility.Visible;
         TitleDivider.Visibility = menu.HideTitle ? Visibility.Collapsed : Visibility.Visible;
 
+        /* 没有标题时，这条 HeaderRow 里只剩右上角那颗星标。
+         * 它原来还带着 4 DIP 的外边距和 24 DIP 的按钮高度，于是菜单最上面
+         * 白白多出一条 ~34 DIP 的空白带（比一行还高，用户 2026-11-23 报的
+         * "收藏按钮上面有非常大的空隙"）。这里把外边距收掉，星标 18×18，
+         * 顶部只留卡片自己的 4 DIP 内边距 —— 星标紧贴右上角，菜单也短一截。 */
+        if (menu.HideTitle) HeaderRow.Margin = new Thickness(0);
+
         string hint = (menu.Hint ?? "").Trim();
         MenuHintText.Text = hint;
         MenuHintText.Visibility = !menu.HideTitle && hint.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
