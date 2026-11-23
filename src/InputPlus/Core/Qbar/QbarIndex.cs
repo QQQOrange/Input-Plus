@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
+using InputPlus.Core.Qbar.Content;
 using InputPlus.Core.Qbar.Search;
 
 namespace InputPlus.Core.Qbar;
@@ -210,6 +211,10 @@ internal static class QbarIndex
                 Priority = ThreadPriority.BelowNormal,
             };
             thread.Start();
+
+            /* 正文索引与文件名索引同时启动，但**各跑各的**：正文那条可能抽 PDF 抽几十分钟，
+             * 绝不能让它挡住文件名搜索就绪。Start() 自己会判断开关/复用/重建。 */
+            ContentIndex.Start();
         }
         catch (Exception ex)
         {
@@ -737,6 +742,10 @@ internal static class QbarIndex
             return 0;
         }
         AfterImmediateCommit();
+        /* 正文索引跟着文件名索引的增量走：同一个文件变了，两边都要更新。
+         * 放这里而不是 watcher 里，是因为校准 / 整根重扫 / 快照 diff 也走这条入口，
+         * 只在 watcher 挂一次会漏掉"停机期间改过的文件"。 */
+        ContentIndex.NotifyChanged(stale);
         return docs.Count;
     }
 
@@ -764,6 +773,7 @@ internal static class QbarIndex
             return 0;
         }
         AfterImmediateCommit();
+        ContentIndex.NotifyDeleted(unique);
         return unique.Count;
     }
 
@@ -787,6 +797,7 @@ internal static class QbarIndex
         }
         docs.Clear();
         AfterImmediateCommit();
+        ContentIndex.NotifyChanged(stale);
     }
 
     /// <summary>

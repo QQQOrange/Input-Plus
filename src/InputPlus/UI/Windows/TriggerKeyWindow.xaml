@@ -18,7 +18,7 @@
                    TextWrapping="Wrap" FontSize="12" Margin="0,8,0,14"
                    Foreground="{DynamicResource Brush.TextSecondary}" />
 
-        <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="10" Padding="16,14"
+        <Border Background="{DynamicResource Brush.SurfaceAlt}" CornerRadius="{DynamicResource Radius.Control}" Padding="16,14"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
             <StackPanel>
                 <TextBlock x:Name="CurrentText" FontSize="12"

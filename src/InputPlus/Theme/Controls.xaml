@@ -7,8 +7,25 @@
     <sys:Double x:Key="Size.Text">13.5</sys:Double>
     <sys:Double x:Key="Size.Small">12</sys:Double>
 
+    <!-- 纵向/横向滚动条的粗细。别处要"让出一条滚动条宽度"时必须读这个资源
+         （<see cref="InputPlus.UI.ThemeMetrics"/>），不要再写 SystemParameters.VerticalScrollBarWidth
+         —— 那是系统默认的 17，和我们实际画的 7 对不上，会让相邻卡片的右边缘错开 10 DIP。 -->
+    <sys:Double x:Key="ScrollBarWidth">7</sys:Double>
+
+    <!-- ============ 全局圆角 ============
+         只留这几档，别再写零散数值（以前同一个界面里 4/5/6/7/9/10/11/12/14/16 混着用，
+         看着就是"每块圆得都不一样"）：
+           Card    14 —— 卡片、弹层、面板
+           Control  9 —— 按钮、输入框、列表行、键帽
+           Small    6 —— 小标签、徽章、胶囊小按钮
+           Tiny     3 —— 滚动条、细条、16px 小色块
+           Pill   999 —— 圆形（靠 CornerRadius 自动夹成胶囊/圆点）
+         例外只允许两种：0（直角窗口边缘）和四角不等的不对称圆角（贴合对话框用的）。 -->
     <CornerRadius x:Key="Radius.Card">14</CornerRadius>
     <CornerRadius x:Key="Radius.Control">9</CornerRadius>
+    <CornerRadius x:Key="Radius.Small">6</CornerRadius>
+    <CornerRadius x:Key="Radius.Tiny">3</CornerRadius>
+    <CornerRadius x:Key="Radius.Pill">999</CornerRadius>
 
     <!-- ============ 文本 ============ -->
     <Style x:Key="Text.Body" TargetType="TextBlock">
@@ -85,7 +102,7 @@
             <Setter.Value>
                 <ControlTemplate>
                     <Border BorderBrush="{DynamicResource Brush.Accent}" BorderThickness="2"
-                            CornerRadius="9" Margin="-2" SnapsToDevicePixels="True" />
+                            CornerRadius="{DynamicResource Radius.Control}" Margin="-2" SnapsToDevicePixels="True" />
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -114,7 +131,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="9"
+                            CornerRadius="{DynamicResource Radius.Control}"
                             Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
                         <!-- 跟随 HorizontalContentAlignment / VerticalContentAlignment：
@@ -149,7 +166,7 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                            CornerRadius="9" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            CornerRadius="{DynamicResource Radius.Control}" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -195,7 +212,7 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                            CornerRadius="9" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            CornerRadius="{DynamicResource Radius.Control}" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                           TextBlock.Foreground="{TemplateBinding Foreground}" />
                     </Border>
@@ -271,7 +288,7 @@
                          留空让内容宿主自己内缩，占位文字、图标、文本三者才对得齐。 -->
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="9" SnapsToDevicePixels="True">
+                            CornerRadius="{DynamicResource Radius.Control}" SnapsToDevicePixels="True">
                         <ScrollViewer x:Name="PART_ContentHost"
                                       VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                       Focusable="False" />
@@ -310,7 +327,7 @@
                         <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="9" SnapsToDevicePixels="True" />
+                                CornerRadius="{DynamicResource Radius.Control}" SnapsToDevicePixels="True" />
                         <ToggleButton x:Name="ToggleButton" Focusable="False" ClickMode="Press"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                             <ToggleButton.Template>
@@ -330,7 +347,7 @@
                         <Popup x:Name="PART_Popup" AllowsTransparency="True" Placement="Bottom"
                                IsOpen="{TemplateBinding IsDropDownOpen}" Focusable="False" PopupAnimation="Fade">
                             <Border Background="{DynamicResource Brush.Surface}" BorderBrush="{DynamicResource Brush.BorderStrong}"
-                                    BorderThickness="1" CornerRadius="9" Margin="0,4,0,0" Padding="4"
+                                    BorderThickness="1" CornerRadius="{DynamicResource Radius.Control}" Margin="0,4,0,0" Padding="4"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}">
                                 <ScrollViewer>
@@ -353,6 +370,7 @@
     </Style>
 
     <Style TargetType="ComboBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
@@ -360,7 +378,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="{TemplateBinding Padding}">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="{TemplateBinding Padding}">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -403,7 +421,7 @@
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="9" SnapsToDevicePixels="True">
+                            CornerRadius="{DynamicResource Radius.Control}" SnapsToDevicePixels="True">
                         <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" Focusable="False" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -425,12 +443,13 @@
 
     <!-- ============ 开关 ============ -->
     <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
                     <Grid Width="44" Height="24" Background="Transparent">
-                        <Border x:Name="Track" CornerRadius="14" Background="{DynamicResource Brush.BorderStrong}" />
+                        <Border x:Name="Track" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.BorderStrong}" />
                         <Ellipse x:Name="Knob" Width="18" Height="18" Fill="White" HorizontalAlignment="Left"
                                  Margin="3,0,0,0" />
                     </Grid>
@@ -450,11 +469,13 @@
     </Style>
 
     <!-- ============ 滚动条 ============ -->
+    <!-- 全局滚动条：10 → 7 DIP。用户原话"特别的粗，左右宽度有点粗"。
+         缩到 7 之后拇指还有 5 DIP 可抓（Margin 1），比"细到点不中"安全。 -->
     <Style x:Key="ScrollBar.Thumb" TargetType="Thumb">
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Thumb">
-                    <Border Background="{DynamicResource Brush.BorderStrong}" CornerRadius="4" Margin="2" />
+                    <Border Background="{DynamicResource Brush.BorderStrong}" CornerRadius="{DynamicResource Radius.Tiny}" Margin="1" />
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -462,7 +483,11 @@
 
     <Style TargetType="ScrollBar">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Width" Value="10" />
+        <Setter Property="Width" Value="{DynamicResource ScrollBarWidth}" />
+        <!-- MinWidth 必须显式归零：系统滚动条默认带 MinWidth=17（VerticalScrollBarWidth），
+             只改 Width 的话实际宽度还是 17（实测：width=7 但 min=17）。 -->
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollBar">
@@ -481,7 +506,7 @@
                     </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="Orientation" Value="Horizontal">
-                            <Setter Property="Height" Value="10" />
+                            <Setter Property="Height" Value="7" />
                             <Setter Property="Width" Value="Auto" />
                         </Trigger>
                     </ControlTemplate.Triggers>
@@ -506,13 +531,14 @@
 
     <!-- ============ 侧栏导航项 ============ -->
     <Style x:Key="NavItem" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Margin" Value="8,2" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="9" Padding="12,9">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="12,9">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -530,13 +556,14 @@
 
     <!-- ============ 列表行 ============ -->
     <Style x:Key="RowItem" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Margin" Value="0,1" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="10,7">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="10,7">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -561,7 +588,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="9,2">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="9,2">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -590,7 +617,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListViewItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="10,6">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="10,6">
                         <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
                                               Content="{TemplateBinding Content}" />
                     </Border>
@@ -613,7 +640,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListViewItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="7" Padding="9,2">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="9,2">
                         <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
                                               Content="{TemplateBinding Content}" />
                     </Border>
@@ -664,7 +691,7 @@
                                Margin="0,4,0,6" Cursor="SizeWE">
                             <Thumb.Template>
                                 <ControlTemplate TargetType="Thumb">
-                                    <Border x:Name="Grip" Background="Transparent" CornerRadius="1" />
+                                    <Border x:Name="Grip" Background="Transparent" CornerRadius="{DynamicResource Radius.Tiny}" />
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter TargetName="Grip" Property="Background"
@@ -717,7 +744,7 @@
 
     <!-- 色块按钮 -->
     <ControlTemplate x:Key="SwatchTemplate" TargetType="Button">
-        <Border Background="{TemplateBinding Background}" CornerRadius="9"
+        <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource Radius.Control}"
                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                 Margin="{TemplateBinding Margin}" />
     </ControlTemplate>
@@ -726,13 +753,14 @@
          高亮色跟随主题：深色面板用白色半透明，浅色面板用黑色半透明
          （写死白色会在浅色主题下变成"白底白高亮"，看不见）。 -->
     <Style x:Key="QbarRow" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Margin" Value="0,1" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="9" Padding="10,2">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" Padding="10,2">
                         <ContentPresenter />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -766,7 +794,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="DataGridRow">
-                    <Border x:Name="Bd" Background="Transparent" CornerRadius="8" SnapsToDevicePixels="True">
+                    <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" SnapsToDevicePixels="True">
                         <DataGridCellsPresenter ItemsPanel="{TemplateBinding ItemsPanel}"
                                                 SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
                     </Border>
@@ -835,6 +863,7 @@
 
     <!-- ============ 复选框 ============ -->
     <Style x:Key="CheckBox.Text" TargetType="CheckBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
@@ -843,7 +872,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="CheckBox">
                     <StackPanel Orientation="Horizontal" Background="Transparent">
-                        <Border x:Name="Box" Width="17" Height="17" CornerRadius="5"
+                        <Border x:Name="Box" Width="17" Height="17" CornerRadius="{DynamicResource Radius.Small}"
                                 Background="{DynamicResource Brush.Surface}"
                                 BorderBrush="{DynamicResource Brush.BorderStrong}" BorderThickness="1.2"
                                 VerticalAlignment="Center">
@@ -875,6 +904,7 @@
 
     <!-- ============ 单选 ============ -->
     <Style TargetType="RadioButton">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
@@ -934,13 +964,13 @@
       这里只抽"共性"（底色、边框、圆角、文字），
       各自的特殊形状（Qbar 的大圆角、录制条的胶囊）仍由本地覆盖。
     -->
-    <CornerRadius x:Key="Radius.Overlay">12</CornerRadius>
-
+    <!-- 浮层的圆角统一走 Radius.Card（以前单独一个 Radius.Overlay=12，和卡片的 14 差 2，
+         同屏出现时看着就是"两块圆得不一样"）。 -->
     <Style x:Key="Overlay.Card" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Brush.OverlayCard}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.OverlayBorder}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="{StaticResource Radius.Overlay}" />
+        <Setter Property="CornerRadius" Value="{StaticResource Radius.Card}" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="UseLayoutRounding" Value="True" />
     </Style>
@@ -980,7 +1010,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Slider">
                     <Grid Background="Transparent">
-                        <Border Height="4" VerticalAlignment="Center" CornerRadius="2"
+                        <Border Height="4" VerticalAlignment="Center" CornerRadius="{DynamicResource Radius.Tiny}"
                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
                         <Track x:Name="PART_Track" VerticalAlignment="Center">
@@ -1032,7 +1062,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">
-                    <Border Background="{DynamicResource Brush.TextPrimary}" CornerRadius="7" Padding="9,5">
+                    <Border Background="{DynamicResource Brush.TextPrimary}" CornerRadius="{DynamicResource Radius.Control}" Padding="9,5">
                         <ContentPresenter TextBlock.Foreground="{DynamicResource Brush.Surface}" />
                     </Border>
                 </ControlTemplate>
@@ -1118,7 +1148,7 @@
                 <ControlTemplate TargetType="ContextMenu">
                     <Border Background="{DynamicResource Brush.SurfaceAlt}"
                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                            CornerRadius="9" Padding="5" Margin="10">
+                            CornerRadius="{DynamicResource Radius.Control}" Padding="5" Margin="10">
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="20" ShadowDepth="3" Opacity="0.35" Color="#000000" />
                         </Border.Effect>
@@ -1138,7 +1168,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
                     <Grid>
-                        <Border x:Name="Bd" CornerRadius="8" Background="Transparent"
+                        <Border x:Name="Bd" CornerRadius="{DynamicResource Radius.Control}" Background="Transparent"
                                 Padding="{TemplateBinding Padding}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -1166,7 +1196,7 @@
                                AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
                             <Border Background="{DynamicResource Brush.SurfaceAlt}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                    CornerRadius="9" Padding="5" Margin="6">
+                                    CornerRadius="{DynamicResource Radius.Control}" Padding="5" Margin="6">
                                 <StackPanel IsItemsHost="True" />
                             </Border>
                         </Popup>

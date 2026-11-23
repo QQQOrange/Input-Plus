@@ -442,6 +442,18 @@ public static partial class SelfTest
             OfficeRecentFiles.ParseMruValue(""), "");
         CheckEqual("Office MRU：星号结尾不越界",
             OfficeRecentFiles.ParseMruValue(@"[F00000000]*"), @"[F00000000]*");
+
+        /* [T…] 是十六进制的 FILETIME：解析对了，"最近使用"里 Office 那几条才能按
+         * "什么时候打开过"排序（WPS 没有时间，只能退回文件修改时间）。
+         * 样本取 2024-06-01 12:00 的真实 FILETIME 十六进制值。 */
+        var t = OfficeRecentFiles.ParseMruTime(@"[F00000000][T01DAB3D82C656000][O00000000]*C:\a.docx");
+        Check("Office MRU：能解析出打开时间", t.Year >= 2020, t.ToString("yyyy-MM-dd HH:mm"));
+        Check("Office MRU：没有 [T…] 时给最早时间",
+            OfficeRecentFiles.ParseMruTime(@"*C:\a.docx") == DateTime.MinValue);
+        Check("Office MRU：乱码给最早时间",
+            OfficeRecentFiles.ParseMruTime("[TZZZZ]") == DateTime.MinValue);
+        Check("Office MRU：空值给最早时间",
+            OfficeRecentFiles.ParseMruTime("") == DateTime.MinValue);
     }
     // ── ⑦ 真机：扫自己 + 通道策略 ────────────────────────────────
 

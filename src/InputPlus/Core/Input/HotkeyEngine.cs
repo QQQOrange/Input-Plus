@@ -102,6 +102,16 @@ public sealed partial class HotkeyEngine : IDisposable
     /// <summary>本 token 边界内"已经回读过控件文本"的代际号（-1 = 还没读过）。</summary>
     private int _mirrorLatchGen = -1;
 
+    /// <summary>
+    /// 上一次观察到的焦点控件（hwndFocus，拿不到就用前台窗口）。
+    ///
+    /// 换了控件就等于换了一段文本：上一个输入框的尾巴绝不能拼到这一框的触发词前面。
+    /// 不重置缓冲的话，尾部是上一个框最后打的字母，`;mail` 左边就"挨着一个词"，
+    /// 旧匹配器的词边界判据直接否掉 —— 用户看到的就是"第一次打不生效、第二次才行"
+    /// （第二次之所以行，是因为中间那个空格把缓冲清空了）。
+    /// </summary>
+    private IntPtr _snippetFocusHwnd;
+
     /// <summary>自检用：本次自检里回读控件文本的次数（空配置必须为 0）。</summary>
     internal int TextMirrorReadsForTest { get; private set; }
 
@@ -871,6 +881,19 @@ public sealed partial class HotkeyEngine : IDisposable
 
     /// <summary>仅供自检：直接看/改片段缓冲，模拟"排队期间用户又打了字"。</summary>
     internal SnippetBuffer SnippetBufferForTest => _snippetBuffer;
+
+    /// <summary>
+    /// 仅供自检：伪造"上一次的焦点控件"，用来构造"用户换了一个输入框"这个场景。
+    ///
+    /// 真实焦点句柄只有在真机上才有意义（自检进程里焦点一直在同一个窗口上），
+    /// 所以只能把记录值改成一个**不存在的句柄**，下一次按键就会判定"换控件了"
+    /// —— 这正是 <see cref="NoteSnippetFocus"/> 要处理的那条路。
+    /// </summary>
+    internal IntPtr SnippetFocusForTest
+    {
+        get => _snippetFocusHwnd;
+        set => _snippetFocusHwnd = value;
+    }
 
     /// <summary>
     /// 仅供自检：替换"焦点能否接受文字"的判定。

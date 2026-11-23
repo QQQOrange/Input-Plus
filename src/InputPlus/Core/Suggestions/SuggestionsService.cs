@@ -234,12 +234,37 @@ public sealed class SuggestionsService : IDisposable
         _signal.Set();
     }
 
-    /// <summary>Presenter 取首屏：只读快照，不触发采集。</summary>
+    /// <summary>
+    /// 首屏：只读快照，不触发采集。
+    ///
+    /// 但会补一层"采集之后才打开的文件"：后台采集几十秒一轮，用户刚打开一张图就来看
+    /// 历史记录时，快照里还没有它。只解析 Recent 里比快照新的那几条 .lnk（正常 0～3 条），
+    /// 直接插到最前面 —— 这是"刚打开的文件应该排第一"的唯一代价可以接受的做法。
+    /// </summary>
     public IReadOnlyList<RecItem> FirstScreen(int count)
     {
         count = Math.Clamp(count, 0, 200);
         if (count == 0) return Array.Empty<RecItem>();
+
         IReadOnlyList<RecItem> items = Snapshot.Items;
+        try
+        {
+            /* 只在"已经采过一轮"之后补头：冷启动（没有快照）时首屏必须为空，
+             * 那是"还没准备好"的明确信号，不能拿几条新文件冒充首屏。 */
+            var fresh = Snapshot.CollectedAt == DateTime.MinValue
+                ? Array.Empty<RecItem>()
+                : Sources.WindowsRecentSource.NewSince(Snapshot.CollectedAt, 5);
+            if (fresh.Count > 0)
+            {
+                var merged = new List<RecItem>(fresh);
+                var seen = new HashSet<string>(fresh.Select(i => i.Key), StringComparer.OrdinalIgnoreCase);
+                foreach (RecItem item in items)
+                    if (seen.Add(item.Key)) merged.Add(item);
+                items = merged;
+            }
+        }
+        catch { /* 补头失败就当没有：首屏绝不能因为它抛异常 */ }
+
         return items.Count <= count ? items : items.Take(count).ToList();
     }
 

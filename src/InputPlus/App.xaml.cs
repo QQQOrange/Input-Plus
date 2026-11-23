@@ -298,6 +298,30 @@ public partial class App : Application
             return;
         }
 
+        /* --content-status / --content-build / --content-query：正文索引的三个命令行入口。
+         * 后台抽取失败是"看得见的静默"（搜索没结果，但程序一切正常），必须有一个
+         * 不依赖 GUI 的说法。 */
+        if (Core.CliFlags.Has(e.Args, "--content-status"))
+        {
+            Environment.Exit(Core.Qbar.ContentCli.RunStatus());
+            return;
+        }
+        if (Core.CliFlags.Has(e.Args, "--content-build"))
+        {
+            Environment.Exit(Core.Qbar.ContentCli.RunBuild(Core.CliFlags.Has(e.Args, "--rebuild")));
+            return;
+        }
+        if (Core.CliFlags.Has(e.Args, "--content-query"))
+        {
+            Environment.Exit(Core.Qbar.ContentCli.RunQuery(Core.CliFlags.ValueOf(e.Args, "--content-query") ?? ""));
+            return;
+        }
+        if (Core.CliFlags.Has(e.Args, "--content-extract"))
+        {
+            Environment.Exit(Core.Qbar.ContentCli.RunExtract(Core.CliFlags.ValueOf(e.Args, "--content-extract") ?? ""));
+            return;
+        }
+
         /* --settings-dump：只读打印"程序实际读到了什么设置"（过滤器/命令/规则/加密状态）。 */
         if (Core.CliFlags.Has(e.Args, "--settings-dump"))
         {

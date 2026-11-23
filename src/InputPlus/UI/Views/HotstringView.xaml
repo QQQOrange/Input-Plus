@@ -82,15 +82,15 @@
                                   ToolTip="{loc:T '替换后不再多出一个空格'}" />
                     </StackPanel>
 
-                    <StackPanel Margin="0,0,26,0">
-                        <TextBlock Text="{loc:T '输入法'}" Style="{StaticResource Text.Tertiary}" Margin="0,0,0,7" />
-                        <CheckBox x:Name="ImeBackBox" Content="{loc:T '展开后自动按一下 Shift'}" Click="OnOptionsChanged"
-                                  ToolTip="{loc:T '别名一般用英文打，打完顺手按一下 Shift 切回中文。勾上之后软件替你按这一次。'}" />
-                    </StackPanel>
+                    <!-- 原来这里有个「输入法：展开后自动按一下 Shift」的勾选。
+                         已按用户要求整条删掉：按 Shift 就是替用户切中/英模式，
+                         等于"软件自己换输入法"。现在展开前后都不碰输入法状态。 -->
 
                     <StackPanel MaxWidth="360">
                         <TextBlock Text="{loc:T '列表显示'}" Style="{StaticResource Text.Tertiary}" Margin="0,0,0,7" />
-                        <TextBlock Text="{loc:T '只显示备注（替换内容不显示）'}"
+                        <!-- 以前这里写着"只显示备注"：那时正文列其实是备注列。
+                             现在正文 / 备注各占一列，这句必须跟上，否则用户会以为列表里看不到正文。 -->
+                        <TextBlock Text="{loc:T '正文与备注分成两列；格子放不下时把鼠标停上去看全文'}"
                                    Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
                     </StackPanel>
                 </WrapPanel>
@@ -165,9 +165,11 @@
                                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                                                Foreground="{DynamicResource Brush.TextTertiary}"
                                                VerticalAlignment="Center" Margin="10,0,0,0" />
+                                    <!-- 分组名**左对齐**：以前 TextAlignment=Center，一列组名像居中的
+                                         标题，扫视时对不齐；名称长短不一时中心点各不同，找组很费眼。 -->
                                     <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12.5"
                                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                               TextAlignment="Center" HorizontalAlignment="Stretch" Margin="0,0,12,0"
+                                               TextAlignment="Left" HorizontalAlignment="Stretch" Margin="8,0,12,0"
                                                Foreground="{DynamicResource Brush.TextPrimary}" />
 
 
@@ -219,100 +221,158 @@
                         <TextBlock Grid.Column="0" Text="{loc:T '全部别名'}" Style="{StaticResource Text.H3}"
                                    VerticalAlignment="Center" />
 
-                        <!-- 单行：搜索框自适应（最小 180），筛选/排序/计数靠右。
-                             用 Grid 而不是 StackPanel —— 右侧控件按内容定宽，搜索框吃掉剩余空间。 -->
+                        <!-- 单行：搜索框自适应（最小 180），计数靠右。
+                             用 Grid 而不是 StackPanel —— 右侧控件按内容定宽，搜索框吃掉剩余空间。
+                             搜索框是**全软件统一那个控件**（放大镜/清空/分类都在框里），
+                             分类 = 别名关键字 / 别名正文 / 备注：先选列，再打字，就只搜这一列。
+                             「从未使用」勾选与排序下拉已按用户要求删除 —— 排序只剩点列头那一套。 -->
                         <Grid Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" MinWidth="180" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Column="0" Text="&#xE721;"
-                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"
-                                       Foreground="{DynamicResource Brush.TextTertiary}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <controls:SearchField Grid.Column="0" x:Name="FilterField"
+                                                  Placeholder="{loc:T '搜索别名…'}"
+                                                  SearchChanged="OnFilterChanged"
+                                                  SearchSubmitted="OnFilterSubmitted"
+                                                  SearchCancelled="OnFilterCancelled" />
 
-                            <TextBox Grid.Column="1" x:Name="FilterBox" Style="{StaticResource TextBox.Base}"
-                                     KeyDown="OnFilterKeyDown" MinHeight="34" MinWidth="180"
-                                     VerticalContentAlignment="Center" TextChanged="OnFilterChanged" />
-
-                            <CheckBox Grid.Column="2" x:Name="UnusedOnlyBox" Content="{loc:T '从未使用'}"
-                                      VerticalAlignment="Center" Margin="12,0,12,0"
-                                      Click="OnUnusedOnlyChanged"
-                                      ToolTip="{loc:T '只显示还没被展开过的别名'}" />
-
-                            <ComboBox Grid.Column="3" x:Name="SortBox" Style="{StaticResource ComboBox.Base}"
-                                      Width="150" MinWidth="150" VerticalAlignment="Center"
-                                      SelectionChanged="OnSortChanged"
-                                      ToolTip="{loc:T '列表排序方式'}" />
-
-                            <TextBlock Grid.Column="4" x:Name="FilterCount" Style="{StaticResource Text.Tertiary}"
+                            <TextBlock Grid.Column="1" x:Name="FilterCount" Style="{StaticResource Text.Tertiary}"
                                        VerticalAlignment="Center" Margin="12,0,0,0" MinWidth="52"
                                        TextAlignment="Right" />
                         </Grid>
                     </Grid>
 
                     <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <Grid.Resources>
+                            <!-- 停用的别名整行压暗：DataGrid 没有 ItemTemplate，
+                                 所以用行样式去绑 Row.Opacity（和之前的 ListBox 行一致）。 -->
+                            <Style x:Key="EntryRow" TargetType="DataGridRow" BasedOn="{StaticResource Grid.Row}">
+                                <Setter Property="Opacity" Value="{Binding Opacity}" />
+                                <!-- 右键菜单由 OnEntryContextMenuOpening 现场填，这里只挂一个空壳：
+                                     ContextMenuOpening 只会从**带 ContextMenu 的元素**上冒出来。 -->
+                                <Setter Property="ContextMenu">
+                                    <Setter.Value>
+                                        <ContextMenu />
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Grid.Resources>
+
+                        <!-- 这张表与 Qbar 设置页「搜索指令」那张表**是同一份实现**：
+                             DataGrid + Grid.Row / Grid.Cell / Grid.Header 三套样式，
+                             底色也是 Brush.SurfaceAlt + 圆角 8。
+                             为什么不继续用 ListBox 自己画表头：列头、点击排序、拖列宽都是
+                             DataGrid 的原生能力，手搓的按钮表头永远差一截（字重、箭头、
+                             悬停、发丝线都要一像素一像素对），改一次对一次太脆。 -->
+                        <!-- 列头排序由我们自己接管（见 OnEntryHeaderClick）：交给 DataGrid 的话，
+                             它会在 ItemsSource 换掉之后再排一遍，两套 comparer 打架，
+                             屏幕上看到的顺序就和列头对不上。所以 CanUserSortColumns=False。 -->
+                        <Border x:Name="EntryGridHost" Background="{DynamicResource Brush.SurfaceAlt}"
+                                CornerRadius="{DynamicResource Radius.Control}" Padding="0,2" Margin="8,0,8,4">
+                            <DataGrid x:Name="EntryList"
+                                      Background="Transparent" BorderThickness="0" RowHeaderWidth="0"
+                                      HeadersVisibility="Column" GridLinesVisibility="None"
+                                      AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                                      CanUserResizeRows="False"
+                                      CanUserSortColumns="False"
+                                      SelectionMode="Extended" SelectionUnit="FullRow"
+                                      FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                      RowHeight="30" ColumnHeaderHeight="28"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      RowStyle="{StaticResource EntryRow}"
+                                      CellStyle="{StaticResource Grid.Cell}"
+                                      ColumnHeaderStyle="{StaticResource Grid.Header}"
+                                      SelectionChanged="OnSelectionChanged"
+                                      ContextMenuOpening="OnEntryContextMenuOpening"
+                                      PreviewMouseLeftButtonDown="OnEntryMouseDown"
+                                      PreviewMouseMove="OnEntryMouseMove"
+                                      AllowDrop="True" DragOver="OnEntryListDragOver" Drop="OnEntryListDrop">
+                                <DataGrid.Columns>
+                                    <!-- 关键字：前缀小方块 + 别名，和 Qbar 那列「图标 + 文字」同一个版式。 -->
+                                    <DataGridTemplateColumn Header="{loc:T '别名关键字'}" Width="160"
+                                                            CanUserSort="True" SortMemberPath="KeyLabel">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Grid VerticalAlignment="Center">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0" Width="18" Height="18" CornerRadius="{DynamicResource Radius.Small}"
+                                                            Margin="0,0,6,0" VerticalAlignment="Center"
+                                                            Background="{DynamicResource Brush.AccentSoft}"
+                                                            ToolTip="{loc:T '当前前缀符号'}">
+                                                        <TextBlock Text="{Binding PrefixLabel}" FontSize="10"
+                                                                   FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Brush.Accent}"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <TextBlock Grid.Column="1" Text="{Binding KeyLabel}"
+                                                               Style="{StaticResource Grid.CellText}"
+                                                               FontWeight="SemiBold"
+                                                               ToolTip="{Binding KeyLabel}"
+                                                               Foreground="{DynamicResource Brush.Accent}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+
+                                    <DataGridTemplateColumn Header="{loc:T '别名正文'}" Width="*"
+                                                            CanUserSort="True" SortMemberPath="Preview">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Preview}" Style="{StaticResource Grid.CellText}"
+                                                           ToolTip="{Binding Preview}"
+                                                           Foreground="{DynamicResource Brush.TextSecondary}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+
+                                    <DataGridTemplateColumn Header="{loc:T '备注'}" Width="150"
+                                                            CanUserSort="True" SortMemberPath="CommentLabel">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding CommentLabel}"
+                                                           Style="{StaticResource Grid.CellText}"
+                                                           ToolTip="{Binding CommentLabel}"
+                                                           Foreground="{DynamicResource Brush.TextTertiary}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+
+                                    <DataGridTemplateColumn Header="{loc:T '分组'}" Width="110"
+                                                            CanUserSort="True" SortMemberPath="GroupLabel">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding GroupLabel}"
+                                                           Style="{StaticResource Grid.CellText}"
+                                                           Foreground="{DynamicResource Brush.TextTertiary}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+
+                                    <DataGridTemplateColumn Header="{loc:T '使用'}" Width="64"
+                                                            CanUserSort="True" SortMemberPath="UsageLabel">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding UsageLabel}"
+                                                           Style="{StaticResource Grid.CellText}"
+                                                           Foreground="{DynamicResource Brush.TextTertiary}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+
+                        <!-- 空态浮在表的上面（表自己不能没有，否则列头也跟着消失） -->
                         <TextBlock x:Name="EmptyHint" Text="{loc:T '还没有别名。点下面的「新增」建一条。'}"
                                    Style="{StaticResource Text.Tertiary}" HorizontalAlignment="Center"
                                    VerticalAlignment="Center" Visibility="Collapsed" TextWrapping="Wrap"
-                                   MaxWidth="260" TextAlignment="Center" />
-                        <ListBox x:Name="EntryList" Background="Transparent" BorderThickness="0"
-                                 Margin="0,0,0,4" SelectionMode="Extended"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                 SelectionChanged="OnSelectionChanged"
-                                 ContextMenuOpening="OnEntryContextMenuOpening"
-                                 PreviewMouseLeftButtonDown="OnEntryMouseDown"
-                                 PreviewMouseMove="OnEntryMouseMove"
-                                   AllowDrop="True" DragOver="OnEntryListDragOver" Drop="OnEntryListDrop">
-                            <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
-                                    <Setter Property="ContextMenu">
-                                        <Setter.Value>
-                                            <ContextMenu />
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </ListBox.ItemContainerStyle>
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Opacity="{Binding Opacity}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="120" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-
-                                        <!-- 最左边：当前前缀符号（跟着设置里的前缀一起变）。 -->
-                                        <Border Grid.Column="0" Width="20" Height="20" CornerRadius="5"
-                                                Margin="0,0,8,0" VerticalAlignment="Center"
-                                                Background="{DynamicResource Brush.AccentSoft}"
-                                                ToolTip="{loc:T '当前前缀符号'}">
-                                            <TextBlock Text="{Binding PrefixLabel}" FontSize="11" FontWeight="SemiBold"
-                                                       Foreground="{DynamicResource Brush.Accent}"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-
-                                        <TextBlock Grid.Column="1" Text="{Binding KeyLabel}" FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                                   Foreground="{DynamicResource Brush.Accent}" />
-                                        <TextBlock Grid.Column="2" Text="{Binding Preview}" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" Margin="8,0,8,0"
-                                                   Foreground="{DynamicResource Brush.TextSecondary}" />
-                                        <TextBlock Grid.Column="3" Text="{Binding GroupLabel}" VerticalAlignment="Center"
-                                                   Style="{StaticResource Text.Tertiary}" />
-                                        <TextBlock Grid.Column="4" Text="{Binding UsageLabel}" VerticalAlignment="Center"
-                                                   Style="{StaticResource Text.Tertiary}" Margin="10,0,0,0"
-                                                   MinWidth="34" TextAlignment="Right" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                                   MaxWidth="260" TextAlignment="Center" IsHitTestVisible="False" />
                     </Grid>
 
                     <!-- 图标化（m01050）：这一排原来全是文字按钮，列表的底部空间被吃掉一截。 -->
@@ -334,11 +394,6 @@
                                 Margin="6,0,0,0" Click="OnImportClick"
                                 AutomationProperties.Name="{loc:T '导入别名'}"
                                 ToolTip="{loc:T '从 JSON 文件导入别名（合并，不会删掉已有的）'}" />
-                        <Button x:Name="CleanupButton" Content="&#xE74D;" Style="{StaticResource Button.Icon}"
-                                Margin="6,0,0,0" Foreground="{DynamicResource Brush.Danger}"
-                                Click="OnCleanupClick" Visibility="Collapsed"
-                                AutomationProperties.Name="{loc:T '清理未使用'}"
-                                ToolTip="{loc:T '删除所有从未展开过的别名（会先确认）'}" />
                         <Button x:Name="ExportButton" Content="&#xE896;" Style="{StaticResource Button.Icon}"
                                 Margin="6,0,0,0" Click="OnExportClick"
                                 AutomationProperties.Name="{loc:T '导出别名'}"
@@ -350,16 +405,41 @@
                 </Grid>
             </Border>
 
-            <!-- 编辑（没选片段时整栏隐藏） -->
-            <Border Grid.Column="2" x:Name="EditorCard" Style="{StaticResource Card}" Padding="18,16"
+            <!-- 编辑（没选片段时整栏隐藏）
+                 结构：标题行固定 + 正文自己滚。以前整块是一个 StackPanel，窗口一矮，
+                 下半截（分组、启用、状态）就被裁在卡片外面 —— 用户看到的是
+                 "编辑别名展开了，关不掉，也不能上下滚"。 -->
+            <Border Grid.Column="2" x:Name="EditorCard" Style="{StaticResource Card}" Padding="0"
                     Width="360" Margin="12,0,0,0" Visibility="Collapsed">
-                <StackPanel>
-                    <TextBlock Text="{loc:T '编辑别名'}" Style="{StaticResource Text.H3}" />
-                    <TextBlock x:Name="EditTitle" Text="" Style="{StaticResource Text.Tertiary}"
-                               Margin="0,5,0,12" TextWrapping="Wrap" />
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="18,14,12,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{loc:T '编辑别名'}" Style="{StaticResource Text.H3}"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1" x:Name="CloseEditorButton" Content="&#xE8BB;"
+                                Style="{StaticResource Button.Icon}" Width="28" Height="28"
+                                Click="OnCloseEditorClick"
+                                AutomationProperties.Name="{loc:T '关闭编辑'}"
+                                ToolTip="{loc:T '关闭编辑（Esc 也行）'}" />
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="1" x:Name="EditorScroll" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="18,0,10,14" Focusable="False">
+                        <StackPanel>
+                            <TextBlock x:Name="EditTitle" Text="" Style="{StaticResource Text.Tertiary}"
+                                       Margin="0,0,0,12" TextWrapping="Wrap" />
 
                     <Grid Margin="0,0,0,6">
-                        <TextBlock Text="{loc:T '别名'}" Style="{StaticResource Text.Secondary}"
+                        <TextBlock Text="{loc:T '别名关键字'}" Style="{StaticResource Text.Secondary}"
                                    VerticalAlignment="Center" />
                         <Button x:Name="PasteTriggerButton" Content="{loc:T '从剪贴板'}"
                                 Style="{StaticResource Button.Ghost}" Padding="9,3,9,3"
@@ -371,7 +451,7 @@
                              VerticalContentAlignment="Center" TextChanged="OnEditorChanged"
                              ToolTip="{loc:T '打完它再按空格就替换；中文和符号都可以，但不能以英文字母/数字开头'}" />
 
-                    <TextBlock Text="{loc:T '替换成'}" Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
+                    <TextBlock Text="{loc:T '别名正文'}" Style="{StaticResource Text.Secondary}" Margin="0,12,0,6" />
                     <TextBox x:Name="ValueBox" Height="150" AcceptsReturn="True" TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto" Style="{StaticResource TextBox.Base}"
                              TextChanged="OnEditorChanged" />
@@ -432,7 +512,7 @@
                            Placement="Bottom" PlacementTarget="{Binding ElementName=GroupBox}">
                         <Border Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                CornerRadius="10" Padding="5" Margin="8"
+                                CornerRadius="{DynamicResource Radius.Control}" Padding="5" Margin="8"
                                 TextElement.Foreground="{DynamicResource Brush.TextPrimary}">
                             <Border.Effect>
                                 <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.32" Color="#000000" />
@@ -453,7 +533,9 @@
 
                     <TextBlock x:Name="StatusText" Text="" Style="{StaticResource Text.Tertiary}"
                                Margin="0,10,0,0" TextWrapping="Wrap" />
-                </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </Border>
         </Grid>
     </Grid>

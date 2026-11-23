@@ -247,7 +247,7 @@ public sealed partial class GestureOverlayWindow : Window
             executed ? Color.FromRgb(0x59, 0x00, 0xFF) : Color.FromArgb(0x55, 0, 0, 0));
 
         box.Background = new SolidColorBrush(color);
-        box.CornerRadius = new CornerRadius(16);
+        box.CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusCard);
 
         /* 描边是主线两侧各 BorderWidth 像素，而 WPF 的 BorderThickness 只往内量，
          * 所以画出来的粗细要乘 2 —— 和 WG2 的 LabelBorderWidth 是两套口径。 */

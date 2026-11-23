@@ -207,22 +207,31 @@ public static class NativeMethods
     /* 「输入文本」走真实按键时，中文/日文/韩文/越南文输入语言下字母会被
      * 输入法拿去拼候选 —— 用户看到的是候选框，文字没进文本框。
      *
-     * 摘输入法上下文（ImmAssociateContext）只在老式 IMM32 程序上有效，
-     * 现代程序（Win11 记事本 / Edge / VS Code）都是 TSF 架构，摘不掉。
-     * 唯一通吃的办法：**临时把这个窗口的输入语言切到英文布局**，打完再切回。
-     * 切换是异步的（DefWindowProc 收到消息后才 ActivateKeyboardLayout），
-     * 必须轮询 GetKeyboardLayout 确认生效，不能 post 完就发按键。 */
+     * ⚠ 这个问题的解法**不是**切布局。曾经的做法是"临时把窗口的输入语言切到
+     * 英文布局，打完再切回"，代价是软件替用户换输入法（用户原话：
+     * 「input plus 不应该能够自己换输入法，这是个很严重的 bug」），
+     * 而且切换是异步的，目标程序不理会或切回失败就把人永久留在英文布局上。
+     * 现在：输入法开着就改走 Unicode 注入（不经过布局与输入法），
+     * 布局只用来**读**（把字符映射成虚拟键），见 Core/Input/ImeGuard.cs。
+     *
+     * LoadKeyboardLayout 保留在这里是因为它只把布局加载进进程（不激活任何窗口），
+     * 自检用它的 HKL 核对 Shift 位与扫描码。 */
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint flags);
 
-    /* 枚举当前线程/系统里已加载的键盘布局：用来找“用户平时用的中文布局”，
-     * 而不是硬编码 0x0804（简中）—— 用户可能用繁体、日文或自定义中文布局。 */
+    /* 枚举当前线程/系统里已加载的键盘布局。
+     * 目前**没有调用方**（原来用来挑一个"用户平时用的中文布局"再切过去）；
+     * 声明留着是因为它是只读的，将来做"当前装了哪些输入法"的诊断还会用到。 */
     [DllImport("user32.dll")]
     public static extern int GetKeyboardLayoutList(int nBuff, [Out] IntPtr[]? lpList);
 
-    /* IME 的“中/英模式”不是键盘布局：中文输入法在英文模式下 HKL 仍然是 0x0804。
-     * 只切布局会让 Qbar 带着引擎标签打开、实际却打出英文，所以还要直接改
-     * 输入上下文的 conversion mode（IME_CMODE_NATIVE）。 */
+    /* ImmGetContext / ImmGetConversionStatus 用于**读**输入法状态（组字串、
+     * 中/英模式），只读不改，可以放心用。
+     *
+     * ⚠ ImmSetConversionStatus（写）目前**没有调用方**，也不该再加：
+     * 它会把用户的输入法模式改成我们要的样子 —— 和"软件不该自己换输入法"
+     * 是同一类事。别名展开遇到组字时用的是 ImmNotifyIME 取消组字，
+     * 不是改 conversion mode。 */
     [DllImport("imm32.dll")]
     public static extern IntPtr ImmGetContext(IntPtr hwnd);
 
@@ -262,7 +271,14 @@ public static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
 
-    /// <summary>请目标窗口换输入语言。DefWindowProc 会转成 ActivateKeyboardLayout。</summary>
+    /// <summary>
+    /// 请目标窗口换输入语言。DefWindowProc 会把它转成 ActivateKeyboardLayout。
+    ///
+    /// ⚠ 目前**没有调用方**，也不该再有：这条消息一投出去，前台的输入语言就被
+    /// 我们改了，而切换是异步的、失败就永久留在英文布局上（用户报的
+    /// 「input plus 不应该能够自己换输入法」）。需要"打 ASCII 不被输入法吃掉"时
+    /// 改走 Unicode 注入，见 Core/Input/InputSender.cs。
+    /// </summary>
     public const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
 
     [StructLayout(LayoutKind.Sequential)]

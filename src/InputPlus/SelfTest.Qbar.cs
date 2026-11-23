@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -617,6 +617,31 @@ public static partial class SelfTest
             string.Join(",", hit.Select(e => e.Comment)));
         Check("在真实引擎表里能搜到哔哩哔哩",
             QEntry.Filter(real, "哔哩").Any());
+
+        /* ---- 搜索框的分类：先选列，再搜 ---- */
+        CheckEqual("分类-内容：只按网址片段命中", CountColumn(list, "google.com", "value"), 1);
+        CheckEqual("分类-内容：备注里的词不会因内容列命中",
+            CountColumn(list, "知乎", "value"), 0);
+        CheckEqual("分类-备注：网址片段不会因备注列命中",
+            CountColumn(list, "google.com", "comment"), 0);
+        CheckEqual("分类-关键字：按 Key 命中", CountColumn(list, "bd", "key"), 1);
+        CheckEqual("分类-全部：三列 OR 仍然命中", CountColumn(list, "知乎", "all"), 1);
+        CheckEqual("分类-空关键词不过滤", CountColumn(list, "   ", "value"), 4);
+
+        /* 多行内容：内容列把换行折成空格再比，"相邻两行"也搜得到；
+         * 「全部」保持改造前的原样包含（自检钉着那一套），所以这里刻意不命中。 */
+        var multi = new List<QEntry>
+        {
+            new() { Key = "sig", Value = "第一行\n第二行 alpha", Comment = "签名" },
+        };
+        CheckEqual("分类-内容：跨行也能命中", CountColumn(multi, "第一行 第二行", "value"), 1);
+        CheckEqual("分类-全部：跨行搜索保持原样（不折空白）",
+            CountColumn(multi, "第一行 第二行", "all"), 0);
+        CheckEqual("分类-内容：制表符同样折成空格",
+            CountColumn(new List<QEntry> { new() { Key = "k", Value = "a\tb" } }, "a b", "value"), 1);
+
+        static int CountColumn(List<QEntry> source, string filter, string column)
+            => source.Count(e => QEntry.MatchesColumn(e, filter, column));
     }
 
     /// <summary>

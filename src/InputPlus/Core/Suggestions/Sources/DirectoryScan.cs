@@ -39,8 +39,13 @@ internal static class DirectoryScan
     /// <summary>
     /// 展开 "<c>...\WeChat Files\*\FileStorage\File</c>" 这种带一段通配的路径。
     ///
-    /// 只支持**最后一段以外**的单层 '*'（微信的账号目录就是这种形态）。不支持递归通配，
-    /// 也不支持多个 '*'：那会退化成全盘搜索，正是红线 4 禁止的。
+    /// 支持**任意一段**的单层 '*'（不一定是最后一段）：微信/企业微信/飞书的账号目录
+    /// 后面还跟着 `\msg\file`、`\FileStorage\File` 这些固定尾巴。
+    /// 不支持递归通配，也不支持多个 '*'：那会退化成全盘搜索，正是红线 4 禁止的。
+    ///
+    /// 以前这里把 '*' 之后的所有段一起当成"搜索掩码"传给 <c>EnumerateDirectories</c>，
+    /// 掩码里带反斜杠是非法模式 —— 整个方法直接抛异常被吞掉，返回空表。
+    /// 结果就是"微信 / 企业微信 / 飞书三个来源永远是 0 条"（真实账号目录明明在）。
     /// </summary>
     public static IReadOnlyList<string> Expand(string pattern)
     {
@@ -52,19 +57,29 @@ internal static class DirectoryScan
             if (star < 0)
                 return DirExists(full) ? new[] { full } : Array.Empty<string>();
 
-            // '*' 必须在文件名段里，且只能有一个
+            // '*' 只能有一个
             if (full.IndexOf('*', star + 1) >= 0) return Array.Empty<string>();
 
             int slash = full.LastIndexOf('\\', star);
             if (slash <= 0) return Array.Empty<string>();
 
             string parent = full[..slash];
-            string mask = full[(slash + 1)..];
+
+            /* 掩码只取 '*' 所在的那一段；它后面的固定段原样拼回每个结果。 */
+            int nextSlash = full.IndexOf('\\', star);
+            string mask = nextSlash < 0 ? full[(slash + 1)..] : full[(slash + 1)..nextSlash];
+            string tail = nextSlash < 0 ? "" : full[nextSlash..];
+
             if (!DirExists(parent)) return Array.Empty<string>();
 
-            return Directory.EnumerateDirectories(parent, mask, SearchOption.TopDirectoryOnly)
-                .Take(16)
-                .ToList();
+            var list = new List<string>();
+            foreach (string dir in Directory.EnumerateDirectories(parent, mask, SearchOption.TopDirectoryOnly)
+                         .Take(16))
+            {
+                string candidate = tail.Length == 0 ? dir : dir + tail;
+                if (DirExists(candidate)) list.Add(candidate);
+            }
+            return list;
         }
         catch
         {

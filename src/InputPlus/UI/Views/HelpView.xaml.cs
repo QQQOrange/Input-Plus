@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using InputPlus.Core.Input;
+using InputPlus.UI.Controls;
 
 namespace InputPlus.UI.Views;
 
@@ -37,6 +38,16 @@ public partial class HelpView : UserControl
     public HelpView()
     {
         InitializeComponent();
+
+        /* 分类 = 只搜哪一列。
+         * 「全部」放第一项并且是默认值：这个页面的关键词从来都是"想起来什么打什么"
+         * （有时是键名，有时是功能名，有时是说明里的一句话）。默认收窄成只搜按键列
+         * 的话，用户打「音量」会一条都搜不到 —— 那不是统一外观该带来的变化。 */
+        FilterSearch.SetCategories(
+            new SearchCategory(Loc.T("全部"), "all"),
+            new SearchCategory(Loc.T("按键"), "key"),
+            new SearchCategory(Loc.T("功能"), "action"));
+
         /* 全部功能一览动辄近千条（每个可发送的键、每个搜索引擎、每个直达链接
          * 都是一条动作），默认折叠时就别生成它们 —— 展开再建，省下每次进页的卡顿。 */
         ActionCatalogExpander.Expanded += (_, _) =>
@@ -79,10 +90,10 @@ public partial class HelpView : UserControl
         UpdateTriggerHint();
         BuildGuide();
         RefreshActionCatalog();
-        Build(FilterBox.Text?.Trim() ?? "");
+        Build(FilterSearch.SearchText?.Trim() ?? "");
     }
 
-    private void OnFilterChanged(object sender, TextChangedEventArgs e) => Build(FilterBox.Text?.Trim() ?? "");
+    private void OnFilterChanged(object sender, RoutedEventArgs e) => Build(FilterSearch.SearchText?.Trim() ?? "");
 
     /// <summary>顶部提示改为**当前实际使用的触发键**，不再写死 CapsLock。</summary>
     private void UpdateTriggerHint()
@@ -457,7 +468,7 @@ public partial class HelpView : UserControl
             Background = (Brush)FindResource("Brush.SurfaceAlt"),
             BorderBrush = (Brush)FindResource("Brush.Border"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusControl),
             Padding = new Thickness(12, 10, 12, 10),
             Margin = new Thickness(2, 0, 0, 6),
             Child = new TextBlock
@@ -566,6 +577,26 @@ public partial class HelpView : UserControl
         UpdateLayout();
     }
 
+    /// <summary>
+    /// 速查表的关键词匹配。分类决定只搜哪一列：
+    /// 「按键」只认「层前缀 + 键名」，打 <c>F1</c> 时不会因为某条功能说明里
+    /// 恰好有 "F1" 就把别的键也留下来；「功能」认功能名和说明 —— 说明就是这个
+    /// 功能怎么用，用户搜说明时找的仍然是"哪个功能"，把它拆成第三列没有意义。
+    /// </summary>
+    private bool MatchesFilter(string filter, string combo, string title, string desc)
+    {
+        bool byKey = combo.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        if (FilterSearch.SelectedTag == "key") return byKey;
+        if (FilterSearch.SelectedTag == "action")
+            return title.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || desc.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+        // 全部（默认）：沿用原来的多列 OR
+        return byKey
+            || title.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || desc.Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void Build(string filter)
     {
         if (_host == null) return;
@@ -612,10 +643,7 @@ public partial class HelpView : UserControl
 
                 string desc = DescribeBinding(binding, info);
 
-                if (filter.Length > 0 &&
-                    !combo.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
-                    !info.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
-                    !desc.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                if (filter.Length > 0 && !MatchesFilter(filter, combo, info.Title, desc))
                     continue;
 
                 if (!byCategory.TryGetValue(info.DisplayCategory, out var list))

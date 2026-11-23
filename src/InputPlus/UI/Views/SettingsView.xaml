@@ -96,7 +96,7 @@
                         </StackPanel>
 
                         <Border x:Name="UsageDetailPanel" Visibility="Collapsed" Margin="0,10,0,0"
-                                Padding="12,10" CornerRadius="9" Background="{DynamicResource Brush.SurfaceAlt}">
+                                Padding="12,10" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.SurfaceAlt}">
                             <StackPanel>
                                 <TextBlock Text="{loc:T '动作排行'}" Style="{StaticResource Text.Tertiary}" />
                                 <ItemsControl x:Name="UsageRankList" Margin="0,6,0,0" />
@@ -243,7 +243,7 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="{loc:T '以管理员身份启动'}" Style="{StaticResource Text.Body}" />
                                     <Border x:Name="AdminBadge" Margin="8,0,0,0" Padding="7,1"
-                                            CornerRadius="5" Background="{DynamicResource Brush.WarningSoft}"
+                                            CornerRadius="{DynamicResource Radius.Small}" Background="{DynamicResource Brush.WarningSoft}"
                                             BorderBrush="{DynamicResource Brush.WarningBorder}" BorderThickness="1"
                                             VerticalAlignment="Center">
                                         <TextBlock x:Name="AdminBadgeText" Text="{loc:T '管理员'}" FontSize="10.5"
@@ -538,30 +538,16 @@
                             </StackPanel>
                         </StackPanel>
                         <StackPanel Grid.Column="1" VerticalAlignment="Top">
-                            <!-- 系统字体两三百个，靠翻找不到：上面这行是过滤器，
-                                 显示名与注册表名都匹配（「kai」能找到「楷体」），
-                                 输入即过滤，↓ / Enter 直接进下拉。 -->
-                            <Grid>
-                                <TextBox x:Name="FontSearchBox" Style="{StaticResource TextBox.Base}"
-                                         MinHeight="30" Padding="8,3" FontSize="12"
-                                         TextChanged="OnFontSearchChanged"
-                                         PreviewKeyDown="OnFontSearchKeyDown"
-                                         ToolTip="{loc:T '输入字体名过滤（中文或英文都行），按 ↓ 进入列表'}" />
-                                <TextBlock Text="{loc:T '搜索字体…'}" IsHitTestVisible="False"
-                                           Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12"
-                                           Foreground="{DynamicResource Brush.TextTertiary}">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Collapsed" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding Text, ElementName=FontSearchBox}" Value="">
-                                                    <Setter Property="Visibility" Value="Visible" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
+                            <!-- 统一搜索框（这一页**没有分类**：字体只有"名字"一列，
+                                 中文名和注册表英文名本来就该一起匹配，见 BuildFontList）。
+                                 放大镜和清空叉都在框里，外层不用再画一层占位文字。
+                                 ↓ / Enter 直接进下拉：PreviewKeyDown 挂在控件上，它比
+                                 里面那个输入框先收到隧道事件，所以 Enter 先由这里处理。 -->
+                            <controls:SearchField x:Name="FontSearchBox"
+                                                  Placeholder="{loc:T '搜索字体…'}"
+                                                  SearchChanged="OnFontSearchChanged"
+                                                  PreviewKeyDown="OnFontSearchKeyDown"
+                                                  ToolTip="{loc:T '输入字体名过滤（中文或英文都行），按 ↓ 进入列表'}" />
                             <ComboBox x:Name="FontBox" Margin="0,6,0,0" Style="{StaticResource ComboBox.Base}"
                                       MaxDropDownHeight="420" SelectionChanged="OnFontChanged" />
                         </StackPanel>
@@ -693,7 +679,7 @@
                                     Tag="toast" Click="OnPickToastColor"
                                     ToolTip="{loc:T '提示条的底色（保留透明度）。'}">
                                 <StackPanel Orientation="Horizontal">
-                                    <Border x:Name="ToastColorSwatch" Width="16" Height="16" CornerRadius="4"
+                                    <Border x:Name="ToastColorSwatch" Width="16" Height="16" CornerRadius="{DynamicResource Radius.Tiny}"
                                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
                                     <TextBlock Text="{loc:T '选择颜色'}" Margin="6,0,0,0" VerticalAlignment="Center" />
                                 </StackPanel>

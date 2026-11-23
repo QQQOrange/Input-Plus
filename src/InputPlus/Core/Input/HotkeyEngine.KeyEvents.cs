@@ -364,6 +364,8 @@ public sealed partial class HotkeyEngine
             if (_ctrlDown || _laltDown || _lwinDown || _rwinDown)
             {
                 _snippetBuffer.MarkUntrusted();
+                if (SnippetDebugOn)
+                    CoreLog.Info($"[片段DBG] vk=0x{vk:X2} 带修饰键 mods={SnippetModsText()}，跳过片段观察");
             }
             else if (ObserveSnippet(settings, vk))
             {

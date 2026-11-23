@@ -13,7 +13,7 @@
          只有用户在「设置 → 外观 → 提示条」里调过，才覆盖成写死的颜色与白边。 -->
     <Border x:Name="Card" Style="{StaticResource Overlay.CardAlt}" Margin="14" Padding="16,11">
         <StackPanel Orientation="Horizontal">
-            <Border x:Name="IconBox" Width="22" Height="22" CornerRadius="7"
+            <Border x:Name="IconBox" Width="22" Height="22" CornerRadius="{DynamicResource Radius.Control}"
                     Background="{DynamicResource Brush.OverlayAccentSoft}" VerticalAlignment="Center">
                 <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11"
                            Foreground="{DynamicResource Brush.OverlayAccentText}"

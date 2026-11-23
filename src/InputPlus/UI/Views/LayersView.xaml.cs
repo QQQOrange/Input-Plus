@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using InputPlus.Core.Actions;
 using InputPlus.Core.Input;
 using InputPlus.Core.Settings;
+using InputPlus.UI.Controls;
 using InputPlus.UI.Windows;
 using KeyModifiers = InputPlus.Core.Input.KeyModifiers;
 
@@ -20,7 +21,19 @@ public partial class LayersView : UserControl
     private TriggerKey? _editing;
     private bool _suppress;
 
-    public LayersView() => InitializeComponent();
+    public LayersView()
+    {
+        InitializeComponent();
+
+        /* 分类就是"只搜哪一列"。这三列是这一个下拉里真的能看到的东西：
+         * 显示的是动作名，ToolTip 里有分类，ID 虽然不显示但它就是用户配好的
+         * 那个标识（排查配置时按 ID 找很常用）。默认停在「动作名称」——
+         * 打字通常是找名字，不是找分类。 */
+        DoubleTapSearch.SetCategories(
+            new SearchCategory(Loc.T("动作名称"), "name"),
+            new SearchCategory(Loc.T("分类"), "category"),
+            new SearchCategory(Loc.T("ID"), "id"));
+    }
 
     public void Initialize(AppHost host)
     {
@@ -349,7 +362,7 @@ public partial class LayersView : UserControl
         _doubleTapLoading = true;
         try
         {
-            DoubleTapSearchBox.Text = "";
+            DoubleTapSearch.ClearSearch();
             DoubleTapCategoryBox.Items.Clear();
             DoubleTapActionBox.Items.Clear();
 
@@ -406,7 +419,7 @@ public partial class LayersView : UserControl
     {
         if (DoubleTapActionBox == null) return;
 
-        string search = DoubleTapSearchBox?.Text.Trim() ?? "";
+        string search = DoubleTapSearch?.SearchText.Trim() ?? "";
         string category = (DoubleTapCategoryBox?.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
 
         var actions = (_host?.Actions.Items ?? Array.Empty<ActionInfo>())
@@ -414,10 +427,16 @@ public partial class LayersView : UserControl
 
         if (search.Length > 0)
         {
-            actions = actions.Where(a =>
-                a.Title.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-                || a.DisplayCategory.Contains(search, StringComparison.CurrentCultureIgnoreCase)
-                || a.Id.Contains(search, StringComparison.OrdinalIgnoreCase));
+            /* 分类决定只搜哪一列。旧写法是三列 OR：选「ID」也能被分类名命中，
+             * 选「动作名称」却因为备注/ID 里凑巧有同一个词而多出一堆结果 ——
+             * 有了分类下拉，命中就只认选中那一列。 */
+            Func<ActionInfo, string, bool> matches = DoubleTapSearch?.SelectedTag switch
+            {
+                "category" => (ActionInfo a, string w) => a.DisplayCategory.Contains(w, StringComparison.CurrentCultureIgnoreCase),
+                "id" => (ActionInfo a, string w) => a.Id.Contains(w, StringComparison.OrdinalIgnoreCase),
+                _ => (ActionInfo a, string w) => a.Title.Contains(w, StringComparison.CurrentCultureIgnoreCase),
+            };
+            actions = actions.Where(a => matches(a, search));
         }
         else if (category.Length > 0)
         {
@@ -462,7 +481,11 @@ public partial class LayersView : UserControl
         FillDoubleTapActions();
     }
 
-    private void OnDoubleTapSearchChanged(object sender, TextChangedEventArgs e)
+    /// <summary>
+    /// 关键词变了。分类换了也走这里 —— 统一搜索框在换分类之后会紧跟着再发一次
+    /// SearchChanged，所以不需要单独接 CategoryChanged（接了反而重算两遍）。
+    /// </summary>
+    private void OnDoubleTapSearchChanged(object sender, RoutedEventArgs e)
     {
         if (_doubleTapLoading) return;
         FillDoubleTapActions();

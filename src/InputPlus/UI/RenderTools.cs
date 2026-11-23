@@ -249,6 +249,107 @@ public static class RenderTools
                     Save(wide, Path.Combine(outDir, "attach-menu-wide.png"));
                     wide.Close();
 
+                    /* 二级菜单展开态（v1.5.9.5）：用户报过"二级行太高、每条都带 URL、
+                       左右边距太大、还压在一级菜单上"。这一张必须能一眼看出四件事都改了 ——
+                       只出一级菜单的图，二级那块永远没人验。 */
+                    var subDef = new InputPlus.Core.Scripting.GestureMenuDef
+                    {
+                        Id = "render.sub",
+                        Name = "",
+                        Hint = "",
+                        HideTitle = true,
+                    };
+                    subDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                    {
+                        Title = "历史记录",
+                        Glyph = "\uE81C",
+                        Action = "",
+                        Children = new List<InputPlus.Core.Scripting.GestureMenuItem>
+                        {
+                            new() { Title = "季度总结", Note = "https://example.com/2026/q4-summary.pptx", Action = "" },
+                            new() { Title = "周报模板", Note = "https://example.com/2026/weekly.docx", Action = "" },
+                            new() { Title = "预算表", Note = "https://example.com/2026/budget.xlsx", Action = "" },
+                        },
+                    });
+                    subDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                    {
+                        Title = "命令",
+                        Glyph = "\uE756",
+                        Action = "",
+                        Children = new List<InputPlus.Core.Scripting.GestureMenuItem>
+                        {
+                            new() { Title = "翻译选中文字", Note = "fy", Action = "" },
+                        },
+                    });
+                    subDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                    {
+                        Title = "打开设置",
+                        Glyph = "\uE713",
+                        Action = "openSettings",
+                    });
+                    var subShot = new GestureMenuWindow(subDef, InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = 120,
+                        Top = 120,
+                    };
+                    subShot.Show();
+                    Pump(260);
+                    subShot.OpenSubMenuForRender(0);
+                    Pump(260);
+                    Save(subShot, Path.Combine(outDir, "attach-menu-sub.png"));
+                    subShot.Close();
+
+                    /* 固定文件夹悬停展开（v1.5.10）：先给一页，剩下的滚动出来。
+                       出图要能看见"二级列表有滚动条、且只显示第一页"。 */
+                    string peekDir = Path.Combine(Path.GetTempPath(), "ip-render-peek");
+                    try
+                    {
+                        if (Directory.Exists(peekDir)) Directory.Delete(peekDir, true);
+                        Directory.CreateDirectory(peekDir);
+                        Directory.CreateDirectory(Path.Combine(peekDir, "子文件夹"));
+                        for (int i = 1; i <= 14; i++)
+                            File.WriteAllText(Path.Combine(peekDir, "示例文件-" + i.ToString("00") + ".txt"), "x");
+
+                        var peekDef = new InputPlus.Core.Scripting.GestureMenuDef
+                        {
+                            Id = "render.peek",
+                            Name = "",
+                            Hint = "",
+                            HideTitle = true,
+                        };
+                        peekDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                        {
+                            Title = "文档",
+                            Arg = peekDir,
+                            Action = "openFile",
+                            IconPath = peekDir,
+                        });
+                        peekDef.Items.Add(new InputPlus.Core.Scripting.GestureMenuItem
+                        {
+                            Title = "打开设置",
+                            Glyph = "\uE713",
+                            Action = "openSettings",
+                        });
+
+                        var peekWin = new GestureMenuWindow(peekDef, InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                        {
+                            ShowInTaskbar = false,
+                            WindowStartupLocation = WindowStartupLocation.Manual,
+                            Left = 120,
+                            Top = 120,
+                        };
+                        peekWin.Show();
+                        Pump(260);
+                        peekWin.OpenFolderPeekForRender(0);
+                        Pump(300);
+                        Save(peekWin, Path.Combine(outDir, "attach-menu-folder.png"));
+                        peekWin.Close();
+                        Pump(120);
+                    }
+                    catch (Exception ex) { CoreLog.Warn("渲染文件夹预览失败：" + ex.Message); }
+
                     attach.Close();
                     Pump(120);
 

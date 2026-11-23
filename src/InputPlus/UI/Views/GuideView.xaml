@@ -23,7 +23,7 @@
             </Grid.RowDefinitions>
 
             <!-- 欢迎横幅 -->
-            <Border Grid.Row="0" CornerRadius="14" Padding="26,24" Margin="0,0,0,18">
+            <Border Grid.Row="0" CornerRadius="{DynamicResource Radius.Card}" Padding="26,24" Margin="0,0,0,18">
                 <Border.Background>
                     <!-- 与引导页同一块品牌渐变（Controls.xaml / Brush.BrandHero） -->
                     <StaticResource ResourceKey="Brush.BrandHero" />
@@ -36,7 +36,8 @@
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock Text="{loc:T '让每一个按键，都能变成你的快捷键'}" FontSize="24" FontWeight="SemiBold"
                                    Foreground="White" />
-                        <TextBlock Text="{loc:T '按住触发键就是功能键：字母键移动 / 选择光标，数字键切换窗口，Q 打开搜索面板。'}"
+                        <TextBlock x:Name="HeroSubtitle"
+                                   Text="{loc:T '按住触发键就是功能键：字母键移动 / 选择光标，数字键切换窗口，Q 打开搜索面板。'}"
                                    Foreground="{StaticResource Brush.BrandSubtitle}" FontSize="13.5" Margin="0,9,0,0" TextWrapping="Wrap"
                                    MaxWidth="760" HorizontalAlignment="Left" />
                         <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
@@ -51,13 +52,19 @@
                         </StackPanel>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                        <!-- 两枚键帽都来自当前配置：触发键可能是 F13，Qbar 也可能被改到别的键上。
+                             以前这里写死 Caps + Q，用户改完键位再看这一页就是"照着按没反应"。 -->
                         <Border Style="{StaticResource Keycap}" Background="{StaticResource Brush.BrandOnLight}" Padding="14,10">
-                            <TextBlock Text="Caps" FontWeight="SemiBold" FontSize="15" Foreground="{StaticResource Brush.BrandOnLightText}" />
+                            <TextBlock x:Name="HeroTriggerKeycap" Text="Caps" FontWeight="SemiBold" FontSize="15"
+                                       Foreground="{StaticResource Brush.BrandOnLightText}" />
                         </Border>
-                        <TextBlock Text="+" FontSize="18" Foreground="White" VerticalAlignment="Center" Margin="2,0,4,0" />
-                        <Border Style="{StaticResource Keycap}" Background="{StaticResource Brush.BrandOnLight}" Padding="14,10">
-                            <TextBlock Text="Q" FontWeight="SemiBold" FontSize="15" Foreground="{StaticResource Brush.BrandOnLightText}" />
-                        </Border>
+                        <StackPanel x:Name="HeroQbarRow" Orientation="Horizontal">
+                            <TextBlock Text="+" FontSize="18" Foreground="White" VerticalAlignment="Center" Margin="2,0,4,0" />
+                            <Border Style="{StaticResource Keycap}" Background="{StaticResource Brush.BrandOnLight}" Padding="14,10">
+                                <TextBlock x:Name="HeroQbarKeycap" Text="Q" FontWeight="SemiBold" FontSize="15"
+                                           Foreground="{StaticResource Brush.BrandOnLightText}" />
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -73,7 +80,7 @@
                 <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Border Width="30" Height="30" CornerRadius="9" Background="{DynamicResource Brush.AccentSoft}">
+                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.AccentSoft}">
                                 <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="14" Foreground="{DynamicResource Brush.Accent}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -90,7 +97,7 @@
                 <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Border Width="30" Height="30" CornerRadius="9" Background="{DynamicResource Brush.AccentSoft}">
+                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.AccentSoft}">
                                 <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="14" Foreground="{DynamicResource Brush.Accent}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -121,7 +128,7 @@
 
                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="12" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="1" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
@@ -134,20 +141,20 @@
 
                         <StackPanel Grid.Column="1" Margin="6,0,6,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="12" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="2" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <TextBlock Text="{loc:T '打开 Qbar'}" Style="{StaticResource Text.H3}" Margin="9,0,0,0"
                                            VerticalAlignment="Center" />
                             </StackPanel>
-                            <TextBlock Text="{loc:T '按 Caps+Q：输入程序名直接回车启动，输入关键词回车搜索，输入 =1+2*3 直接算结果。'}"
+                            <TextBlock x:Name="Step2Text" Text="{loc:T '按 Caps+Q：输入程序名直接回车启动，输入关键词回车搜索，输入 =1+2*3 直接算结果。'}"
                                        Style="{StaticResource Text.Secondary}" TextWrapping="Wrap" Margin="0,9,0,0" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="2" Margin="12,0,0,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="12" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="3" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
@@ -184,7 +191,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Margin="0,0,10,10" Padding="12,10" CornerRadius="10"
+                                <Border Margin="0,0,10,10" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
                                         VerticalAlignment="Stretch"
                                         Background="{DynamicResource Brush.SurfaceAlt}"
                                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -193,9 +200,15 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
+                                        <!--
+                                            键帽上的字全部来自当前配置（Core/Actions/QuickKeyHints.cs）：
+                                              · Trigger = 第 1 层实际配的触发键（CapsLock / F13…）；
+                                              · Key     = 真实的组合键（字母、F6，带修饰键时写成 Alt+Q）。
+                                            以前这里写死 "Caps"，用户把触发键改成 F13 之后就对不上了。
+                                        -->
                                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                             <Border Style="{StaticResource Keycap}">
-                                                <TextBlock Text="Caps" FontSize="11.5" FontWeight="SemiBold"
+                                                <TextBlock Text="{Binding Trigger}" FontSize="11.5" FontWeight="SemiBold"
                                                            Foreground="{DynamicResource Brush.TextSecondary}" />
                                             </Border>
                                             <Border Style="{StaticResource Keycap}">
@@ -213,6 +226,13 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+
+                    <!-- 一条绑定都没有时的提示：留一张空白卡片会让人以为页面坏了。
+                         显示/隐藏由 GuideView.RebuildQuickKeys 控制。 -->
+                    <TextBlock x:Name="QuickKeyEmpty" Grid.Row="1" Margin="2,16,0,0"
+                               Text="{loc:T '还没有任何按键绑定 —— 到「按键映射」页给常用的键配一个功能，这里就会显示出来。'}"
+                               Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
+                               Visibility="Collapsed" />
                 </Grid>
             </Border>
         </Grid>

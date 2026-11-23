@@ -22,6 +22,9 @@ internal sealed class QbarQueryContext
     public List<QbarPriorityRule> Rules { get; set; } = new List<QbarPriorityRule>();
     public List<QbarCommand> Commands { get; set; } = new List<QbarCommand>();
 
+    /// <summary>普通关键词是否顺带查正文（来自 Qbar.Content.MergeIntoKeywordSearch）。</summary>
+    public bool MergeContent { get; set; } = true;
+
     public QbarFilterCatalog Catalog
     {
         get
@@ -207,6 +210,14 @@ internal static class QbarSearchEngine
     private const int TierBonusHigh = 120;
     private const int TierBonusLow = -120;
 
+    /// <summary>
+    /// 普通关键词要不要顺带查正文（设置页「正文索引 → 普通关键词也搜正文」）。
+    /// 查询上下文从设置里现搭，所以这里是个"最近一次上下文"的静态快照 ——
+    /// 与 <see cref="QbarTantivyBackend.FacetsEnabled"/> 同类，不做成参数是为了
+    /// 不动后端那条已经稳定的调用签名。
+    /// </summary>
+    internal static bool ContentMergeEnabled { get; private set; } = true;
+
     /// <summary>从设置现搭一份查询上下文。调用方（Providers / 界面后台线程）共用，避免各自抄一遍字段映射。</summary>
     public static QbarQueryContext FromSettings(AppSettings settings)
     {
@@ -218,6 +229,7 @@ internal static class QbarSearchEngine
         context.Filters = qbar.Filters ?? new List<QbarFilter>();
         context.Rules = qbar.Priority ?? new List<QbarPriorityRule>();
         context.Commands = qbar.Commands ?? new List<QbarCommand>();
+        context.MergeContent = qbar.Content?.MergeIntoKeywordSearch ?? true;
         return context;
     }
 
@@ -229,6 +241,8 @@ internal static class QbarSearchEngine
         var total = Stopwatch.StartNew();
         string text = (input ?? "").Trim();
         if (limit <= 0) limit = 12;
+
+        ContentMergeEnabled = context.MergeContent;
 
         var translate = Stopwatch.StartNew();
         QbarTranslateResult translation = QbarQueryTranslator.Translate(text, context.Catalog, DateTime.Now);

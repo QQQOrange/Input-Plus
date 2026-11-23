@@ -63,47 +63,87 @@ public partial class KeysView
         public bool IsAction => ActionId != null;
     }
 
-    private void OnBindingSearchChanged(object sender, TextChangedEventArgs e)
+    private void OnBindingSearchChanged(object sender, RoutedEventArgs e)
     {
-        /* 用户改了关键词：推迟预算重新给满（上一次那几帧的失败跟这次输入无关）。 */
+        /* 用户改了关键词（或换了分类）：推迟预算重新给满（上一次那几帧的失败跟这次输入无关）。 */
         _bindingPopupRetries = 0;
         RefreshBindingSearch();
     }
 
+    /// <summary>搜索框里按回车 = 选第一条候选（下拉已按"键名前缀命中优先"排过序）。</summary>
+    private void OnBindingSearchSubmitted(object sender, RoutedEventArgs e)
+    {
+        if (_bindingHits.Count > 0) ActivateHit(_bindingHits[0]);
+    }
+
+    /// <summary>搜索框里按 Esc 且框已空：收起候选弹层。</summary>
+    private void OnBindingSearchCancelled(object sender, RoutedEventArgs e)
+        => CloseBindingSearch(clear: false);
+
+    /// <summary>
+    /// 只负责「↓ 把焦点送进候选列表」这一件事。
+    ///
+    /// Esc / 回车 由统一搜索框自己发事件（SearchCancelled / SearchSubmitted）——
+    /// 那两个键的语义在控件里已经统一了（先清空、再退出；回车提交），
+    /// 页面这边再拦一次只会和控件打架（比如 Esc 只关弹层、框里的字却不清）。
+    /// </summary>
     private void OnBindingSearchKeyDown(object sender, KeyEventArgs e)
     {
-        switch (e.Key)
+        if (e.Key != Key.Down) return;
+        if (_bindingHits.Count == 0 || !BindingSearchPopup.IsOpen) return;
+
+        /* 把焦点交给第一颗候选按钮：之后 Tab / 方向键在候选之间走，
+           回车由按钮自己触发，跟鼠标点一样。 */
+        BindingSearchList.UpdateLayout();
+        if (BindingSearchList.ItemContainerGenerator.ContainerFromIndex(0) is ContentPresenter cp
+            && FindFocusable(cp) is { } target)
         {
-            case Key.Escape:
-                CloseBindingSearch(clear: true);
-                e.Handled = true;
-                break;
-
-            case Key.Enter:
-                /* 回车 = 选第一条。
-                   下拉已经按"键名前缀命中优先"排过序，所以敲 cap 回车就是 CapsLock。 */
-                if (_bindingHits.Count > 0)
-                {
-                    ActivateHit(_bindingHits[0]);
-                    e.Handled = true;
-                }
-                break;
-
-            case Key.Down:
-                if (_bindingHits.Count > 0 && BindingSearchPopup.IsOpen)
-                {
-                    /* 把焦点交给第一颗候选按钮：之后 Tab / 方向键在候选之间走，
-                       回车由按钮自己触发，跟鼠标点一样。 */
-                    BindingSearchList.UpdateLayout();
-                    if (BindingSearchList.ItemContainerGenerator.ContainerFromIndex(0) is ContentPresenter cp
-                        && FindFocusable(cp) is { } target)
-                    {
-                        target.Focus();
-                        e.Handled = true;
-                    }
-                }
-                break;
+            target.Focus();
+            e.Handled = true;
         }
+    }
+
+    /// <summary>
+    /// 这条绑定属不属于搜索框里选中的分类。
+    ///
+    /// 分类身份用动作表的 <see cref="InputPlus.Core.Actions.ActionInfo.Category"/> 原文
+    /// （和「分类」下拉的 Tag 完全同一个字符串），所以两边不会各说各话。
+    /// 认不出动作的老绑定（动作已被删掉）只在「全部」下出现 —— 否则用户选了「窗口」
+    /// 就再也搜不到那条，只能靠翻键盘找，比不支持分类还难用。
+    /// </summary>
+    private bool BindingInCategory(InputPlus.Core.Settings.KeyBinding? binding, string category)
+    {
+        if (category.Length == 0) return true;
+        if (binding == null) return false;
+
+        string? id = binding.Action;
+        if (string.IsNullOrEmpty(id)) return false;
+
+        return string.Equals(_host?.Actions.Get(id)?.Category, category, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 填搜索框的分类下拉：「全部」+ 动作表里出现过的分类。
+    ///
+    /// 为什么分类来自动作表而不是另写一份常量：加一个宏/一个新动作分类，
+    /// 这里自动多一项，不会出现"新分类在分类下拉里有、在搜索框里没有"。
+    /// </summary>
+    private void BuildSearchCategories()
+    {
+        if (_host == null) return;
+
+        var items = new List<UI.Controls.SearchCategory> { new(Loc.T("全部"), "") };
+
+        var categories = _host.Actions.Items
+            .Where(i => !i.Hidden)
+            .Select(i => i.Category)
+            .Distinct()
+            .ToList();
+
+        foreach (string category in categories)
+            items.Add(new UI.Controls.SearchCategory(Loc.T(category), category));
+
+        BindingSearchBox.SetCategories(items.ToArray());
     }
 
     private void OnBindingSearchPick(object sender, RoutedEventArgs e)
@@ -171,7 +211,8 @@ public partial class KeysView
     /// <summary>按输入内容重建候选列表；空输入直接收起下拉。</summary>
     private void RefreshBindingSearch()
     {
-        string query = BindingSearchBox.Text.Trim();
+        string query = (BindingSearchBox.SearchText ?? "").Trim();
+        string category = BindingSearchBox.SelectedTag ?? "";
 
         if (query.Length == 0)
         {
@@ -185,6 +226,7 @@ public partial class KeysView
         {
             if (binding == null || !binding.IsBound) continue;
             if (string.IsNullOrWhiteSpace(binding.Combo)) continue;
+            if (!BindingInCategory(binding, category)) continue;
 
             string keyText = DescribeCombo(binding.Combo);
 
@@ -211,11 +253,15 @@ public partial class KeysView
             .ToList();
 
         /* 已绑定的键排在前面；还有空位就把全部功能里匹配的补在后面。
-           功能那几条没有 combo（点中不是跳转，而是应用到当前键）。 */
+           功能那几条没有 combo（点中不是跳转，而是应用到当前键）。
+           选了分类时这里也只在那个分类里挑 —— 否则"先筛分类再搜"等于没筛。 */
         if (_bindingHits.Count < MaxHits && _host != null)
         {
             var more = _host.Actions.Items
-                .Where(i => !i.Hidden && MatchesAction(i, query))
+                .Where(i => !i.Hidden)
+                .Where(i => category.Length == 0
+                            || string.Equals(i.Category, category, StringComparison.Ordinal))
+                .Where(i => MatchesAction(i, query))
                 .OrderBy(i => i.Category)
                 .ThenBy(i => i.Title)
                 .Take(MaxHits - _bindingHits.Count)
@@ -418,7 +464,7 @@ public partial class KeysView
         _bindingHits = new List<BindingSearchHit>();
         BindingSearchList.ItemsSource = null;
 
-        if (clear && BindingSearchBox.Text.Length > 0) BindingSearchBox.Text = "";
+        if (clear && (BindingSearchBox.SearchText?.Length ?? 0) > 0) BindingSearchBox.ClearSearch();
     }
 
     /* ── 渲染 / 自检钩子 ────────────────────────────────────────────────
@@ -430,7 +476,7 @@ public partial class KeysView
     /// <summary>渲染用：填上关键词、打开弹层，返回弹层里的内容元素（没有结果时返回 null）。</summary>
     internal FrameworkElement? OpenBindingSearchForRender(string query)
     {
-        BindingSearchBox.Text = query ?? "";
+        BindingSearchBox.SearchText = query ?? "";
         RefreshBindingSearch();
         BindingSearchPopup.UpdateLayout();
         return BindingSearchPopup.IsOpen ? BindingSearchPopup.Child as FrameworkElement : null;
@@ -523,46 +569,34 @@ public partial class KeysView
     /// </summary>
     internal string DescribeBindingSearchField()
     {
-        Rect caret = BindingSearchBox.GetRectFromCharacterIndex(0, false);
-        string caretText = caret.IsEmpty ? "caretX=量不到" : $"caretX={caret.Left:0.#}";
+        TextBox box = BindingSearchBox.InputBox;
+
+        /* 插入符坐标是相对输入框内容区的；图标的右边缘在搜索框坐标系里。
+         * 两边都换算到外层搜索框再比，才是"光标到底有没有排在放大镜后面"。 */
+        Rect caret = box.GetRectFromCharacterIndex(0, false);
+        string caretText = "caretX=量不到";
+        if (!caret.IsEmpty)
+        {
+            Point point = box.TranslatePoint(new Point(caret.Left, 0), BindingSearchBox);
+            caretText = $"caretX={point.X:0.#}";
+        }
 
         string iconText = "图标=没找到";
-        if (BindingSearchBox.Parent is Panel panel)
+        if (BindingSearchBox.FindName("SearchGlyph") is TextBlock glyph)
         {
-            foreach (UIElement child in panel.Children)
-            {
-                if (child is TextBlock tb && tb.Text == "\uE721")
-                {
-                    Point origin = tb.TranslatePoint(new Point(0, 0), BindingSearchBox);
-                    iconText = $"图标x={origin.X:0.#}..{origin.X + tb.ActualWidth:0.#}";
-                    break;
-                }
-            }
+            Point origin = glyph.TranslatePoint(new Point(0, 0), BindingSearchBox);
+            iconText = $"图标x={origin.X:0.#}..{origin.X + glyph.ActualWidth:0.#}";
         }
 
-        var host = BindingSearchBox.Template?.FindName("PART_ContentHost", BindingSearchBox) as FrameworkElement;
-        string hostText = host == null
-            ? "content host=没找到"
-            : $"host={host.GetType().Name} pad={host.Margin} "
-              + $"actual={host.ActualWidth:0.#} x={(host.TranslatePoint(new Point(0, 0), BindingSearchBox)).X:0.#}";
-        string viewText = "view=没量到";
-        if (host is System.Windows.Controls.ScrollViewer sv && sv.Content is FrameworkElement view)
-        {
-            Point vp = view.TranslatePoint(new Point(0, 0), BindingSearchBox);
-            viewText = $"view={view.GetType().Name} margin={view.Margin} x={vp.X:0.#} w={view.ActualWidth:0.#} "
-                     + $"svpad={sv.Padding} hoff={sv.HorizontalOffset:0.#} "
-                     + $"extent={sv.ExtentWidth:0.#} viewport={sv.ViewportWidth:0.#} "
-                     + $"boxHa={BindingSearchBox.HorizontalContentAlignment} "
-                     + $"align={BindingSearchBox.TextAlignment}";
-        }
         string probes = "";
         q(0); q(1); q(2);
         void q(int i)
         {
-            Rect rc = BindingSearchBox.GetRectFromCharacterIndex(Math.Min(i, BindingSearchBox.Text.Length), false);
+            Rect rc = box.GetRectFromCharacterIndex(Math.Min(i, box.Text.Length), false);
             probes += $" i{i}={(rc.IsEmpty ? "空" : rc.Left.ToString("0.#"))}";
         }
-        return $"Padding.Left={BindingSearchBox.Padding.Left:0.#} 文本长度={BindingSearchBox.Text.Length} {iconText} {caretText}{probes} {hostText} {viewText}";
+
+        return $"Padding.Left={box.Padding.Left:0.#} 文本长度={box.Text.Length} {iconText} {caretText}{probes}";
     }
 
     /// <summary>渲染用：收尾（清空输入、收起弹层）。</summary>

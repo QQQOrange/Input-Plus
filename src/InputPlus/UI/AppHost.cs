@@ -462,6 +462,10 @@ public sealed partial class AppHost : IDisposable
         Engine.Start(installHook: !hookHostReady);
         if (Settings.Global.ShowTrayIcon) CreateTray();
 
+        /* 正文索引进度：右下角常驻一条，建完换完成提示（见 IndexProgressToast）。 */
+        try { Core.Qbar.Content.ContentIndex.ProgressChanged += OnContentIndexProgress; }
+        catch (Exception ex) { CoreLog.Swallow(ex, "订阅正文索引进度"); }
+
         /* 文件对话框浮层：装 WinEvent 监听 + 热键。诊断模式（--selftest/--render…）
          * 一律不装 —— 它们没有真实桌面，装了只会和自检互相干扰。 */
         if (!Core.CliFlags.IsDiagnostic(Environment.GetCommandLineArgs().Skip(1)))

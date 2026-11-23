@@ -47,7 +47,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0" Width="30" Height="30" CornerRadius="9"
+                                    <Border Grid.Column="0" Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}"
                                             Background="{DynamicResource Brush.AccentSoft}"
                                             VerticalAlignment="Center">
                                         <TextBlock Text="&#xE945;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -153,7 +153,7 @@
                             </Border>
                             <Border x:Name="RecBadgeRec" Visibility="Collapsed"
                                     Background="{DynamicResource Brush.DangerSoft}" BorderBrush="{DynamicResource Brush.DangerBorder}" BorderThickness="1"
-                                    CornerRadius="6" Padding="7,2" VerticalAlignment="Center">
+                                    CornerRadius="{DynamicResource Radius.Small}" Padding="7,2" VerticalAlignment="Center">
                                 <TextBlock Text="{loc:T '● 录制中'}" FontSize="11.5" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Brush.Danger}" />
                             </Border>
@@ -266,7 +266,7 @@
                                         </Grid.ColumnDefinitions>
                                         <!-- 播放中的当前步：左侧亮条 -->
                                         <Border x:Name="NowBar" Grid.Column="0" Width="3" Height="15"
-                                                CornerRadius="2" Margin="0,0,7,0"
+                                                CornerRadius="{DynamicResource Radius.Tiny}" Margin="0,0,7,0"
                                                 Background="{DynamicResource Brush.Accent}"
                                                 Visibility="Collapsed" />
                                         <TextBlock x:Name="OrderText" Grid.Column="1" Text="{Binding Order}"
@@ -302,7 +302,7 @@
 
                     <!-- 选中步骤的编辑 + 插入 -->
                     <StackPanel Grid.Row="3" Margin="0,10,0,0">
-                        <Border x:Name="StepEditor" Padding="12,9" CornerRadius="10"
+                        <Border x:Name="StepEditor" Padding="12,9" CornerRadius="{DynamicResource Radius.Control}"
                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                                 Visibility="Collapsed">

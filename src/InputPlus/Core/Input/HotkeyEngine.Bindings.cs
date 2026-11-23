@@ -19,6 +19,12 @@ public sealed partial class HotkeyEngine
     /// <summary>挂起那一刻的缓冲代际号：变了就说明用户又动了手，这次展开作废。</summary>
     private int _snippetPendingGen;
 
+    /// <summary>挂起那一刻输入法是不是在组字（决定展开时要不要先取消组字）。</summary>
+    private bool _snippetPendingComposing;
+
+    /// <summary>挂起那一刻输入法组字串的长度（= 被吞掉、还没上屏的字母数）。</summary>
+    private int _snippetPendingCompositionChars;
+
     /// <summary>
     /// 定时器每 tick 调一次：等待窗口过了、而且缓冲没再变（说明用户没继续打），
     /// 就把刚才挂起的那条片段展开。
@@ -36,11 +42,147 @@ public sealed partial class HotkeyEngine
          * 这里以前是"把缓冲读出来、跟挂起时的字符串比一遍"。改成比代际号：
          * 一个整数就够，不必为了比较再拷一次字符串（钩子线程和这里会抢同一份内容）。 */
         if (_snippetBuffer.Generation != _snippetPendingGen) return;
-        ExpandSnippet(pending.Value);
+        ExpandSnippet(pending.Value, _snippetPendingComposing, _snippetPendingCompositionChars);
     }
 
-    /// <summary>真正执行展开（删触发词 + 打内容）。</summary>
-    private void ExpandSnippet(SnippetMatch match)
+    /// <summary>
+    /// 补删"触发词残留"。
+    ///
+    /// 为什么需要：组字期间的 Backspace 会被输入法拿去删拼音，屏幕上那几个字一个都没少；
+    /// 而我们的 deleteCount 是按"应该删几个"算的，不是按"实际删掉几个"。所以删完必须
+    /// 用控件文本核对一次 —— 尾巴上还剩几个字就补删几个。
+    ///
+    /// 安全边界：
+    ///   · 只在尾巴**以触发词的后缀结尾**时才删，且至少 2 个字（单字太容易误伤正文）；
+    ///   · 每轮重新读一次，读不到就停；
+    ///   · 最多 3 轮，宁可留一点残字也不无限退格。
+    /// </summary>
+    private void RemoveSnippetLeftover(Snippet hit)
+    {
+        string foldedTrigger = SnippetMatcher.Fold(hit.Trigger ?? "");
+        if (foldedTrigger.Length < 2) return;
+
+        for (int round = 0; round < 4; round++)
+        {
+            System.Threading.Thread.Sleep(70);
+            try
+            {
+                if (!TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string tail)) return;
+                string foldedTail = SnippetMatcher.Fold(SnippetMatcher.Trim(tail));
+                int keep = TrailingTriggerLength(foldedTail, foldedTrigger);
+                /* 至少 3 个字才补删（触发词本身更短时按它的长度）：
+                 * 2 个字的巧合太多 —— 前一截正文正好以 "ym" 结尾不该被当成残留。 */
+                int minKeep = Math.Min(foldedTrigger.Length, 3);
+                if (keep < minKeep) return;
+
+                for (int i = 0; i < keep; i++)
+                {
+                    InputSender.Tap(0x08);
+                    SnippetDeletesForTest++;
+                    System.Threading.Thread.Sleep(6);
+                }
+                CoreLog.Info($"[片段] 触发词残留 {keep} 字，补删一轮（{hit.Trigger}）");
+            }
+            catch (Exception ex)
+            {
+                CoreLog.Swallow(ex, "补删触发词残留");
+                return;
+            }
+        }
+
+        /* 四轮之后还在 = 这个程序的输入法不听劝。留一份**明文**现场
+         * （%TEMP%\clp-snippet-last.txt）：日志是加密的，用户报"没删掉"时
+         * 这一行能直接看出是哪个进程、尾巴上剩了什么。 */
+        try
+        {
+            if (TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string last)
+                && TrailingTriggerLength(SnippetMatcher.Fold(SnippetMatcher.Trim(last)), foldedTrigger) >= 2)
+            {
+                string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                              + " 触发词残留：" + hit.Trigger
+                              + " | 前台=" + (ForegroundProcess ?? "-")
+                              + " | 尾巴=" + last
+                              + Environment.NewLine;
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clp-snippet-last.txt"),
+                    line, System.Text.Encoding.UTF8);
+            }
+        }
+        catch { /* 诊断写不出去不影响输入 */ }
+    }
+
+    /// <summary>尾巴以触发词的多长后缀结尾（0 = 没残留）。折叠后的比较，与匹配同一套规则。</summary>
+    private static int TrailingTriggerLength(string foldedTail, string foldedTrigger)
+    {
+        int max = Math.Min(foldedTail.Length, foldedTrigger.Length);
+        for (int k = max; k >= 2; k--)
+        {
+            if (foldedTail.EndsWith(foldedTrigger[^k..], StringComparison.Ordinal)) return k;
+        }
+        return 0;
+    }
+    /// <summary>
+    /// 让输入法把当前组字串**提交**掉，再用控件文本的差值算出它提交了几个字符。
+    ///
+    /// 为什么这是通用的路：组字内容在 TSF 程序里拿不到（ImmGetContext 返回的上下文
+    /// 没有 GCS_COMPSTR），但"按一下空格 → 输入法把候选落到控件里"对所有 IME 都成立。
+    /// 提交之后控件里多了几个字，就删几个字 —— 不猜触发词长度，也不碰 Esc。
+    ///
+    /// 返回 false = 读不到控件文本（自绘控件 / 权限更高的窗口），调用方退回 IMM32。
+    /// </summary>
+    private bool TryCommitImeComposition(out int committedChars)
+    {
+        committedChars = 0;
+        try
+        {
+            if (!TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string before, out int beforeLen)) return false;
+
+            /* 读回来的是窗口标题（Electron / Chromium）：前后两次都等于标题、差值恒为 0，
+             * 用它算"输入法吐了几个字"等于每次都得 0 —— 旧实现据此只回删 1 个字。 */
+            if (TextMirror.LooksLikeWindowTitle(before)) return false;
+
+            /* 注入一个空格：它带本程序的注入标记，自己的钩子会直接放行（不吞、不展开），
+             * 对前台来说和用户按了一下空格完全一样 —— 输入法据此提交组字串。 */
+            InputSender.Tap(0x20);
+            System.Threading.Thread.Sleep(70);
+
+            if (!TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string after, out int afterLen)) return false;
+
+            /* 用**整段长度**求差，不用尾巴长度：控件里超过 64 字时尾巴永远是 64 字，
+             * 差值恒为 0（第一版踩过）。长度来自 WM_GETTEXTLENGTH，同一批消息里就有。 */
+            int delta = afterLen - beforeLen;
+            if (delta <= 0) return false;      // 没量到（或文本变短）：这次读数不可信
+
+            /* 组字还在 = 输入法没吃这一下（或它把空格当成了分隔符）。
+             * 此时"提交几个字"无从判断，交给调用方走 IMM32 / 放弃。 */
+            if (ImeCompositionText().Length > 0) return false;
+
+            _ = after;
+            committedChars = delta;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 这个窗口能不能安全处理"输入法组字"：要么读得到控件文本（提交后算差值），
+    /// 要么有 IMM 上下文（能直接取消）。两条都没有时，空格不该被吞掉 ——
+    /// 吞了也展开不了，用户只会觉得"空格没反应"。
+    /// </summary>
+    private static bool CanHandleImeComposition()
+        => TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string tail) && tail.Length > 0
+           && !TextMirror.LooksLikeWindowTitle(tail)
+           || CanCancelImeComposition();
+
+    /// <summary>
+    /// 真正执行展开（删触发词 + 打内容）。
+    ///
+    /// <paramref name="composing"/>：这一瞬间输入法是不是正在组字。
+    /// 中文（拼音）模式下触发词的字母被输入法吃进组字串，屏幕上只剩前缀那一个字
+    /// （`；`）—— 此时按"触发词长度"回删会删掉正文、还会把拼音留在输入法里。
+    /// <paramref name="compositionChars"/>：组字串里有几个字符（0 = 读不到）。
+    /// </summary>
+    private void ExpandSnippet(SnippetMatch match, bool composing = false, int compositionChars = 0)
     {
         var hit = match.Snippet;
 
@@ -82,37 +224,178 @@ public sealed partial class HotkeyEngine
                  * 否则自检里"缓冲变了就不展开"这条用例观察不到区别。 */
                 SnippetMatchesForTest++;
 
+                if (SnippetDebugOn)
+                {
+                    CoreLog.Info($"[片段DBG] 开始展开 {hit.Trigger}：删除={deleteCount} 内容={text.Length} 字 " +
+                                 $"可编辑={EditableForTest()} 前台={ForegroundProcess ?? "-"}");
+                }
+
                 /* 焦点不在可编辑控件上就放弃展开：
                  * 否则 Backspace 会去删别的东西、内容会打到别处。
                  * 判断放在队列里（STA），不能放钩子里。 */
                 if (!EditableForTest()) return;
 
+                /* 回删之前的控件文本快照：只有诊断用一个用途（写 %TEMP% 的明文现场），
+                 * 读不到也不影响展开 —— 删多少仍然按触发词长度/组字判定来。 */
+                bool mirrorReadable = TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string mirrorBefore);
+
+                /* 输入法正在组字：屏幕上只有前缀那一个字，触发词的字母还在输入法里。
+                 * 具体走哪条路见下面 composing 分支（顺序在 2026-11-23 改过：
+                 * 先 IMM 取消，再"提交 + 量差值"，最后按触发词长度兜底）。
+                 * 为什么绝不发 Esc：微信 / QQ 用 Esc 关当前对话窗口（v1.5.8.2 事故）。 */
+                if (composing)
+                {
+                    /* 分支顺序按"能不能算准"排，不按"哪条看着更聪明"排：
+                     *   ① 组字串读得到 → 那几个字母**从没上过屏**（组字串就是还没落进控件的字），
+                     *      取消组字之后屏幕上只剩前缀，回删前缀那 1 个字就干净。最准，也不发按键；
+                     *   ② 读不到组字串、但控件文本读得到 → 让输入法提交，再用整段长度差算它吐了几个字；
+                     *   ③ 都不可测 → 按触发词长度回删（v1.5.8.2 的老行为，至少不会只删 1 个字）。
+                     *
+                     * 为什么不再"先提交再量"：Chromium / Electron 里 WM_GETTEXT 拿到的是**窗口标题**，
+                     * 前后差值恒为 0，旧实现据此只回删 1 个字 —— 屏幕上的 `;ipdv` 原样留着，
+                     * 用户看到的就是"关键字没删、只删了空格"（2026-11-23 现场）。
+                     *
+                     * ⚠ 判"取消成功"必须同时看两件事：我们**亲手取消掉了一个非空组字串**，
+                     * 而且现在组字串是空的。只看后者会把"输入法已经把字母提交进控件"
+                     * 也当成"取消成功"，于是只删掉前缀、`ipdv` 留在屏幕上 ——
+                     * 那句「一个别名我第一次输入是失败的，第二次才顺利触发」就是这么来的。 */
+                    bool compositionGone = false;
+                    bool cancelledComposition = false;
+                    int committed = 0;
+
+                    if (compositionChars > 0)
+                    {
+                        cancelledComposition = CancelImeComposition(out bool hadComposition) && hadComposition;
+                        compositionGone = ImeCompositionText().Length == 0;
+                        if (compositionGone) System.Threading.Thread.Sleep(45);
+                    }
+
+                    /* 组字串已经没了、我们也没取消掉什么 → 字母是输入法**提交**掉的
+                     * （空格那一下最常见）。它已经在控件里了，这时再去"补一个空格催提交"
+                     * 只会往正文里多打一个空格，所以只在组字串还在时才试提交。 */
+                    if (!compositionGone && TryCommitImeComposition(out int n) && n > 0)
+                    {
+                        committed = n;
+                        compositionGone = true;
+                    }
+
+                    deleteCount = DecideComposingDeletes(
+                        cancelledComposition, compositionGone, committed,
+                        compositionChars, match.ConsumedLength, PrefixChars(match));
+
+                    CoreLog.Info($"[片段] 输入法组字（{hit.Trigger}）：取消={cancelledComposition} " +
+                                 $"组字已消失={compositionGone} 提交={committed} 字，回删 {deleteCount}");
+                }
+
                 for (int i = 0; i < deleteCount; i++)
                 {
                     InputSender.Tap(0x08);          // Backspace
                     SnippetDeletesForTest++;
-                    System.Threading.Thread.Sleep(6);
+                    /* 20ms 而不是 6ms：目标程序（尤其 Chromium 系）在极短间隔里
+                     * 会把连续合成按键合并/丢弃，用户看到的就是"一个字符都没删"。 */
+                    System.Threading.Thread.Sleep(20);
                 }
-                InputSender.Text(text);
 
-                /* 替用户补一下 Shift：别名用英文打、正文多半是中文，
-                 * 不补的话每展开一次都得手动按 Shift 切回输入法。
-                 * 等 40ms 让前面的注入文本先被前台吃掉，再切换输入法状态。 */
+                /* 回删之后**再核对一遍**：中文输入法在组字期间会把 Backspace 吃掉
+                 * （那是"删拼音"），于是触发词原样留在屏幕上 —— 用户看到的是
+                 * `;asym` 还在、正文接在后面。这里读一次控件文本，只要尾巴上还残留
+                 * 触发词的后缀就补删，最多 3 轮。 */
+                RemoveSnippetLeftover(hit);
+
+                /* 留一份**明文**现场（最长 256KB，超过就重写）：
+                 * 日志本身是加密的，用户报"没删掉"时这一行能直接看出
+                 * 删了几个、组字判定是什么、控件文本读不读得到。 */
                 try
                 {
-                    if (_settings().Hotstring?.RestoreImeAfterExpand == true)
+                    TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string afterTail);
+                    string line = DateTime.Now.ToString("HH:mm:ss")
+                                  + " 展开=" + hit.Trigger
+                                  + " 删除=" + deleteCount
+                                  + " 组字=" + composing
+                                  + " 镜像=" + (mirrorReadable ? "可读" : "不可读")
+                                  + " 前=[" + mirrorBefore + "]"
+                                  + " 后=[" + afterTail + "]"
+                                  + " 前台=" + (ForegroundProcess ?? "-")
+                                  + Environment.NewLine;
+                    string tracePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clp-snippet-last.txt");
+                    try
                     {
-                        System.Threading.Thread.Sleep(40);
-                        InputSender.Tap(0x10);          // VK_SHIFT
+                        if (System.IO.File.Exists(tracePath)
+                            && new System.IO.FileInfo(tracePath).Length > 256 * 1024)
+                            System.IO.File.Delete(tracePath);
                     }
+                    catch { }
+                    System.IO.File.AppendAllText(tracePath, line, System.Text.Encoding.UTF8);
                 }
-                catch (Exception ex) { CoreLog.Swallow(ex, "展开后切回输入法"); }
+                catch { /* 诊断写不出去不影响输入 */ }
+                /* 组字路径下**必须**走 Unicode 注入：短 ASCII 正文默认是"真实按键逐字敲"，
+                 * 而那些按键会先被输入法拿走变成拼音 —— 屏幕上什么都不出现，
+                 * 用户看到的就是"窗口不关了，但别名也没展开"（v1.5.8.2 的第二种表现）。
+                 * Unicode 注入不经过键盘布局与输入法，中文/英文都能直接落字。 */
+                InputSender.Text(text, composing ? InputSender.TextMode.Unicode : InputSender.TextMode.Auto);
+
+                /* 展开后**不主动改输入法状态** —— 连"替用户按一下 Shift"也不做。
+                 *
+                 * 这里原来有两层：① 把"前缀阶段偷偷切走的输入语言"切回来；
+                 * ② 用户显式勾选「展开后自动按一下 Shift」时补一下 Shift。
+                 * ① 已经整条删掉（见 HotkeyEngine.Triggers.cs 里的说明）；② 也删掉了 ——
+                 * 用户的原话是「input plus 不应该能够自己换输入法」，而按 Shift 就是换
+                 * 中/英模式，勾选框只是把"软件替你换"写在了明面上，结果一样：
+                 * 打完别名，用户的中文输入法自己变成了英文。
+                 *
+                 * 设置项 RestoreImeAfterExpand 保留字段只为读旧配置不报错，不再有任何执行路径。 */
 
                 CoreLog.Info($"片段展开：{hit.Trigger} → {text.Length} 字");
 
             }
             catch (Exception ex) { CoreLog.Warn("片段展开失败：" + ex.Message); }
         });
+    }
+
+    /// <summary>
+    /// 触发词里"前缀"占几个字：`;ipdv` → 1，多符号前缀 `;;x` → 2。
+    ///
+    /// 组字路径下要单独删前缀（字母已经被输入法取消掉了），所以这个数不能写死 1。
+    /// </summary>
+    private int PrefixChars(SnippetMatch match)
+    {
+        try
+        {
+            int consumed = Math.Max(1, match.ConsumedLength);
+            var prefixes = _settings().Hotstring?.EffectivePrefixes;
+            if (prefixes == null || prefixes.Count == 0) return 1;
+
+            string key = SnippetPrefixOps.StripAny(match.Snippet.Trigger, prefixes);
+            return Math.Clamp(consumed - SnippetMatcher.Fold(key).Length, 1, 4);
+        }
+        catch { return 1; }
+    }
+
+    /// <summary>
+    /// 组字路径下到底该回删几个字符（纯函数，自检逐条钉住）。
+    ///
+    /// 这个数决定"删掉的是触发词、还是用户的正文"，所以只按**观察到的事实**算：
+    ///   · <paramref name="cancelledComposition"/>：我们亲手取消掉了一个**非空**组字串
+    ///     → 那几个字母从没上过屏，屏幕上只剩前缀那一个字；
+    ///   · <paramref name="compositionGone"/>：现在组字串是空的；
+    ///   · <paramref name="committedChars"/>：让输入法提交之后它吐了几个字。
+    ///
+    /// 最容易写错的是"组字串没了、但我们没取消"：那不是"字母被取消了"，而是
+    /// **输入法已经把它提交进了控件**（屏幕上确实有 `ipdv`）。以前这里一律按
+    /// "取消成功"处理、只删前缀，用户看到的就是「第一次输入失败」。
+    /// </summary>
+    internal static int DecideComposingDeletes(
+        bool cancelledComposition, bool compositionGone, int committedChars,
+        int compositionChars, int consumedLength, int prefixChars)
+    {
+        int prefix = Math.Max(1, prefixChars);
+        int consumed = Math.Max(1, consumedLength);
+
+        if (cancelledComposition && compositionGone) return prefix;      // 字母真的被取消掉了
+        if (compositionGone && committedChars > 0) return prefix + committedChars;
+        if (compositionGone) return consumed;                            // 提交掉了：字母已经在屏幕上
+        if (compositionChars > 0) return prefix + Math.Min(compositionChars, consumed);
+        return consumed;
     }
 
     /// <summary>动作队列投递：自检可以接管，用来在"已排队、未执行"这段窗口里插一脚。</summary>

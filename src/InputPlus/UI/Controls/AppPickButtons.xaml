@@ -12,7 +12,7 @@
         有的只有准星图标，用户根本看不出那是"点一下目标窗口"。现在一处定义、
         四处引用，分隔线明确表示"这是两个并列的入口"，不是一整个按钮。
     -->
-    <Border CornerRadius="9" BorderThickness="1"
+    <Border CornerRadius="{DynamicResource Radius.Control}" BorderThickness="1"
             BorderBrush="{DynamicResource Brush.BorderStrong}"
             Background="{DynamicResource Brush.Surface}"
             Padding="3" VerticalAlignment="Center" HorizontalAlignment="Stretch">

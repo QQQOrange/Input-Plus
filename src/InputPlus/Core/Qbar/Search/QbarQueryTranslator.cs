@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -29,6 +29,23 @@ internal sealed class QbarSearchSpec
     internal List<string> Terms { get; } = new List<string>();
     internal List<string> Phrases { get; } = new List<string>();
     internal List<string> NegTerms { get; } = new List<string>();
+
+    /// <summary>
+    /// 只查正文的词。`content:销售额` 会落到这里；它与 <see cref="Terms"/> 分开存，
+    /// 因为两者查的是**两套索引**：名字/路径一套，正文另一套。
+    /// </summary>
+    internal List<string> ContentTerms { get; } = new List<string>();
+
+    /// <summary>只查正文的短语（引号形式）。</summary>
+    internal List<string> ContentPhrases { get; } = new List<string>();
+
+    /// <summary>
+    /// 只看正文：这次查询只允许正文索引给结果（`content:` 或「只看正文」过滤器）。
+    /// 与 <see cref="ContentTerms"/> 的区别：那个表示"这个词只查正文"，
+    /// 这个表示"整条查询都只查正文"（词在 <see cref="Terms"/> 里）。
+    /// </summary>
+    internal bool ContentOnly { get; set; }
+
     internal HashSet<string> Extensions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     internal HashSet<string> NegExtensions { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     internal List<string> PathPins { get; } = new List<string>();
@@ -48,8 +65,11 @@ internal sealed class QbarSearchSpec
     /// <summary>regex: 的正则串。必须显式开启，且只作用于这一条。</summary>
     internal string RegexText { get; set; } = "";
 
-    /// <summary>content: 请求：当前索引不含正文，翻译层要明说"做不到"，而不是假装搜了。</summary>
-    internal bool ContentRequested { get; set; }
+    /// <summary>
+    /// 用户写过 `content:`。正文索引没就绪时，翻译层要说明"这次按文件名检索"，
+    /// 而不是让用户以为搜的是正文。
+    /// </summary>
+    internal bool ContentRequested => ContentTerms.Count > 0 || ContentPhrases.Count > 0;
 
     /// <summary>命中的过滤器 Id / 显示名，用来画 chip 和写调试面板。</summary>
     internal List<string> AppliedFilterIds { get; } = new List<string>();
@@ -69,9 +89,11 @@ internal sealed class QbarSearchSpec
         Extensions.Count == 0 && NegExtensions.Count == 0 && NegTerms.Count == 0 &&
         Phrases.Count == 0 && PathPins.Count == 0 && NegPathPins.Count == 0 &&
         MinSize < 0 && MaxSize < 0 && MinDay < 0 && MaxDay < 0 &&
+        ContentTerms.Count == 0 && ContentPhrases.Count == 0 && !ContentOnly &&
         !FilesOnly && !FoldersOnly && Glob.Length == 0 && RegexText.Length == 0;
 
-    internal bool HasKeywords => Terms.Count > 0 || Phrases.Count > 0;
+    internal bool HasKeywords => Terms.Count > 0 || Phrases.Count > 0
+                                || ContentTerms.Count > 0 || ContentPhrases.Count > 0;
 
     internal string Describe()
     {
@@ -89,6 +111,7 @@ internal sealed class QbarSearchSpec
         if (Glob.Length > 0) sb.Append("glob=").Append(Glob).Append(' ');
         if (RegexText.Length > 0) sb.Append("regex=").Append(RegexText).Append(' ');
         if (AppliedFilterNames.Count > 0) sb.Append("filter=").Append(string.Join("|", AppliedFilterNames)).Append(' ');
+        if (ContentOnly) sb.Append("content-only ");
         if (CommandKeyword.Length > 0) sb.Append("command=").Append(CommandKeyword).Append(' ');
         return sb.ToString().TrimEnd();
     }
@@ -190,7 +213,10 @@ internal static class QbarQueryTranslator
 
         if (spec.ContentRequested)
         {
-            result.Stage("content", "index has no content, content: ignored", warn: true);
+            /* 这里只记录"这次查了正文"。正文索引没就绪时由后端（QbarTantivyBackend）
+             * 把原因写得具体（未开启 / 正在建 / 抽不出来），翻译层不替它下结论。 */
+            result.Stage("content",
+                "content=" + string.Join("|", spec.ContentTerms.Concat(spec.ContentPhrases)));
         }
 
         string query = string.Join(" ", display);
@@ -290,12 +316,21 @@ internal static class QbarQueryTranslator
             case "content":
             {
                 if (negated) return false;
-                spec.ContentRequested = true;
-                /* 内容检索目前做不到：索引里没有正文（真建了也慢到不可用），
-                 * 本地快照只有文件名。与其"接受这个词但什么都不筛"（用户会以为全盘都匹配），
-                 * 不如按文件名检索并在调试面板标黄说明。 */
-                AddTerm(spec, value, false, display, quote: NeedsQuoting(value));
-                notes.Add("content: 无内容索引，已按文件名检索");
+                /* 只有 "content:" 没有词 = 打开「只看正文」过滤器（chip 走的就是这条）。
+                 * 此时关键词仍在后面的 token 里，交给后端按 ContentOnly 处理。 */
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    spec.ContentOnly = true;
+                    display.Add("content:");
+                    notes.Add("content: 只看正文");
+                    return true;
+                }
+                /* 只查正文：词进 ContentTerms，由后端交给**第二套**索引（body 字段）。
+                 * 不再降级成文件名检索 —— 这是 v1.6 的实现，之前的降级是"还没做"的兜底。 */
+                spec.ContentOnly = true;
+                spec.ContentTerms.Add(value.Trim());
+                display.Add("content:" + QuoteForDisplay(value));
+                notes.Add("content:" + value);
                 return true;
             }
 
@@ -345,6 +380,13 @@ internal static class QbarQueryTranslator
 
         if (filter.SearchForFolders && !filter.SearchForFiles) spec.FoldersOnly = true;
         else if (!filter.SearchForFolders && filter.SearchForFiles) spec.FilesOnly = true;
+
+        if (filter.ContentOnly)
+        {
+            spec.ContentOnly = true;
+            display.Add("content:");
+            notes.Add("filter " + filter.Keyword + " -> 只看正文");
+        }
 
         if (!string.IsNullOrWhiteSpace(filter.SearchInFolders))
         {

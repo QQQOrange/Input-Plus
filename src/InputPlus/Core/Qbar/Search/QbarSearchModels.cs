@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace InputPlus.Core.Qbar.Search;
@@ -31,11 +31,18 @@ public sealed class QbarFilter
     /// <summary>日期范围，语法同 <c>date:</c>（today / week / 2026-07 / 2026-07-01..2026-07-31）。</summary>
     public string DateModifiedRange { get; set; } = "";
 
+    /// <summary>
+    /// 只看正文：这条过滤器命中时，关键词只去**正文索引**里匹配（等价于给每个词加
+    /// <c>content:</c> 前缀）。内置的「只看正文」用的就是它。
+    /// </summary>
+    public bool ContentOnly { get; set; }
+
     public QbarFilter Clone() => new QbarFilter
     {
         Id = Id, Name = Name, Keyword = Keyword, Enabled = Enabled, Icon = Icon,
         Extensions = Extensions, SearchForFolders = SearchForFolders, SearchForFiles = SearchForFiles,
         ExtraQuery = ExtraQuery, SearchInFolders = SearchInFolders, DateModifiedRange = DateModifiedRange,
+        ContentOnly = ContentOnly,
     };
 }
 

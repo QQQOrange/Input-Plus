@@ -1,6 +1,9 @@
 using System;
 using System.Linq;
 using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using InputPlus.Core.Gestures;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Scripting;
@@ -353,6 +356,255 @@ public static partial class SelfTest
     /// CI 的服务会话里没有 Explorer，找不到就直接记一条"跳过"，
     /// 这样报告里能看出**这条没验过**，而不是假装它绿了。
     /// </summary>
+    /// <summary>
+    /// 附加菜单的版式：一级和二级必须"拼在一起、长得一样"。
+    ///
+    /// 用户报过四件事：二级行太高、每条都拖着 URL、左右边距太大、二级压在一级菜单上。
+    /// 前三件靠模板/行容器/宽度约束解决，第四件靠 PlaceSubMenu（Custom 摆放）。
+    /// 这里把结论钉成几何断言 —— 出图只能给人看，机器还得有一条能红的线。
+    /// </summary>
+    private static void TestAttachMenuLayout()
+    {
+        var def = new GestureMenuDef { HideTitle = true };
+        def.Items.Add(new GestureMenuItem
+        {
+            Title = "历史记录",
+            Glyph = "\uE81C",
+            Children =
+            {
+                new GestureMenuItem { Title = "季度总结", Note = "https://example.com/a/very/long/path" },
+                new GestureMenuItem { Title = "周报", Note = "https://example.com/weekly" },
+            },
+        });
+        def.Items.Add(new GestureMenuItem
+        {
+            Title = "命令",
+            Children = { new GestureMenuItem { Title = "翻译", Note = "fy" } },
+        });
+
+        var win = new UI.Windows.GestureMenuWindow(def, _ => "", null)
+        {
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            /* 必须放在**屏幕内**：二级菜单的摆放会问"右边还放不放得下"，
+             * 窗口挪到 -32000 时所有候选都在屏外，WPF 会自己挑一个，
+             * 量出来的位置就不代表真实使用场景了。 */
+            Left = SystemParameters.WorkArea.Left + 40,
+            Top = SystemParameters.WorkArea.Top + 40,
+        };
+
+        try
+        {
+            win.Show();
+            DoEvents(150);
+            win.UpdateLayout();
+
+            var l1HeightBefore = win.CardForTest.ActualHeight;
+
+            var sub = win.OpenSubMenuForRender(0);
+            Check("附加菜单：带子项的条目能展开二级菜单", sub != null);
+            if (sub == null) return;
+
+            win.UpdateLayout();
+            DoEvents(80);
+
+            var card = win.CardForTest;
+            CheckEqual("附加菜单：二级卡片宽度和一级一致",
+                Math.Round(sub.ActualWidth), Math.Round(card.ActualWidth));
+
+            /* 回归（v1.5.9.7）：二级展开会把窗口撑高，一级卡片以前跟着 Stretch 一起被拉长。
+             * 现在一级是 VerticalAlignment=Top，高度必须保持不变。 */
+            CheckEqual("附加菜单：展开二级不会把一级卡片拉长",
+                Math.Round(card.ActualHeight), Math.Round(l1HeightBefore));
+
+            win.ItemListForTest.UpdateLayout();
+            win.SubListForTest.UpdateLayout();
+            var topRow = win.ItemListForTest.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem;
+            var subRow = win.SubListForTest.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem;
+            Check("附加菜单：一级/二级的行容器都生成了", topRow != null && subRow != null);
+
+            if (topRow != null && subRow != null)
+            {
+                CheckEqual("附加菜单：二级行高和一级一致",
+                    Math.Round(subRow.ActualHeight), Math.Round(topRow.ActualHeight));
+                Check("附加菜单：二级行高不超过 28（收窄过）",
+                    subRow.ActualHeight <= 28, subRow.ActualHeight.ToString("0.#"));
+
+                /* 二级行里不该出现那个 URL：模板换成了只画标题的 SubEntryTemplate。 */
+                bool showsUrl = Texts(subRow).Any(t => t.Contains("https://example.com", StringComparison.Ordinal));
+                Check("附加菜单：二级行不显示链接地址", !showsUrl, string.Join(" | ", Texts(subRow)));
+                Check("附加菜单：二级行显示名称", Texts(subRow).Any(t => t == "季度总结"),
+                    string.Join(" | ", Texts(subRow)));
+            }
+
+            /* 覆盖判定：二级卡片左沿必须在一级卡片右沿之外（拼接，不是叠上去）。 */
+            Point cardRight = card.PointToScreen(new Point(card.ActualWidth, 0));
+            Point subLeft = sub.PointToScreen(new Point(0, 0));
+            Check("附加菜单：二级拼在一级外侧（不覆盖）", subLeft.X >= cardRight.X - 1,
+                $"一级右沿={cardRight.X:0.#} 二级左沿={subLeft.X:0.#} · {win.SubPlacementForTest}");
+
+            /* 拼接判定：两块之间不许留缝（以前 2 DIP，200% 缩放下看着就是 4 个像素）。 */
+            double dpi = VisualTreeHelper.GetDpi(win).DpiScaleX;
+            double gapDip = (subLeft.X - cardRight.X) / Math.Max(0.1, dpi);
+            Check("附加菜单：二级紧贴一级（间隙 ≤ 1 DIP）", Math.Abs(gapDip) <= 1,
+                $"{gapDip:0.##} DIP · {win.SubPlacementForTest}");
+        }
+        finally
+        {
+            win.Close();
+        }
+
+        static System.Collections.Generic.IEnumerable<string> Texts(DependencyObject root)
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, i);
+                if (child is TextBlock tb && !string.IsNullOrEmpty(tb.Text)) yield return tb.Text;
+                foreach (string nested in Texts(child)) yield return nested;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 固定文件夹悬停展开：分页、排序、过滤。
+    ///
+    /// 用户要的是"先显示 10 个，剩下的滚出来"——分页逻辑必须能被机器验，
+    /// 否则很容易退化成"一次列完"（大目录卡死）或"只列第一页"（后面的永远看不到）。
+    /// </summary>
+    private static void TestFolderPeek()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ip-peek-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "bravo"));
+            Directory.CreateDirectory(Path.Combine(root, "Alpha"));
+            for (int i = 0; i < 25; i++)
+                File.WriteAllText(Path.Combine(root, "file-" + i.ToString("00") + ".txt"), i.ToString());
+            File.WriteAllText(Path.Combine(root, "desktop.ini"), "hidden");
+            File.SetAttributes(Path.Combine(root, "desktop.ini"), FileAttributes.Hidden | FileAttributes.System);
+
+            var all = FolderPeek.All(root);
+            CheckEqual("文件夹预览：隐藏/系统条目不进菜单",
+                all.Count(e => e.Name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)), 0);
+            Check("文件夹预览：文件夹排在文件前面", all[0].IsFolder && all[1].IsFolder, all[0].Name);
+            CheckEqual("文件夹预览：文件夹按名字排序", all[0].Name, "Alpha");
+            CheckEqual("文件夹预览：文件也按名字排序", all[2].Name, "file-00.txt");
+
+            int pageSize = FolderPeek.PageSizeFor(10);
+            var first = FolderPeek.Page(root, 0, pageSize, out bool more1);
+            CheckEqual("文件夹预览：第一页 10 条", first.Count, 10);
+            Check("文件夹预览：第一页后面还有", more1);
+
+            var second = FolderPeek.Page(root, 10, pageSize, out bool more2);
+            CheckEqual("文件夹预览：第二页 10 条", second.Count, 10);
+            Check("文件夹预览：第二页后面还有", more2);
+            Check("文件夹预览：两页不重复", !first.Select(e => e.Path).Intersect(second.Select(e => e.Path)).Any());
+
+            var third = FolderPeek.Page(root, 20, pageSize, out bool more3);
+            CheckEqual("文件夹预览：第三页只剩 7 条", third.Count, 7);
+            Check("文件夹预览：翻到底 hasMore=false", !more3);
+
+            CheckEqual("文件夹预览：越界页返回空",
+                FolderPeek.Page(root, 999, pageSize, out _).Count, 0);
+            CheckEqual("文件夹预览：不存在的目录返回空",
+                FolderPeek.Page(Path.Combine(root, "nope"), 0, pageSize, out _).Count, 0);
+
+            CheckEqual("文件夹预览：设置太小按 10 算", FolderPeek.PageSizeFor(3), 10);
+            CheckEqual("文件夹预览：设置太大按 50 封顶", FolderPeek.PageSizeFor(999), 50);
+            CheckEqual("文件夹预览：没设置按默认", FolderPeek.PageSizeFor(0), FolderPeek.DefaultPageSize);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 滚动条宽度：全局 10 → 7，附加菜单再细到 4。
+    ///
+    /// 这类"像素级手感"的改动没有断言就很容易被后人改回去（或者被模板覆盖掉）。
+    /// 这里直接量真实控件：一个普通 ScrollViewer + 附加菜单二级列表。
+    /// </summary>
+    private static void TestThinScrollBars()
+    {
+        var host = new Window
+        {
+            Width = 180,
+            Height = 120,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = SystemParameters.WorkArea.Left + 40,
+            Top = SystemParameters.WorkArea.Top + 40,
+        };
+        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Visible };
+        scroll.Content = new Border { Width = 60, Height = 600 };
+        host.Content = scroll;
+        try
+        {
+            host.Show();
+            DoEvents(150);
+            host.UpdateLayout();
+
+            var bar = FindDescendant<System.Windows.Controls.Primitives.ScrollBar>(scroll);
+            Check("滚动条：全局宽度收窄（≤ 8 DIP）", bar != null && bar.ActualWidth <= 8,
+                bar == null ? "没找到" : bar.ActualWidth.ToString("0.#"));
+        }
+        finally { host.Close(); }
+
+        string dir = Path.Combine(Path.GetTempPath(), "ip-bar-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            for (int i = 0; i < 12; i++) File.WriteAllText(Path.Combine(dir, "f" + i + ".txt"), "");
+
+            var def = new GestureMenuDef { HideTitle = true };
+            def.Items.Add(new GestureMenuItem
+            {
+                Title = "目录",
+                Arg = dir,
+                Action = "openFile",
+                IconPath = dir,
+            });
+
+            var win = new UI.Windows.GestureMenuWindow(def, _ => "", null)
+            {
+                ShowInTaskbar = false,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = SystemParameters.WorkArea.Left + 60,
+                Top = SystemParameters.WorkArea.Top + 60,
+            };
+            try
+            {
+                win.Show();
+                DoEvents(150);
+                win.OpenFolderPeekForRender(0);
+                win.UpdateLayout();
+                DoEvents(80);
+
+                var bar = FindDescendant<System.Windows.Controls.Primitives.ScrollBar>(win.SubListForTest);
+                Check("滚动条：附加菜单二级更细（≤ 5 DIP）", bar != null && bar.ActualWidth <= 5,
+                    bar == null ? "没找到" : bar.ActualWidth.ToString("0.#"));
+            }
+            finally { win.Close(); }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+            if (child is T hit) return hit;
+            T? nested = FindDescendant<T>(child);
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
     private static void TestMiddleMenuLive()
     {
         IntPtr shell = InputPlus.Core.Interop.NativeMethods.GetShellWindow();

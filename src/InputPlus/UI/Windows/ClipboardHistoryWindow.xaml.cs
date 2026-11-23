@@ -15,7 +15,11 @@ public partial class ClipboardHistoryWindow : Window
         InitializeComponent();
 
         Theme.WindowChrome.AttachTo(this);   // 标题栏跟随主题
-        FilterBox.ToolTip = Loc.T("输入关键字筛选");
+        FilterSearch.ToolTip = Loc.T("输入关键字筛选");
+
+        /* 打开就能直接打字：SearchField 自己是不可聚焦的容器，
+         * 真正吃键盘的是框里那个输入框，得显式把焦点放进去。 */
+        Loaded += (_, _) => FilterSearch.FocusInput();
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) Hide(); };
     }
 
@@ -27,7 +31,7 @@ public partial class ClipboardHistoryWindow : Window
 
     private void ApplyFilter()
     {
-        string f = FilterBox.Text?.Trim() ?? "";
+        string f = FilterSearch.SearchText?.Trim() ?? "";
         var filtered = f.Length == 0
             ? _all
             : _all.Where(i => i.Text.Contains(f, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -36,7 +40,7 @@ public partial class ClipboardHistoryWindow : Window
         StatusText.Text = Loc.F("共 {0} 条", filtered.Count);
     }
 
-    private void OnFilterChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+    private void OnFilterChanged(object sender, RoutedEventArgs e) => ApplyFilter();
 
     private void OnListKeyDown(object sender, KeyEventArgs e)
     {

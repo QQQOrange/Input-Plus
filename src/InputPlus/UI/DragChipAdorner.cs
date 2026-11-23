@@ -34,7 +34,7 @@ public sealed class DragChipAdorner : Adorner
 
         _chip = new Border
         {
-            CornerRadius = new CornerRadius(9),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusControl),
             Padding = new Thickness(11, 6, 11, 6),
             Child = label,
             RenderTransform = _offset,

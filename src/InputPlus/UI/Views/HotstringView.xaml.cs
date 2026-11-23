@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -47,11 +48,24 @@ public partial class HotstringView : UserControl
     /// <summary>自动对齐前缀只做一次，避免迁移后再次触发。</summary>
     private bool _prefixAlignedOnce;
 
-    /// <summary>当前排序方式（0 触发词 / 1 最近使用 / 2 使用次数）。</summary>
-    private int _sortMode;
+    /* 列表顺序：默认按触发词；用户手动拖动重排过之后，改成按他自己排的 Order。
+     * 以前这里有个「排序」下拉框（触发词/最近使用/使用次数/自定义），按用户要求
+     * 连同「从未使用」勾选一起删掉了 —— 但"拖动重排"这个能力不能跟着消失，
+     * 否则删一个控件等于删一个功能。所以这里只保留一个布尔开关：
+     * 拖过一次就切到自定义顺序，点列头排序只影响这一次的显示，不改这个开关。 */
+    private bool _customOrder;
 
-    /// <summary>只显示从未使用过的别名。</summary>
-    private bool _unusedOnly;
+    /// <summary>
+    /// 列表当前这一屏的行（已按分组/筛选/排序过滤好）。
+    /// 点列头排序时从这份**原始顺序**重排，不在排好的结果上再排 ——
+    /// 否则两列值相同的行会保留上一次排序的次序，看起来像"越点越乱"。
+    /// </summary>
+    private List<Row> _entryRows = new();
+
+    /* 列头排序状态自己记：DataGrid 的 SortDirection 会在 ItemsSource 换掉时被清掉，
+     * 拿它当状态会永远"第一次点击"（用户看到的就是"点了不翻向"）。 */
+    private string _aliasSortPath = "";
+    private ListSortDirection _aliasSortDir = ListSortDirection.Ascending;
 
     /// <summary>列表里是否显示展开后的内容（眼睛按钮控制）。</summary>
 
@@ -94,6 +108,9 @@ public partial class HotstringView : UserControl
         public string GroupLabel { get; init; } = "";
         public string Preview { get; init; } = "";
 
+        /// <summary>备注列（和正文分开：以前列表把备注塞进正文列，用户看到的全是备注）。</summary>
+        public string CommentLabel { get; init; } = "";
+
         /// <summary>
         /// 左侧小方块里显示的**当前前缀符号**（例如 `;`）。
         ///
@@ -115,12 +132,17 @@ public partial class HotstringView : UserControl
     {
         InitializeComponent();
 
-        /* 排序下拉：文字在构造时填，切语言重开页面即可（和其他页面一致）。 */
-        SortBox.Items.Add(Loc.T("按触发词"));
-        SortBox.Items.Add(Loc.T("按最近使用"));
-        SortBox.Items.Add(Loc.T("按使用次数"));
-        SortBox.Items.Add(Loc.T("自定义顺序"));
-        SortBox.SelectedIndex = 0;
+        /* 列宽：拖完表头把手攒 600ms 落盘（和 Qbar 设置页同一套）。 */
+        EntryList.AddHandler(Thumb.DragCompletedEvent,
+            new DragCompletedEventHandler(OnColumnGripperDragCompleted), handledEventsToo: true);
+
+        /* 搜索框的分类：选中哪一列，就只搜那一列。
+         * 三个标签直接沿用列表的列头文字（别名关键字 / 别名正文 / 备注），
+         * 用户看到的列名和这里的选项一字不差，才不会猜"正文"到底指什么。 */
+        FilterField.SetCategories(
+            new UI.Controls.SearchCategory(Loc.T("别名关键字"), "key"),
+            new UI.Controls.SearchCategory(Loc.T("别名正文"), "text"),
+            new UI.Controls.SearchCategory(Loc.T("备注"), "comment"));
 
         /* 别名框要用输入法打中文，这里显式打开 IME（有些系统设置会把非编辑类窗口的
          * IME 关掉，WPF 不会自己再打开），并盯着"组字"状态。
@@ -187,11 +209,12 @@ public partial class HotstringView : UserControl
             RefreshPrefixCapsule();
             SpaceBox.IsChecked = opt.ExpandOnSpace;
             SwallowBox.IsChecked = opt.SwallowSpace;
-            ImeBackBox.IsChecked = opt.RestoreImeAfterExpand;
-            opt.ShowTextInList = false;      // 列表只显示备注，永远不显示替换内容
+            /* 列表的正文 / 备注是两列，各显示各的（历史字段 ShowTextInList 保留只为兼容老配置，
+             * 现在不再参与渲染 —— 见 BuildPreview / BuildCommentLabel）。 */
         }
         finally { _suppress = false; }
 
+        ApplyColumnWidths();      // 用户拖过的列宽先摆回去，再灌数据
         Refresh();
     }
 
@@ -225,7 +248,7 @@ public partial class HotstringView : UserControl
             /* 清搜索框不能触发 TextChanged 的二次刷新：
              * 那会在分组还没切回「全部」的时候按旧条件重刷一遍列表。 */
             _suppress = true;
-            try { FilterBox.Text = ""; }
+            try { FilterField.ClearSearch(); }
             finally { _suppress = false; }
         }
 
@@ -407,7 +430,8 @@ public partial class HotstringView : UserControl
         if (_host == null) return;
 
         var opt = _host.Settings.Hotstring;
-        string filter = FilterBox.Text?.Trim() ?? "";
+        string filter = FilterField.SearchText?.Trim() ?? "";
+        string column = FilterField.SelectedTag ?? "key";
         string? group = CurrentGroup;
         var all = Entries.ToList();
 
@@ -416,19 +440,16 @@ public partial class HotstringView : UserControl
                         || (group.Length == 0
                             ? string.IsNullOrWhiteSpace(x.Group)
                             : string.Equals(x.Group?.Trim(), group, StringComparison.CurrentCultureIgnoreCase)))
-            .Where(x => string.IsNullOrWhiteSpace(filter)
-                        || (x.Trigger?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
-                        || (x.Comment?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)
-                        || (x.Text?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false))
-            .Where(x => !_unusedOnly || x.UseCount <= 0);
+            .Where(x => MatchesColumn(x, column, filter, opt.EffectivePrefixes));
 
-        var rows = SortSnippets(filtered, _sortMode)
+        var rows = OrderEntries(filtered)
             .Select(x => new Row
             {
                 Snippet = x,
                 KeyLabel = SnippetPrefixOps.StripAny(x.Trigger, opt.EffectivePrefixes),
                 Initial = InitialOf(SnippetPrefixOps.StripAny(x.Trigger, opt.EffectivePrefixes)),
                 GroupLabel = string.IsNullOrWhiteSpace(x.Group) ? "" : x.Group!.Trim(),
+                CommentLabel = BuildCommentLabel(x),
                 PrefixLabel = opt.EffectivePrefixes.Count == 0
                     ? "·"
                     : string.Join("", opt.EffectivePrefixes),
@@ -436,14 +457,17 @@ public partial class HotstringView : UserControl
             })
             .ToList();
 
+        /* 列头上还按着某一列排的话，重建列表之后要接着按它排 ——
+         * 否则改一个字、刷新一次，顺序就跳回下拉框那套，看着像排序失灵。 */
+        SortRowsByColumn(rows, ActiveSortColumn(), ActiveSortDirection());
+        if (_aliasSortPath.Length > 0) SetSortArrow(_aliasSortPath, _aliasSortDir);
+
         _suppress = true;
         try
         {
+            _entryRows = rows;
             EntryList.ItemsSource = rows;
             FilterCount.Text = Loc.F("共 {0} 条", rows.Count);
-            CleanupButton.Visibility = _unusedOnly && rows.Count > 0
-                ? Visibility.Visible
-                : Visibility.Collapsed;
             EmptyHint.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
             /* 空状态要说清"为什么空"：是没建过，还是筛选没命中，还是这个分组空着。
@@ -542,7 +566,13 @@ public partial class HotstringView : UserControl
     private void ShowEditor(bool show)
     {
         EditorCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (show) return;
+        if (show)
+        {
+            /* 每次打开都从顶上开始看：上一次滚到"分组/启用"那一段，再打开另一条
+             * 别名时直接停在中段，用户会以为前面的字段没了。 */
+            if (EditorScroll != null) EditorScroll.ScrollToTop();
+            return;
+        }
 
         _suppress = true;
         try
@@ -557,6 +587,23 @@ public partial class HotstringView : UserControl
         }
         finally { _suppress = false; }
     }
+
+    /// <summary>
+    /// 收起编辑栏（标题右边的叉、Esc、以及"选中项没了"三条路共用）。
+    ///
+    /// 先把列表选中项清掉，再走 <see cref="SyncEditorToSelection"/> 那条
+    /// "没有选中 → 收起"的路：_editing、删除/移动按钮的可用状态、编辑栏清空
+    /// 都只经一份实现，不会出现"关掉了但删除按钮还亮着"这种半截状态。
+    /// </summary>
+    private void CloseEditor()
+    {
+        _editing = null;
+        EntryList.UnselectAll();
+        ShowEditor(false);
+        EntryList.Focus();
+    }
+
+    private void OnCloseEditorClick(object sender, RoutedEventArgs e) => CloseEditor();
 
     private void LoadEditor(Snippet entry)
     {
@@ -640,10 +687,13 @@ public partial class HotstringView : UserControl
 
     private void OnEntryMouseDown(object sender, MouseButtonEventArgs e)
     {
+        /* 列头按下 = 排序（行上的按下才是拖拽起手）。 */
+        if (SortFromHeader(e.OriginalSource, "down")) return;
+
         _dragStartPoint = e.GetPosition(EntryList);
         _dragSnippet = null;
 
-        var item = ItemsControl.ContainerFromElement(EntryList, e.OriginalSource as DependencyObject) as ListBoxItem;
+        var item = ItemsControl.ContainerFromElement(EntryList, e.OriginalSource as DependencyObject) as DataGridRow;
         if (item?.DataContext is Row row) _dragSnippet = row.Snippet;
     }
 
@@ -1186,61 +1236,349 @@ public partial class HotstringView : UserControl
 
         opt.ExpandOnSpace = SpaceBox.IsChecked == true;
         opt.SwallowSpace = SwallowBox.IsChecked == true;
-        opt.RestoreImeAfterExpand = ImeBackBox.IsChecked == true;
+        /* RestoreImeAfterExpand 不再有界面、也不再被执行（软件不替用户切输入法）。
+         * 老配置里的 true 保留在设置里不动，读得出来、也不会被误当成"用户刚改的"。 */
 
         _host.SaveSettings();
         RefreshList();
         if (_editing != null) LoadEditor(_editing);
     }
 
-    /// <summary>搜索框：Esc 清空（再按一次回到列表），Ctrl+F 全选关键词。</summary>
-    private void OnFilterKeyDown(object sender, KeyEventArgs e)
+    /// <summary>搜索框里按 Esc 且框里已经空了：焦点回列表（框自己负责清空那一层）。</summary>
+    private void OnFilterCancelled(object sender, RoutedEventArgs e) => EntryList.Focus();
+
+    /* ─────────────────── 列表列头：排序（自己接管） ───────────────────
+       规则：第一次点升序、第二次降序、第三次又升序，永远在这两态之间翻；
+       换一列从升序开始。每次从 _entryRows 的**原始顺序**重排，不叠加。
+       为什么不让 DataGrid 自己排：它把 SortDescription 挂到 ItemsSource 的
+       CollectionView 上，而我们每次刷新都会换掉 ItemsSource —— 换完它再排一遍，
+       两套比较器打架，屏幕顺序和列头指示就对不上（用户报的"点了不排序"）。
+       箭头也是我们自己写进列头文字的：CanUserSortColumns=False 之后 DataGrid 不画。 */
+
+    /// <summary>
+    /// 从事件源往上找列头，找到就排序。返回 true = 这一下点在列头上。
+    ///
+    /// 为什么绑的是"按下"而不是"抬起"或 <c>ButtonBase.Click</c>：
+    ///   · Click 绑在"能不能排序"上，关掉 CanUserSortColumns 之后就不发了；
+    ///   · 抬起那条路会被 DataGrid 的鼠标捕获吃掉（第二下点同一个列头不再冒泡到我们这里）；
+    ///   · 按下一定会到，而且"点一下就变"的手感也更快。
+    /// </summary>
+    private bool SortFromHeader(object? source, string via)
     {
-        if (e.Key == Key.Escape)
+        if (_host == null) return false;
+
+        var header = FindHeader(source);
+        if (header == null)
         {
-            if (FilterBox.Text.Length > 0) FilterBox.Text = "";
-            else EntryList.Focus();
-            e.Handled = true;
-            return;
+            /* 鼠标被上一次点击的捕获占住时，OriginalSource 不是列头 —— 按坐标补一次命中测试。
+             * 这正是"第一下能排、第二下没反应"的原因。 */
+            header = FindHeader(EntryList.InputHitTest(Mouse.GetPosition(EntryList)) as DependencyObject);
         }
 
-        if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+        if (header?.Column == null) return false;
+        string path = header.Column.SortMemberPath ?? "";
+        if (path.Length == 0) return false;
+
+        /* 同列再点 → 翻方向；换列 → 从升序开始。永远在"升/降"之间翻，
+         * 不会出现第三次点变成"不排序"。 */
+        _aliasSortDir = string.Equals(path, _aliasSortPath, StringComparison.Ordinal)
+                        && _aliasSortDir == ListSortDirection.Ascending
+            ? ListSortDirection.Descending
+            : ListSortDirection.Ascending;
+        _aliasSortPath = path;
+
+        ApplyAliasSort(path, _aliasSortDir);
+        SetSortArrow(path, _aliasSortDir);
+
+        /* 列头在 mouse-down 时捕获鼠标，而我们同一拍就换掉了 ItemsSource，
+         * 它可能收不到 mouse-up，捕获一直挂着 —— 下一次点击就被它吃掉。
+         * 排完主动放开，保证连续点列头每次都生效。 */
+        if (Mouse.Captured is DependencyObject cap && EntryList.IsAncestorOf(cap)) Mouse.Capture(null);
+
+        AliasSortTrace($"{via} {path} {_aliasSortDir} → {string.Join(",", _entryRows.Select(r => r.KeyLabel))}");
+        return true;
+    }
+
+    /// <summary>从任意元素往上找列头。</summary>
+    private static DataGridColumnHeader? FindHeader(object? source)
+    {
+        if (source is not DependencyObject src) return null;
+        var header = src as DataGridColumnHeader;
+        while (header == null)
         {
-            FilterBox.SelectAll();
-            e.Handled = true;
+            src = VisualTreeHelper.GetParent(src);
+            if (src == null) return null;
+            header = src as DataGridColumnHeader;
+        }
+        return header;
+    }
+
+    /// <summary>
+    /// 把 ▲/▼ 画到对应列头上。
+    ///
+    /// 不用 DataGrid 自带的排序箭头：`CanUserSortColumns=False` 之后它不画（模板里那枚
+    /// 箭头跟着"能不能排序"的状态走），于是"点了排序但没有任何指示"——用户只能猜。
+    /// 这里直接把箭头写进列头文字，一定看得见，也跟列头同一套字号/颜色。
+    /// </summary>
+    private void SetSortArrow(string path, ListSortDirection dir)
+    {
+        if (EntryList?.Columns == null) return;
+        foreach (var col in EntryList.Columns)
+        {
+            string key = col.SortMemberPath ?? "";
+            if (key.Length == 0) continue;
+
+            if (!_headerLabels.TryGetValue(key, out string? label))
+            {
+                label = col.Header as string ?? "";
+                _headerLabels[key] = label;
+            }
+
+            bool active = string.Equals(key, path, StringComparison.Ordinal);
+            col.Header = active
+                ? label + (dir == ListSortDirection.Ascending ? "  ▲" : "  ▼")
+                : label;
+            col.SortDirection = active ? dir : null;   // 读屏/自动化也能读到状态
         }
     }
 
-    /// <summary>排序：触发词（默认）/ 最近使用（新的在前）/ 使用次数（多的在前）。</summary>
-    private static IEnumerable<Snippet> SortSnippets(IEnumerable<Snippet> source, int mode) => mode switch
-    {
-        1 => source.OrderByDescending(x => x.LastUsed ?? DateTime.MinValue)
-                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
-        2 => source.OrderByDescending(x => x.UseCount)
-                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
-        3 => source.OrderBy(x => x.Order)
-                   .ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
-        _ => source.OrderBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase),
-    };
+    /// <summary>列头的原始文字（加箭头之前的那份，切语言重进页面会重建）。</summary>
+    private readonly Dictionary<string, string> _headerLabels = new();
 
-    private void OnSortChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>排序现场（明文，最长 64KB）：用户报"点了不排序"时，这一行能看出点没点到、排没排。</summary>
+    private static void AliasSortTrace(string line)
+    {
+        try
+        {
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clp-alias-sort.txt");
+            try
+            {
+                if (System.IO.File.Exists(path) && new System.IO.FileInfo(path).Length > 64 * 1024)
+                    System.IO.File.Delete(path);
+            }
+            catch { }
+            System.IO.File.AppendAllText(path,
+                DateTime.Now.ToString("HH:mm:ss") + " " + line + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+        }
+        catch { /* 诊断写不出去不影响排序 */ }
+    }
+
+    /// <summary>按某一列重排当前这一屏（不动数据文件里的顺序）。</summary>
+    private void ApplyAliasSort(string column, ListSortDirection dir)
+    {
+        var list = new List<Row>(_entryRows);
+        SortRowsByColumn(list, column, dir);
+        BindRows(list, keepSelection: true);
+    }
+
+    /// <summary>当前排序列（没排就是空串）。</summary>
+    private string ActiveSortColumn() => _aliasSortPath;
+
+    /// <summary>当前排序方向（没排就是升序）。</summary>
+    private ListSortDirection ActiveSortDirection() => _aliasSortDir;
+
+    /// <summary>清掉列头箭头（只动显示）。</summary>
+    private void ClearSortArrows()
+    {
+        if (EntryList?.Columns == null) return;
+        foreach (var col in EntryList.Columns)
+        {
+            col.SortDirection = null;
+            string key = col.SortMemberPath ?? "";
+            if (key.Length > 0 && _headerLabels.TryGetValue(key, out string? label)) col.Header = label;
+        }
+    }
+
+    /// <summary>彻底放弃列头排序，回到下拉框那套。</summary>
+    private void ResetSortState()
+    {
+        _aliasSortPath = "";
+        _aliasSortDir = ListSortDirection.Ascending;
+        ClearSortArrows();
+    }
+
+    /// <summary>按某一列排（原地排 <paramref name="rows"/>）。列名 = SortMemberPath。</summary>
+    private static void SortRowsByColumn(List<Row> rows, string column, ListSortDirection dir)
+    {
+        if (string.IsNullOrEmpty(column) || rows.Count == 0) return;
+
+        Comparison<Row> cmp;
+        if (string.Equals(column, "UsageLabel", StringComparison.Ordinal))
+        {
+            cmp = (a, b) => a.Snippet.UseCount.CompareTo(b.Snippet.UseCount);
+        }
+        else
+        {
+            Func<Row, string> text = column switch
+            {
+                "KeyLabel" => r => r.KeyLabel,
+                "Preview" => r => r.Preview,
+                "CommentLabel" => r => r.CommentLabel,
+                "GroupLabel" => r => r.GroupLabel,
+                _ => _ => "",
+            };
+            cmp = (a, b) => string.Compare(text(a), text(b), StringComparison.CurrentCultureIgnoreCase);
+        }
+
+        if (dir == ListSortDirection.Descending)
+        {
+            var forward = cmp;
+            cmp = (a, b) => forward(b, a);
+        }
+
+        /* 值相同就按触发词定序：两次排序之间顺序不会乱跳。 */
+        rows.Sort((a, b) =>
+        {
+            int byColumn = cmp(a, b);
+            return byColumn != 0
+                ? byColumn
+                : string.Compare(a.Snippet.Trigger, b.Snippet.Trigger, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    /// <summary>换一份行、保住选中的那些（重设 ItemsSource 会把选中清掉）。</summary>
+    private void BindRows(List<Row> rows, bool keepSelection)
+    {
+        var keep = keepSelection ? EntryList.SelectedItems.OfType<Row>().ToList() : null;
+
+        _suppress = true;
+        try
+        {
+            _entryRows = rows;
+            EntryList.ItemsSource = rows;
+
+            /* 换 ItemsSource 会把列头的 SortDirection 清掉 —— 箭头要重新画一次，
+             * 否则"按着某列排"的状态在屏幕上消失，用户以为排序失效。 */
+            if (_aliasSortPath.Length > 0) SetSortArrow(_aliasSortPath, _aliasSortDir);
+
+            if (keep is { Count: > 0 })
+            {
+                foreach (var row in keep)
+                {
+                    if (rows.Contains(row)) EntryList.SelectedItems.Add(row);
+                }
+            }
+        }
+        finally { _suppress = false; }
+    }
+
+    /* ─────────────────── 列表列宽记忆 ───────────────────
+       和 Qbar 设置页同一套：拖动表头上的把手 → 600ms 后落盘，
+       下次进页面照原样摆回去。DataGrid 没有"拖完了"事件，
+       唯一可靠的信号是把手自己的 DragCompleted（handledEventsToo=true 才收得到）。 */
+
+    private System.Windows.Threading.DispatcherTimer? _widthSaveTimer;
+    private bool _applyingColumnWidths;
+
+    private void OnColumnGripperDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (_host == null || _applyingColumnWidths) return;
+        if (e.OriginalSource is not Thumb thumb) return;
+        if (thumb.TemplatedParent is not DataGridColumnHeader) return;
+
+        if (_widthSaveTimer == null)
+        {
+            _widthSaveTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(600),
+            };
+            _widthSaveTimer.Tick += (_, _) =>
+            {
+                _widthSaveTimer!.Stop();
+                PersistColumnWidths();
+            };
+        }
+        _widthSaveTimer.Stop();
+        _widthSaveTimer.Start();
+    }
+
+    private void PersistColumnWidths()
+    {
+        if (_host == null || EntryList.Columns.Count == 0) return;
+
+        var widths = new List<double>(EntryList.Columns.Count);
+        foreach (var col in EntryList.Columns)
+            widths.Add(col.Width.IsStar ? 0 : Math.Round(col.ActualWidth, 1));
+
+        _host.Settings.Hotstring.ColumnWidths = widths;
+        _host.SaveSettings();
+    }
+
+    /// <summary>把设置里记的列宽摆回去。0 = 保持默认（星号列继续自适应）。</summary>
+    private void ApplyColumnWidths()
+    {
+        var saved = _host?.Settings.Hotstring.ColumnWidths;
+        if (saved == null || saved.Count == 0 || EntryList.Columns.Count == 0) return;
+
+        _applyingColumnWidths = true;
+        try
+        {
+            for (int i = 0; i < saved.Count && i < EntryList.Columns.Count; i++)
+            {
+                double w = saved[i];
+                if (w <= 0) continue;
+                if (w < 40) w = 40;          // 设置文件被手改坏了也拖得回来
+                EntryList.Columns[i].Width = new DataGridLength(w);
+            }
+        }
+        finally { _applyingColumnWidths = false; }
+    }
+
+    /// <summary>列表顺序：默认按触发词；用户手动拖过之后按他自己排的 Order。</summary>
+    private IEnumerable<Snippet> OrderEntries(IEnumerable<Snippet> source)
+    {
+        if (_customOrder)
+            return source.OrderBy(x => x.Order).ThenBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase);
+        return source.OrderBy(x => x.Trigger, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 这一条在「选中的那一列」里是否命中关键词。
+    ///
+    /// 为什么必须按列分开：以前三个字段一起 <c>Contains</c>，用户想找
+    /// "备注里写了 xxx"的条目，正文里恰好有同一个词的那些行也全留下来 ——
+    /// 分类就等于白选。列标识与搜索框的分类下拉一一对应。
+    ///
+    /// 「关键字」列额外比对**剥掉前缀**后的样子：列表里显示的是 <c>mail</c>，
+    /// 用户照着屏幕打 <c>mail</c> 必须命中，不能因为配置里存的是 <c>;mail</c> 就搜不到。
+    /// </summary>
+    internal static bool MatchesColumn(Snippet snippet, string column, string filter,
+                                       IReadOnlyList<string>? prefixes)
+    {
+        if (snippet == null) return false;
+        if (string.IsNullOrWhiteSpace(filter)) return true;
+
+        if (column == "text")
+            return snippet.Text?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false;
+
+        if (column == "comment")
+            return snippet.Comment?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false;
+
+        string trigger = snippet.Trigger ?? "";
+        if (trigger.Contains(filter, StringComparison.OrdinalIgnoreCase)) return true;
+
+        string stripped = SnippetPrefixOps.StripAny(trigger, prefixes);
+        return stripped.Length > 0
+               && stripped.Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /* 搜索框（统一控件）：打字、换分类、清空都走这里。
+     * 换分类时控件会先发 CategoryChanged 再发一次 SearchChanged，
+     * 所以只挂 SearchChanged 就够，不用两处各刷一遍。 */
+    private void OnFilterChanged(object sender, RoutedEventArgs e)
     {
         if (_host == null || _suppress) return;
-        _sortMode = Math.Max(0, SortBox.SelectedIndex);
         RefreshList();
     }
 
-    private void OnUnusedOnlyChanged(object sender, RoutedEventArgs e)
+    /// <summary>搜索框里按回车：焦点交给列表，接着就能用方向键挑条目。</summary>
+    private void OnFilterSubmitted(object sender, RoutedEventArgs e)
     {
-        if (_host == null || _suppress) return;
-        _unusedOnly = UnusedOnlyBox.IsChecked == true;
-        RefreshList();
-    }
-
-    private void OnFilterChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_host == null || _suppress) return;
-        RefreshList();
+        if (_host == null) return;
+        if (EntryList.SelectedItem == null && _entryRows.Count > 0)
+            EntryList.SelectedItem = _entryRows[0];
+        EntryList.Focus();
     }
 
     private void OnGroupChanged(object sender, SelectionChangedEventArgs e)
@@ -1261,13 +1599,23 @@ public partial class HotstringView : UserControl
         SyncEditorToSelection();
     }
 
-    /// <summary>页面级快捷键：Ctrl+F 搜索；列表有焦点时 Ctrl+A 全选。</summary>
+    /// <summary>页面级快捷键：Ctrl+F 搜索；Esc 收起编辑栏；列表有焦点时 Ctrl+A 全选。</summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
         {
-            FilterBox.Focus();
-            FilterBox.SelectAll();
+            FilterField.FocusInput();
+            e.Handled = true;
+            return;
+        }
+
+        /* Esc 关编辑栏：这是用户能"退出编辑"的第二条路（第一条是标题右边的叉）。
+         * 只在编辑栏开着、且事件还没被别人吃掉时才管 —— 分组下拉、前缀弹层的
+         * Esc 是它们自己的事，抢过来会让弹层关不掉。 */
+        if (e.Key == Key.Escape && !e.Handled
+            && EditorCard.Visibility == Visibility.Visible)
+        {
+            CloseEditor();
             e.Handled = true;
             return;
         }
@@ -1439,15 +1787,16 @@ public partial class HotstringView : UserControl
     private Row? FindRowAt(Point point)
     {
         var hit = EntryList.InputHitTest(point) as DependencyObject;
-        var item = ItemsControl.ContainerFromElement(EntryList, hit) as ListBoxItem;
+        var item = ItemsControl.ContainerFromElement(EntryList, hit) as DataGridRow;
         return item?.DataContext as Row;
     }
 
     private void OnEntryListDragOver(object sender, DragEventArgs e)
     {
-        /* 只有「自定义顺序」时才把"拖进列表"当作重排；
-         * 其他排序下拖动是"移到分组"，由左侧分组列表处理。 */
-        if (_sortMode != 3 || !e.Data.GetDataPresent("clp/snippet"))
+        /* 拖进列表 = 重排。以前这条只在「自定义顺序」下生效（靠下拉框切），
+         * 下拉框删掉之后就不能再让它只在某个模式下活着 —— 否则拖动会被
+         * 判成 None，用户看到的是"拖了半天没反应"。 */
+        if (!e.Data.GetDataPresent("clp/snippet"))
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
@@ -1469,7 +1818,7 @@ public partial class HotstringView : UserControl
             {
                 y = EntryList.ActualHeight;
             }
-            else if (EntryList.ItemContainerGenerator.ContainerFromItem(target) is ListBoxItem container)
+            else if (EntryList.ItemContainerGenerator.ContainerFromItem(target) is DataGridRow container)
             {
                 var top = container.TranslatePoint(new Point(0, 0), EntryList).Y;
                 double half = container.ActualHeight / 2;
@@ -1492,13 +1841,18 @@ public partial class HotstringView : UserControl
     {
         RemoveInsertLine();
 
-        if (_host == null || _sortMode != 3) return;
+        if (_host == null) return;
         if (e.Data.GetData("clp/snippet") is not Snippet dragged) return;
 
         var target = FindRowAt(e.GetPosition(EntryList));
 
+        /* 从这一下开始，列表顺序就是用户自己排的了。列头排序会把显示顺序
+         * 覆盖掉，所以先清掉列头状态，刷新后才看得见新的次序。 */
+        _customOrder = true;
+        ResetSortState();
+
         /* 以"当前显示顺序"为基准重排，再按顺序重新编号。 */
-        var ordered = SortSnippets(_host.Settings.Global.Snippets, 3).ToList();
+        var ordered = OrderEntries(_host.Settings.Global.Snippets).ToList();
         ordered.Remove(dragged);
 
         int index = target == null ? ordered.Count : ordered.IndexOf(target.Snippet);
@@ -1506,7 +1860,7 @@ public partial class HotstringView : UserControl
 
         /* 落在目标行的下半部分 → 插到它后面。 */
         if (target != null &&
-            EntryList.ItemContainerGenerator.ContainerFromItem(target) is ListBoxItem container &&
+            EntryList.ItemContainerGenerator.ContainerFromItem(target) is DataGridRow container &&
             e.GetPosition(container).Y > container.ActualHeight / 2)
         {
             index++;
@@ -1551,15 +1905,24 @@ public partial class HotstringView : UserControl
 
 
     /// <summary>
-    /// 列表正文那一列：**只显示备注**。
+    /// 列表「别名正文」那一列：显示**替换内容**（换行/连续空白压成单空格，最多 56 字）。
     ///
-    /// 替换内容永远不在这里出现（避免一眼就看到隐私文本）；没写备注就给一句
-    /// 可操作的提示，而不是留空。
+    /// 以前这一列返回的是备注，"正文"里全是备注文字；现在备注有自己的列。
     /// </summary>
     private static string BuildPreview(Snippet snippet)
     {
-        string comment = (snippet.Comment ?? "").Trim();
-        return comment.Length > 0 ? Shorten(comment, 56) : Loc.T("（无备注）");
+        /* 正文列：显示**替换内容**（以前这里返回的是备注，用户看到的就是
+         * "别名正文"列里全是备注）。换行/连续空白压成单空格，最多 56 字。 */
+        string text = (snippet.Text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+        while (text.Contains("  ")) text = text.Replace("  ", " ");
+        return text.Length > 0 ? Shorten(text, 56) : Loc.T("（空正文）");
+    }
+
+    /// <summary>备注列：没备注就留空（不要用"（无备注）"占位，整列会显得很吵）。</summary>
+    private static string BuildCommentLabel(Snippet snippet)
+    {
+        string comment = (snippet.Comment ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+        return comment.Length > 0 ? Shorten(comment, 48) : "";
     }
 
     /* ---------------- 只在指定程序里展开：两种选择方式 ---------------- */
@@ -1689,35 +2052,6 @@ public partial class HotstringView : UserControl
         _host.Notify(Loc.F("已复制为「{0}」", candidate));
     }
 
-    /// <summary>一键删除所有"从未展开过"的别名（先确认）。</summary>
-    private void OnCleanupClick(object sender, RoutedEventArgs e)
-    {
-        if (_host == null) return;
-
-        var unused = _host.Settings.Global.Snippets.Where(x => x.UseCount <= 0).ToList();
-        if (unused.Count == 0)
-        {
-            _host.Notify(Loc.T("没有从未使用的别名"));
-            return;
-        }
-
-        if (!UI.Windows.AppDialog.Confirm(Owner,
-                Loc.F("删除 {0} 条从未使用过的别名？\n\n删除后不可撤销（可以在「同步与备份」里找回旧备份）。", unused.Count),
-                Loc.T("清理未使用"),
-                Windows.DialogKind.Warn,
-                okText: Loc.T("删除")))
-        {
-            return;
-        }
-
-        foreach (var snippet in unused) _host.Settings.Global.Snippets.Remove(snippet);
-        _editing = null;
-        _host.SaveSettings();
-        Refresh();
-
-        _host.Notify(Loc.F("已删除 {0} 条从未使用的别名", unused.Count));
-    }
-
     /// <summary>导出"当前分组"的别名（全部视图 = 导出全部）。</summary>
     private void OnExportGroupClick(object sender, RoutedEventArgs e)
     {
@@ -1818,10 +2152,12 @@ public partial class HotstringView : UserControl
 
         var issues = SnippetAudit.Run(_host.Settings);
 
-        /* 没用过的条目不算"问题"，但对清理很有用 —— 附一句，并告诉用户去哪儿看。 */
+        /* 没用过的条目不算"问题"，但对清理很有用 —— 附一句，告诉用户去哪儿看。
+         * 「使用」列是空的那几条就是没用过的；以前这里还指路"勾上右上角从未使用"，
+         * 那个勾选框已按用户要求删掉，提示语必须跟着改，否则等于指向一个不存在的按钮。 */
         int unused = _host.Settings.Global.Snippets.Count(x => x.UseCount <= 0);
         string unusedHint = unused > 0
-            ? "\n\n" + Loc.F("另有 {0} 条别名还没用过，勾上右上角「从未使用」就能只看它们。", unused)
+            ? "\n\n" + Loc.F("另有 {0} 条别名还没用过（列表「使用」列是空的）。", unused)
             : "";
 
         if (issues.Count == 0)

@@ -366,4 +366,38 @@ public static partial class SelfTest
             try { Directory.Delete(dir, true); } catch (Exception ex) { CoreLog.Swallow(ex, "清理建议自检目录"); }
         }
     }
+
+    /// <summary>
+    /// 目录模式展开：'*' 可以出现在**中间段**（微信 `&lt;wxid&gt;\msg\file`、
+    /// 企业微信 `&lt;corp&gt;\Cache\File`、飞书 `&lt;账号&gt;` 之后还有固定尾巴）。
+    ///
+    /// 以前这里把 '*' 之后的所有段一起当成搜索掩码传给 `EnumerateDirectories`，
+    /// 掩码里带反斜杠是非法模式 → 抛异常被吞 → 返回空表。结果就是
+    /// 「微信 / 企业微信 / 飞书」三个来源永远是 0 条，而用户明明有账号目录。
+    /// </summary>
+    private static void TestSuggestionFolderExpand()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ip-expand-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "acc1", "msg", "file"));
+            Directory.CreateDirectory(Path.Combine(root, "acc2", "msg", "file"));
+            Directory.CreateDirectory(Path.Combine(root, "acc3", "other"));
+
+            var hit = DirectoryScan.Expand(Path.Combine(root, "*", "msg", "file"));
+            CheckEqual("建议：中间段通配能展开账号目录", hit.Count, 2);
+            Check("建议：展开出来的都是真实目录", hit.All(Directory.Exists), string.Join(",", hit));
+
+            CheckEqual("建议：尾巴不存在时展开 0 条",
+                DirectoryScan.Expand(Path.Combine(root, "*", "nope", "file")).Count, 0);
+            CheckEqual("建议：最后一段通配照旧可用",
+                DirectoryScan.Expand(Path.Combine(root, "*")).Count, 3);
+            CheckEqual("建议：没有通配的路径按原样判断",
+                DirectoryScan.Expand(Path.Combine(root, "acc1", "msg", "file")).Count, 1);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (Exception ex) { CoreLog.Swallow(ex, "清理展开自检目录"); }
+        }
+    }
 }

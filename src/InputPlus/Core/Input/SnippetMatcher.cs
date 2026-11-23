@@ -176,7 +176,13 @@ public static class SnippetMatcher
             if (!folded.EndsWith(ft, StringComparison.Ordinal)) continue;
 
             int start = folded.Length - ft.Length;
-            if (start > 0 && IsWordChar(folded[start - 1])) continue;   // 不在词边界
+            /* 词边界：触发词左边紧挨着字母/数字就**不算**（"my;mail" 是在一个词中间，
+             * 不是用户想打字片段的地方）。这条行为有独立用例钉着，别顺手删。
+             *
+             * 注意它和"第一次不生效"不是一回事：跨输入框时缓冲里残留上一个框的尾巴，
+             * 会**看起来**像词中间 —— 真正的修法是在换控件时清空缓冲
+             * （见 HotkeyEngine.NoteSnippetFocus），而不是放宽这里的判据。 */
+            if (start > 0 && IsWordChar(folded[start - 1])) continue;
 
             // 多个触发词同时命中时取最长的（更具体的优先）
             if (best == null || s.Trigger.Length > best.Trigger.Length) best = s;

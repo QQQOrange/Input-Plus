@@ -105,9 +105,15 @@ public static partial class SelfTest
         T(nameof(TestWg2Layer), TestWg2Layer);
         T(nameof(TestWg2Plus), TestWg2Plus);
         T(nameof(TestGestureListOrder), TestGestureListOrder);
+        /* 「按住右键连滚换标签」：滚轮每格执行一次、抬起才收尾（v1.5.9.1）。 */
+        T(nameof(TestGestureWheelSession), TestGestureWheelSession);
+        T(nameof(TestWheelOnlyKeyPress), TestWheelOnlyKeyPress);
 
         Section("中键菜单");
         T(nameof(TestMiddleMenu), TestMiddleMenu);
+        T(nameof(TestAttachMenuLayout), TestAttachMenuLayout);
+        T(nameof(TestFolderPeek), TestFolderPeek);
+        T(nameof(TestThinScrollBars), TestThinScrollBars);
         T(nameof(TestFavorites), TestFavorites);
 
         Section("收藏当前文件");
@@ -167,6 +173,9 @@ public static partial class SelfTest
 
         Section("剪贴板快照");
         T(nameof(TestClipboardBackup), TestClipboardBackup);
+        T(nameof(TestSelfTestDoesNotLeakSentinel), TestSelfTestDoesNotLeakSentinel);
+        T(nameof(TestLeaseYieldsToUserCopy), TestLeaseYieldsToUserCopy);
+        T(nameof(TestLeaseSurvivesManagerRewrite), TestLeaseSurvivesManagerRewrite);
 
         Section("失败通知");
         T(nameof(TestActionFailureText), TestActionFailureText);
@@ -185,6 +194,7 @@ public static partial class SelfTest
 
         Section("文本片段");
         T(nameof(TestSnippets), TestSnippets);
+        T(nameof(TestAliasListSearch), TestAliasListSearch);
 
         Section("组合键");
 
@@ -252,6 +262,12 @@ public static partial class SelfTest
         Section("帮助页");
         T(nameof(TestHelpActionLine), TestHelpActionLine);
 
+        /* 「快速上手」页那 8 个组合的取数规则（以前是写死的文案，
+         * 用户改完按键映射它不跟着变）。 */
+        Section("快速上手页");
+        T(nameof(TestGuideQuickKeys), TestGuideQuickKeys);
+        T(nameof(TestGuideBannerKeycaps), TestGuideBannerKeycaps);
+
         Section("窗口绑定");
         T(nameof(TestWindowBindings), TestWindowBindings);
         T(nameof(TestCapsloxLayer), TestCapsloxLayer);
@@ -273,6 +289,7 @@ public static partial class SelfTest
 
         Section("界面文案");
         T(nameof(TestUiText), TestUiText);
+        T(nameof(TestThemeMetrics), TestThemeMetrics);
 
         Section("界面语言");
         T(nameof(TestLocalization), TestLocalization);
@@ -476,6 +493,7 @@ public static partial class SelfTest
 
         Section("搜索前建议");
         T(nameof(TestSuggestions), TestSuggestions);
+        T(nameof(TestSuggestionFolderExpand), TestSuggestionFolderExpand);
 
         Section("更新");
         T(nameof(TestUpdateDigest), TestUpdateDigest);

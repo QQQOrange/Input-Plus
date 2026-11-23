@@ -100,6 +100,41 @@ internal static class SuggestionsProbeCli
             }
             catch (Exception ex) { report.AppendLine("  抽样失败：" + ex.Message); }
 
+            /* 办公软件的「最近文件」：这一份决定 windows-recent 里有没有"刚打开的文件"。
+             * 用户从 WPS 打开的文件不会进 shell:recent，这里读不到就只能是 0 条 ——
+             * 把它单独摊开，才分得清"没数据"和"读失败"。 */
+            report.AppendLine();
+            report.AppendLine("办公软件最近文件（WPS / Office）：");
+            try
+            {
+                var office = InputPlus.Core.Windows.OfficeRecentFiles.Recent(20);
+                report.AppendLine("  条数=" + office.Count);
+                foreach (var (path, at) in office.Take(6))
+                    report.AppendLine("  · " + path + " | "
+                        + (at == DateTime.MinValue ? "(无时间)" : at.ToString("yyyy-MM-dd HH:mm")));
+            }
+            catch (Exception ex) { report.AppendLine("  读取失败：" + ex.Message); }
+
+            report.AppendLine();
+            report.AppendLine("通配来源展开到的目录：");
+            try
+            {
+                var chat = new[]
+                {
+                    ("wechat", (IRecommendationSource)new InputPlus.Core.Suggestions.Sources.WeChatSource()),
+                    ("wecom", new InputPlus.Core.Suggestions.Sources.WeComSource()),
+                    ("feishu", new InputPlus.Core.Suggestions.Sources.FeishuSource()),
+                };
+                foreach (var (id, source) in chat)
+                {
+                    var folders = (source as InputPlus.Core.Suggestions.Sources.PatternFolderSourceBase)?
+                        .FoldersForProbe();
+                    report.AppendLine("  " + id + "：" + (folders == null ? "?" : folders.Count + " 个")
+                        + (folders is { Count: > 0 } ? " → " + string.Join(" ; ", folders.Take(4)) : ""));
+                }
+            }
+            catch (Exception ex) { report.AppendLine("  展开失败：" + ex.Message); }
+
             report.AppendLine();
             report.AppendLine("首屏 " + snapshot.Items.Count + " 条（按修改时间倒序）：");
             int index = 0;

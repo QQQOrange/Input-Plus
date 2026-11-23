@@ -194,8 +194,8 @@ public static partial class SelfTest
         };
         QbarFilterCatalog renameCatalog = QbarFilterCatalog.Create(new[] { renamed });
         int wdCount = renameCatalog.All.Count(f => string.Equals(f.Keyword, "wd", StringComparison.OrdinalIgnoreCase));
-        Check("语义层：改内置关键字后仍然只有 6 条内置过滤器（不会多出一条）",
-            renameCatalog.All.Count == 6 && wdCount == 1,
+        Check("语义层：改内置关键字后仍然只有 7 条内置过滤器（不会多出一条）",
+            renameCatalog.All.Count == 7 && wdCount == 1,
             renameCatalog.All.Count + " 条 / wd " + wdCount + " 条");
         /* 旧关键字必须还能用：真实配置里有人把 doc 改成 wd，改完 doc: 就查不到东西了。
          * 别名只挂在内置 Id 上，改名后 doc / wd 指向同一条内置过滤器。 */
@@ -212,6 +212,22 @@ public static partial class SelfTest
         Check("过滤器触发：改成 WD 之后输入 WD 按空格命中同一条过滤器",
             QbarService.ResolveFilterTrigger("WD", renameOptions)?.Id == QbarFilterCatalog.IdDoc);
 
+        /* 「只看正文」：两种写法都要落到 ContentOnly 上，但词放的位置不同 ——
+         *   content: 报表  → 过滤器形态（词在 Terms 里）
+         *   content:报表   → 谓词形态（词在 ContentTerms 里）
+         * 后端两种都认，所以这里把"词在哪"也钉住，免得以后只剩一种能用。 */
+        QbarTranslateResult contentOnly = Translate("content: 报表", QbarFilterCatalog.Create(null));
+        Check("语义层：content: 空值 = 只看正文（过滤器形态）",
+            contentOnly.Spec.ContentOnly && contentOnly.Spec.Terms.Count == 1
+            && contentOnly.Spec.Terms[0] == "报表" && contentOnly.Spec.ContentTerms.Count == 0,
+            "only=" + contentOnly.Spec.ContentOnly + " terms=" + contentOnly.Spec.Terms.Count);
+
+        QbarTranslateResult contentWord = Translate("content:报表", QbarFilterCatalog.Create(null));
+        Check("语义层：content:词 = 这个词只查正文（谓词形态）",
+            contentWord.Spec.ContentOnly && contentWord.Spec.ContentTerms.Count == 1
+            && contentWord.Spec.Terms.Count == 0,
+            "terms=" + contentWord.Spec.Terms.Count + " content=" + contentWord.Spec.ContentTerms.Count);
+
         /* ---- 停用内置过滤器：开关必须真的关掉它 ----
          * 合并时跳过停用项会让 Enabled 强制为 true，设置页那个开关就变成"点了没用"。 */
         var disabled = new QbarFilter
@@ -226,7 +242,7 @@ public static partial class SelfTest
         QbarFilterCatalog disabledCatalog = QbarFilterCatalog.Create(new[] { disabled });
         QbarFilter? disabledDoc = disabledCatalog.TryFind("doc");
         Check("语义层：停用内置过滤器后它仍在列表里且 Enabled=false",
-            disabledCatalog.All.Count == 6 && disabledDoc != null && !disabledDoc.Enabled,
+            disabledCatalog.All.Count == 7 && disabledDoc != null && !disabledDoc.Enabled,
             disabledCatalog.All.Count + " 条 / enabled=" + (disabledDoc?.Enabled.ToString() ?? "null"));
         QbarTranslateResult disabledDocResult = Translate("doc: 报表", disabledCatalog);
         Check("语义层：停用后 doc: 整条忽略（不展开扩展名、也不降级成普通词）",

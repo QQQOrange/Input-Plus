@@ -9,10 +9,10 @@
 
     <Grid Margin="14">
         <!-- 三层递减底衬模拟柔和投影（理由同 QbarWindow：不用 DropShadowEffect，也不留硬边） -->
-        <Border CornerRadius="14" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.35" Margin="-6,-2,-6,10" />
-        <Border CornerRadius="14" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.65" Margin="-3,2,-3,6" />
-        <Border CornerRadius="14" Background="{DynamicResource Brush.OverlayShadow}" Margin="0,5,0,2" />
-        <Border CornerRadius="16" BorderThickness="1.5" Background="{DynamicResource Brush.Surface}"
+        <Border CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.35" Margin="-6,-2,-6,10" />
+        <Border CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.OverlayShadow}" Opacity="0.65" Margin="-3,2,-3,6" />
+        <Border CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.OverlayShadow}" Margin="0,5,0,2" />
+        <Border CornerRadius="{DynamicResource Radius.Card}" BorderThickness="1.5" Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="20,18">
@@ -22,31 +22,31 @@
                            Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,8,0,0" />
 
                 <!-- 捕获显示区 -->
-                <Border Margin="0,16,0,0" Padding="18,14" CornerRadius="12"
+                <Border Margin="0,16,0,0" Padding="18,14" CornerRadius="{DynamicResource Radius.Card}"
                         Background="{DynamicResource Brush.SurfaceAlt}"
                         BorderBrush="{DynamicResource Brush.AccentSoftBorder}" BorderThickness="1">
                     <StackPanel>
                         <!-- 修饰键状态指示 -->
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
-                            <Border x:Name="CtrlBadge" CornerRadius="6" Padding="8,3" Margin="0,0,6,0"
+                            <Border x:Name="CtrlBadge" CornerRadius="{DynamicResource Radius.Small}" Padding="8,3" Margin="0,0,6,0"
                                     Background="{DynamicResource Brush.Surface}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                 <TextBlock Text="Ctrl" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Brush.TextTertiary}" />
                             </Border>
-                            <Border x:Name="ShiftBadge" CornerRadius="6" Padding="8,3" Margin="0,0,6,0"
+                            <Border x:Name="ShiftBadge" CornerRadius="{DynamicResource Radius.Small}" Padding="8,3" Margin="0,0,6,0"
                                     Background="{DynamicResource Brush.Surface}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                 <TextBlock Text="Shift" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Brush.TextTertiary}" />
                             </Border>
-                            <Border x:Name="AltBadge" CornerRadius="6" Padding="8,3" Margin="0,0,6,0"
+                            <Border x:Name="AltBadge" CornerRadius="{DynamicResource Radius.Small}" Padding="8,3" Margin="0,0,6,0"
                                     Background="{DynamicResource Brush.Surface}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                 <TextBlock Text="Alt" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource Brush.TextTertiary}" />
                             </Border>
-                            <Border x:Name="WinBadge" CornerRadius="6" Padding="8,3"
+                            <Border x:Name="WinBadge" CornerRadius="{DynamicResource Radius.Small}" Padding="8,3"
                                     Background="{DynamicResource Brush.Surface}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                 <TextBlock Text="Win" FontSize="11" FontWeight="SemiBold"

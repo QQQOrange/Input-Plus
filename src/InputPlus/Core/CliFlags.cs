@@ -27,6 +27,7 @@ public static class CliFlags
         "--probe-key", "--selection-test", "--gesture-probe", "--gesture-import",
         "--drag-e2e", "--drag-target", "--qbar-query", "--qbar-bench",
         "--index-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
+        "--content-status", "--content-build", "--content-query", "--content-extract",
         "--shell-probe", "--dialogprobe", "--filedialog-e2e", "--suggestions-probe", "--scroll-probe",
         "--foreground-file", "--reveal-file", "--office-recent",
         "--gesture-overlay-diag",
@@ -85,6 +86,10 @@ public static class CliFlags
         "  --settings-dump                 只读打印当前读到的设置：过滤器/命令/规则/加密与解锁状态（写 %TEMP%\\clp-settings-dump.txt）\n" +
         "  --qbar-command \"ol hello\"        只解析命令（关键字/路径/占位符展开），不执行（写 %TEMP%\\clp-qbar-command.txt）\n" +
         "  --index-status                  文件索引体检：条数/体积/构建进度/最近提交/watcher/查询 p50-p95（写 %TEMP%\\clp-index-status.txt）\n" +
+        "  --content-status                正文索引体检：开关/条数/体积/进度/失败数/索引层状态（写 %TEMP%\\clp-content-status.txt）\n" +
+        "  --content-build [--rebuild]     同步建一次正文索引（--rebuild 丢弃现有索引），跑完打印耗时与条数\n" +
+        "  --content-query \"词\"             只查正文索引，打印前 50 条命中（写 %TEMP%\\clp-content-query.txt）\n" +
+        "  --content-extract <文件>         只跑一个文件的正文抽取，打印字数/耗时/失败原因（写 %TEMP%\\clp-content-extract.txt）\n" +
         "  --dict <词>                      只跑查词链路（欧路/网页词典接口 + 解析），打印释义与耗时（写 %TEMP%\\clp-qbar-dict.txt）\n" +
         "  --reveal <路径>                  按文件关联打开该文件/网址，并检查它是否到了前台\n" +
         "  --reveal-file <路径>             走一次「打开文件所在位置」：父目录 + 选中该文件（写 %TEMP%\\clp-reveal-file.txt）\n" +

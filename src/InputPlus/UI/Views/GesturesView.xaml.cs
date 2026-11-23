@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -17,6 +17,7 @@ using InputPlus.Core;
 using InputPlus.Core.Actions;
 using InputPlus.Core.Gestures;
 using InputPlus.Core.Settings;
+using InputPlus.UI.Controls;
 using InputPlus.UI.Windows;
 
 namespace InputPlus.UI.Views;
@@ -98,9 +99,22 @@ public partial class GesturesView
         InitializeComponent();
         PreviewCanvas.SizeChanged += (_, _) => DrawPreview();
 
-        /* 筛选下拉的宽度是按内容量出来的（见 FitFilterBoxWidth）。字号/字体换了字宽也会变，
-         * 所以宽度一有变化就把搜索框跟着对上，免得收开搜索时右边露出一角。 */
-        ButtonFilterBox.SizeChanged += (_, _) => SyncSearchPanelWidth();
+        /* 列表搜索的分类 = 只搜哪一列。放进分类的四项都是列表里真能看到的文字：
+         * 手势名（左边那行）/ 动作说明（右边那句）/ 备注，以及「全部」= 原来那串拼接串。
+         * 应用路径不单列成分类：列表本来就按作用目标筛过，同一屏里那个字段几乎恒定，
+         * 单列只会多一个几乎永远同结果的选项；它在「全部」里仍然参与匹配。 */
+        FilterSearch.SetCategories(
+            new SearchCategory(Loc.T("全部"), "all"),
+            new SearchCategory(Loc.T("手势"), "shape"),
+            new SearchCategory(Loc.T("动作"), "action"),
+            new SearchCategory(Loc.T("备注"), "note"));
+
+        /* 动作搜索的分类：动作目录里真能搜到的就是功能名 / 分类 / ID 三处（见 OnActionSearchChanged），
+         * 没有「快捷键」这一列 —— 加一个搜不到东西的分类比不给分类更糟。 */
+        ActionSearch.SetCategories(
+            new SearchCategory(Loc.T("全部"), "all"),
+            new SearchCategory(Loc.T("功能名"), "title"),
+            new SearchCategory(Loc.T("分类"), "category"));
     }
 
     public void Initialize(AppHost host)
@@ -469,12 +483,31 @@ public partial class GesturesView
 
     // ───────────────────────── 列表 ─────────────────────────
 
+    /// <summary>
+    /// 手势列表的关键词匹配。分类决定只搜哪一列：
+    /// 「手势」= 左边那行（手势名 / 触发方式），「动作」= 右边那句动作说明，
+    /// 「备注」= 备注；「全部」仍走原来那串"手势 动作 路径 备注"的拼接串，
+    /// 所以老习惯（随手打一个词全局找）一个字没变。
+    ///
+    /// 以前不管选没选分类都是这几列一起 OR —— 想"只在备注里找"是做不到的。
+    /// </summary>
+    private bool MatchesListFilter(string filter, string shape, string action, string note, string joined)
+    {
+        switch (FilterSearch.SelectedTag)
+        {
+            case "shape": return shape.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+            case "action": return action.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+            case "note": return note.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+            default: return joined.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+    }
+
     /* 这一页的「把当前范围的手势排成一张表」以及编辑器右侧那一摞联动，
      * 都是从仓库里最后一次成功构建的那份程序集里恢复回来的 —— 语义与 1.5.1 一致。 */
 
 private void LoadList(string selectId = "")
 {
-    string text = FilterBox.Text.Trim();
+    string text = FilterSearch.SearchText.Trim();
     var settings = _host!.Settings;
     bool flag = string.Equals(_scope, "\u0001edge", StringComparison.Ordinal);
     bool flag2 = IsSpecialScope(_scope);
@@ -585,7 +618,7 @@ private void LoadList(string selectId = "")
             text6 = Describe(item);
         }
         string text7 = text5 + " " + text6 + " " + item.AppPath + " " + item.Note;
-        if (text.Length <= 0 || text7.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+        if (text.Length <= 0 || MatchesListFilter(text, text5, text6, item.Note, text7))
         {
             string badge = ((string.IsNullOrWhiteSpace(item.AppPath) | flag) ? "" : Loc.T("仅此应用"));
             var pointCollection = IconFor(item);
@@ -661,11 +694,9 @@ private void LoadEditor()
     _loading = true;
     try
     {
-        ActionSearchBox.Text = "";
+        ActionSearch.ClearSearch();
         ActionSearchList.ItemsSource = null;
         ActionSearchPanel.Visibility = Visibility.Collapsed;
-        ActionSearchHint.Visibility = Visibility.Visible;
-        ActionSearchClear.Visibility = Visibility.Collapsed;
         NameBox.Text = _current.Name;
         SelectTag(ButtonBox, _current.Button);
         SelectTag(ChordBox, _current.Chord);
@@ -1108,9 +1139,6 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
     /// <summary>ComboBox.Base 模板里给内容让出的横向空间：ContentPresenter 的 12 + 32（箭头），外加边框 2。</summary>
     private const double ComboChromeWidth = 44 + 2;
 
-    /// <summary>搜索按钮的宽（Button.Icon 默认 32）与它和下拉之间的间距，搜索面板要盖住这两样。</summary>
-    private const double SearchButtonSlot = 6 + 32;
-
     /// <summary>
     /// 按内容给「全部按键」那颗筛选下拉定宽。
     ///
@@ -1136,14 +1164,6 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         /* 只给 MinWidth、不给 Width：ComboBox 自己会按最宽项量出 DesiredSize，
            写死 Width 等于又把"够不够"这件事钉死了。 */
         ButtonFilterBox.MinWidth = Math.Max(96, Math.Ceiling(widest) + ComboChromeWidth + 6);
-        SyncSearchPanelWidth();
-    }
-
-    /// <summary>搜索面板正好盖住「筛选下拉 + 搜索按钮」，宽度跟着下拉走。</summary>
-    private void SyncSearchPanelWidth()
-    {
-        double width = ButtonFilterBox.ActualWidth > 0 ? ButtonFilterBox.ActualWidth : ButtonFilterBox.MinWidth;
-        SearchPanel.Width = width + SearchButtonSlot;
     }
 
     private void BuildChoices()
@@ -1341,60 +1361,15 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         BuildActionChoices(actionId);
     }
 
-    private void OnFilterChanged(object sender, TextChangedEventArgs e)
+/* 搜索框换成了全软件统一的 SearchField（见 XAML）。
+ * 以前这块地方平时只有一颗放大镜按钮、点开才长成输入框，收起/展开还要管
+ * 焦点、失焦、Esc 三套状态；现在常驻，那套开关逻辑一起删掉，少一处会出 bug 的地方。 */
+
+    private void OnFilterChanged(object sender, RoutedEventArgs e)
     {
-        if (_loading) return;
+        // _host 判空：SetCategories 在构造期就会触发一次（下拉默认选中第一项），那时还没有宿主。
+        if (_loading || _host == null) return;
         LoadList(selectId: _current.Id);
-    }
-
-    /* ─────────────────── 搜索：放大镜 ↔ 输入框 ───────────────────
-     *
-     * 平时这块地方只占 32 像素（一个放大镜按钮），点开才换成输入框，
-     * 这样列表能多出一整行的宽度；收起时不丢已有的字——失焦只在没字时收。 */
-
-    private void OnToggleSearch(object sender, RoutedEventArgs e) => OpenSearch();
-
-    private void OpenSearch()
-    {
-        // 三件东西占同一个格子：展开时把「按键筛选 + 放大镜」换成输入框，宽度不变，标题不抖。
-        ButtonFilterBox.Visibility = Visibility.Collapsed;
-        SearchButton.Visibility = Visibility.Collapsed;
-        SearchPanel.Visibility = Visibility.Visible;
-        // 刚由 Collapsed 变 Visible 时布局还没跑，直接 Focus 会落空，等一轮输入再抢焦点。
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            FilterBox.Focus();
-            FilterBox.CaretIndex = FilterBox.Text.Length;
-        }), System.Windows.Threading.DispatcherPriority.Input);
-    }
-
-    private void CloseSearch()
-    {
-        if (_loading) return;
-        SearchPanel.Visibility = Visibility.Collapsed;
-        ButtonFilterBox.Visibility = Visibility.Visible;
-        SearchButton.Visibility = Visibility.Visible;
-    }
-
-    private void OnFilterKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != System.Windows.Input.Key.Escape) return;
-        e.Handled = true;
-        // Esc 一回到底：先清字（TextChanged 会把列表还原），再收成放大镜。
-        if (FilterBox.Text.Length > 0) FilterBox.Clear();
-        CloseSearch();
-        SearchButton.Focus();
-    }
-
-    private void OnFilterLostFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (FilterBox.Text.Length == 0) CloseSearch();
-    }
-
-    private void OnClearSearch(object sender, RoutedEventArgs e)
-    {
-        FilterBox.Clear();
-        FilterBox.Focus();
     }
 
     private void OnButtonFilterChanged(object sender, SelectionChangedEventArgs e)
@@ -1854,14 +1829,18 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         UpdateArgVisibility();
     }
 
-    /// <summary>动作搜索：跨分类找功能，点结果直接选中，不用先翻分类。</summary>
-    private void OnActionSearchChanged(object sender, TextChangedEventArgs e)
+    /// <summary>
+    /// 动作搜索：跨分类找功能，点结果直接选中，不用先翻分类。
+    ///
+    /// 分类决定只搜哪一列：结果这一行写的就是「分类 · 功能名」，所以这两列最该能单独搜；
+    /// ID 不单列（它是配置里的标识，界面上看不到），仍留在「全部」里 ——
+    /// 「全部」= 原来那三列 OR，老习惯不受影响。
+    /// </summary>
+    private void OnActionSearchChanged(object sender, RoutedEventArgs e)
     {
         if (_loading || _host == null) return;
 
-        string query = ActionSearchBox.Text.Trim();
-        ActionSearchHint.Visibility = query.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ActionSearchClear.Visibility = query.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        string query = ActionSearch.SearchText.Trim();
         if (query.Length == 0)
         {
             ActionSearchList.ItemsSource = null;
@@ -1869,25 +1848,23 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
             return;
         }
 
+        Func<ActionInfo, bool> matches = ActionSearch.SelectedTag switch
+        {
+            "title" => (ActionInfo i) => i.Title.Contains(query, StringComparison.OrdinalIgnoreCase),
+            "category" => (ActionInfo i) => i.Category.Contains(query, StringComparison.OrdinalIgnoreCase),
+            _ => (ActionInfo i) => i.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+                   || i.Category.Contains(query, StringComparison.OrdinalIgnoreCase)
+                   || i.Id.Contains(query, StringComparison.OrdinalIgnoreCase),
+        };
+
         var hits = _host.Actions.Items
             .Where(i => !i.Hidden && i.Id != "doNothing")
-            .Where(i => i.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
-                     || i.Category.Contains(query, StringComparison.OrdinalIgnoreCase)
-                     || i.Id.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(matches)
             .Take(30)
             .Select(i => new Choice(i.Id, i.Category + " · " + i.Title))
             .ToList();
         ActionSearchList.ItemsSource = hits;
         ActionSearchPanel.Visibility = hits.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void OnClearActionSearch(object sender, RoutedEventArgs e)
-    {
-        ActionSearchBox.Text = "";
-        ActionSearchHint.Visibility = Visibility.Visible;
-        ActionSearchClear.Visibility = Visibility.Collapsed;
-        ActionSearchPanel.Visibility = Visibility.Collapsed;
-        ActionSearchBox.Focus();
     }
 
     private void OnActionSearchPicked(object sender, SelectionChangedEventArgs e)
@@ -1897,7 +1874,7 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         SelectAction(pick.Value);
         _current.Action = pick.Value;
         UpdateArgVisibility();
-        ActionSearchBox.Text = "";
+        ActionSearch.ClearSearch();
         ActionSearchList.ItemsSource = null;
         ActionSearchList.SelectedItem = null;
         ActionSearchPanel.Visibility = Visibility.Collapsed;

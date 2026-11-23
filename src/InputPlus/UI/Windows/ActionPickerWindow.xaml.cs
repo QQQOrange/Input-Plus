@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using InputPlus.Core.Actions;
+using InputPlus.UI.Controls;
 using InputPlus.UI.Theme;
 
 namespace InputPlus.UI.Windows;
@@ -46,6 +47,18 @@ public partial class ActionPickerWindow : Window
 
         SelectedId = selectedId ?? "";
 
+        /* 分类在构造期就装好：Loaded 里会 SearchBox.FocusInput()，
+         * 而任何一次键入都要能读到 SelectedTag，晚装就会先跑一遍"没有分类"的
+         * 过滤路径，出现"刚打字就闪一下全部结果"。
+         *
+         * 只给三项：动作列表里真的显示出来的就是「功能名 / 分类」两层，
+         * 再加一项「动作 ID」会让下拉里躺着一个用户根本没处看到的列。
+         * 「全部」保留原来的多列 OR，老习惯不受影响。 */
+        SearchBox.SetCategories(
+            new SearchCategory(Loc.T("全部"), "all"),
+            new SearchCategory(Loc.T("功能名"), "name"),
+            new SearchCategory(Loc.T("分类"), "category"));
+
         SourceInitialized += (_, _) =>
         {
             try
@@ -70,12 +83,21 @@ public partial class ActionPickerWindow : Window
             Left = work.Left + Math.Max(0, (work.Width - Width) / 2);
             Top = work.Top + Math.Max(0, (work.Height - Height) / 2);
             BuildGroupButtons();
-            SearchBox.Focus();
+            SearchBox.FocusInput();
         };
 
         PreviewKeyDown += (_, e) =>
         {
-            if (e.Key == System.Windows.Input.Key.Escape) { DialogResult = false; e.Handled = true; }
+            if (e.Key != System.Windows.Input.Key.Escape) return;
+
+            /* 焦点还在搜索框里、框里又有字时，把 Esc 让给控件去"清空" ——
+             * 这正是统一搜索框的既有语义（第一次 Esc 清字，第二次收起）。
+             * 其它情况（焦点在大类 Chip / 列表上）照旧一键关闭对话框：
+             * 焦点不在输入框里时用户按 Esc 想的就是"退出"。 */
+            if (SearchBox.SearchText.Length > 0 && SearchBox.IsKeyboardFocusWithin) return;
+
+            DialogResult = false;
+            e.Handled = true;
         };
     }
 
@@ -121,8 +143,8 @@ public partial class ActionPickerWindow : Window
         }
 
         ActionList.ItemsSource = null;
-        SearchBox.Text = "";
-        SearchBox.Focus();
+        SearchBox.ClearSearch();
+        SearchBox.FocusInput();
     }
 
     private IEnumerable<string> CategoriesOf(string group)
@@ -144,7 +166,7 @@ public partial class ActionPickerWindow : Window
             SetChipState(button, string.Equals(key, category, StringComparison.OrdinalIgnoreCase));
 
         ShowActions(_all.Where(a => string.Equals(a.Category, category, StringComparison.OrdinalIgnoreCase)));
-        SearchBox.Focus();
+        SearchBox.FocusInput();
     }
 
     private void ShowActions(IEnumerable<ActionInfo> actions)
@@ -158,11 +180,17 @@ public partial class ActionPickerWindow : Window
         ActionList.ScrollIntoView(ActionList.SelectedItem);
     }
 
-    private void OnSearchChanged(object sender, TextChangedEventArgs e)
+    /// <summary>
+    /// 关键词过滤。分类决定「只搜哪一列」：选了「分类」就只按分类命中，
+    /// 动作描述里恰好有同一个词不会再把这条留下来 —— 旧写法是多列 OR，
+    /// 用户选了分类却还是搜出一堆别的东西，等于分类没生效。
+    /// </summary>
+    private void OnSearchChanged(object sender, RoutedEventArgs e)
     {
-        string text = SearchBox.Text.Trim();
+        string text = SearchBox.SearchText.Trim();
         if (text.Length == 0)
         {
+            // 空关键词 = 不过滤：回到「当前二级分类的全部动作」，没选分类就清空列表。
             if (_category.Length > 0)
                 ShowActions(_all.Where(a => string.Equals(a.Category, _category, StringComparison.OrdinalIgnoreCase)));
             else
@@ -171,13 +199,20 @@ public partial class ActionPickerWindow : Window
         }
 
         string[] words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var hits = _all.Where(a => words.All(w =>
-            a.Title.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
-            a.Description.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
-            a.DisplayCategory.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
-            a.Id.Contains(w, StringComparison.OrdinalIgnoreCase)));
+        // 参数类型写全：switch 表达式里的匿名 lambda 靠目标类型推断，写明确省得编译器绕。
+        Func<ActionInfo, string, bool> matches = SearchBox.SelectedTag switch
+        {
+            "name" => (ActionInfo a, string w) => a.Title.Contains(w, StringComparison.CurrentCultureIgnoreCase),
+            "category" => (ActionInfo a, string w) => a.DisplayCategory.Contains(w, StringComparison.CurrentCultureIgnoreCase),
+            // 「全部」沿用原来的多列 OR：动作 ID 不单列一项（列表里看不到它），但整体搜还能搜到。
+            _ => (ActionInfo a, string w) =>
+                a.Title.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
+                a.Description.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
+                a.DisplayCategory.Contains(w, StringComparison.CurrentCultureIgnoreCase) ||
+                a.Id.Contains(w, StringComparison.OrdinalIgnoreCase),
+        };
 
-        ShowActions(hits);
+        ShowActions(_all.Where(a => words.All(w => matches(a, w))));
     }
 
     private void OnListDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)

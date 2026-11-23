@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using InputPlus.Core.Input;
@@ -165,8 +165,14 @@ public static partial class SelfTest
         var fresh = new HotstringOptions();
         CheckEqual("新配置默认前缀", fresh.EffectivePrefix, ":");
 
-        /* ⑩ 展开后自动补一下 Shift：默认开启，关掉之后能存住这个 false。 */
-        Check("新配置默认会补 Shift", fresh.RestoreImeAfterExpand);
+        /* ⑩ 展开后自动补一下 Shift：**默认关**（软件不替用户改输入法状态），
+         * 显式勾上之后能存住这个 true。 */
+        Check("新配置默认不补 Shift（不替用户切输入法）", !fresh.RestoreImeAfterExpand);
+
+        var onShift = new AppSettings { Hotstring = { RestoreImeAfterExpand = true } };
+        string onJson = System.Text.Json.JsonSerializer.Serialize(onShift, SettingsStore.JsonOptions);
+        var onBack = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(onJson, SettingsStore.JsonOptions);
+        Check("勾上补 Shift 能存进配置", onBack != null && onBack.Hotstring.RestoreImeAfterExpand);
 
         var off = new AppSettings();
         off.Hotstring.RestoreImeAfterExpand = false;

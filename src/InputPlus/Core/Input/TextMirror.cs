@@ -19,8 +19,19 @@ internal static class TextMirror
 {
     /// <summary>取焦点控件文本的结尾（最多 <paramref name="maxChars"/> 个字符）。</summary>
     public static bool TryReadTail(int maxChars, out string text)
+        => TryReadTail(maxChars, out text, out _);
+
+    /// <summary>
+    /// 取结尾，并带回**整段文本的字符数**。
+    ///
+    /// 为什么需要总数：触发词被输入法吃进组字串时，要让 IME 提交、再算"它吐了几个字"。
+    /// 只比 64 字的尾巴算不出差值 —— 控件里超过 64 字时，前后的尾巴长度都是 64，
+    /// 差值恒为 0（第一版就是这么写的）。总数来自 WM_GETTEXTLENGTH，同一个消息里就有。
+    /// </summary>
+    public static bool TryReadTail(int maxChars, out string text, out int totalLength)
     {
         text = "";
+        totalLength = 0;
         if (maxChars <= 0) return false;
 
         try
@@ -34,6 +45,7 @@ internal static class TextMirror
 
             int len = lenPtr.ToInt32();
             if (len <= 0) return false;
+            totalLength = len;
 
             int take = Math.Min(len, Math.Max(maxChars, 16));
             var buffer = new StringBuilder(take + 1);
@@ -50,6 +62,56 @@ internal static class TextMirror
         {
             // 读不到就是读不到：调用方会用按键缓冲区继续，不影响原有功能。
             return false;
+        }
+    }
+
+    /// <summary>
+    /// 读回来的这段尾巴是不是其实只是**窗口标题**。
+    ///
+    /// Chromium / Electron 系（浏览器正文、微信、新版记事本、各种套壳客户端）里
+    /// hwndFocus 指向的是顶层窗口，WM_GETTEXT 拿到的是标题栏文字，而不是输入框里那行字。
+    /// 把这个标题当成"控件里的字"，上游就会连着做错判断：
+    ///   · 认为触发词不在屏幕上 → 判定"被输入法吃了" → 只回删 1 个字，
+    ///     `;ipdv` 原样留在原地（用户 2026-11-23 报的就是这个）；
+    ///   · 缓冲为空时把标题当权威文本灌进去 → 之后再也匹配不到任何别名。
+    ///
+    /// 判据很便宜：和前台窗口标题相等，或者尾巴就是标题的后缀（尾巴最多 64 字，标题更长时是后缀）。
+    /// 认错一次的代价只是"这次不回读"，比拿标题当正文小得多。
+    /// </summary>
+    public static bool LooksLikeWindowTitle(string? tail)
+    {
+        string t = (tail ?? "").Trim();
+        if (t.Length < 3) return false;
+
+        try
+        {
+            IntPtr fg = NativeMethods.GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+
+            /* 和 TryReadTail 走同一条带 40ms 超时的 SendMessage：
+             * 这个函数在钩子线程上被调用，前台窗口卡死时**绝不能**把我们拖住。 */
+            if (!TrySend(fg, NativeMethods.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero, out IntPtr lenPtr))
+                return false;
+
+            int len = lenPtr.ToInt32();
+            if (len <= 0) return false;
+
+            int take = Math.Min(len, 256);
+            var sb = new StringBuilder(take + 1);
+            if (!TrySend(fg, NativeMethods.WM_GETTEXT, (IntPtr)(take + 1), sb, out _)) return false;
+
+            string title = sb.ToString().Trim();
+            if (title.Length < 3) return false;
+
+            if (string.Equals(t, title, StringComparison.OrdinalIgnoreCase)) return true;
+
+            /* 尾巴是标题的结尾：控件里的字被截成 64 字时，正好等于标题的后缀。 */
+            return t.Length <= title.Length
+                   && title.EndsWith(t, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;      // 探针失败就按"这是正常文本"处理，维持改造前的行为
         }
     }
 

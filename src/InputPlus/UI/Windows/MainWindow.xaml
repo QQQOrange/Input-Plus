@@ -195,7 +195,7 @@
                 </ListBox>
 
                 <!-- 状态卡 -->
-                <Border Grid.Row="2" Margin="12,8,12,14" CornerRadius="12" Padding="13,11"
+                <Border Grid.Row="2" Margin="12,8,12,14" CornerRadius="{DynamicResource Radius.Card}" Padding="13,11"
                         Background="{DynamicResource Brush.SurfaceAlt}"
                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                     <StackPanel>
@@ -220,7 +220,7 @@
         <!-- 圆角与窗口外框对齐：Win11 由 DWM 把窗口四角裁成 8（100% 下），
              内层卡片原来用 16，两条弧线在右上/右下各走各的 —— 看起来就是"两层圆角"。
              现在统一成 8：卡片离边 8px，弧线曲率与外框一致，缝里只有侧栏底色，不再多出一个弧。 -->
-        <Border Grid.Column="1" x:Name="ContentCard" Margin="8" CornerRadius="8"
+        <Border Grid.Column="1" x:Name="ContentCard" Margin="8" CornerRadius="{DynamicResource Radius.Control}"
                 Background="{DynamicResource Brush.WindowGradient}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
         <Grid>

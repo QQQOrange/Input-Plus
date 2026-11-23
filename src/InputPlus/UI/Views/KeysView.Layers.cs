@@ -212,7 +212,7 @@ public partial class KeysView : UserControl
             Height = KeycapHeight,
             Margin = new Thickness(KeycapGap / 2),
             VerticalAlignment = VerticalAlignment.Center,
-            CornerRadius = new CornerRadius(7),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusControl),
             BorderThickness = new Thickness(1),
             Cursor = Cursors.Hand,
             Background = background,

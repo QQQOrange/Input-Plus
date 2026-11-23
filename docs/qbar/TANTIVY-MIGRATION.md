@@ -46,7 +46,7 @@
 | `depth` | u64 fast+stored | — | 路径深度（诊断 / 排序辅助） |
 | `pinyin` | TEXT | `cjk_ngram` | 全拼（TinyPinyin，无分隔、小写） |
 | `pinyin_initials` | TEXT | `cjk_ngram` | 拼音首字母 |
-| `content` | TEXT（默认关，P1） | `cjk_ngram` | 正文全文检索（未启用，见 §8） |
+| `content` | —（**不在本索引**） | — | 正文全文检索走**独立索引** `file-content-tantivy`，见 §8.1 |
 
 `cjk_ngram` = `NgramTokenizer(1,2)` + `LowerCaser` + `RemoveLongFilter(64)`，自建注册
 （`src/ipidx/src/lib.rs::register_tokenizers`）。
@@ -286,9 +286,13 @@ C# 侧用 `ArrayBufferWriter<byte>` + `BinaryPrimitives` 构造（D68），Rust 
 
 ## 8. 已知限制与 v2
 
-1. **内容全文检索（`content:`）**：schema 里留了 `content` 字段但没启用。
-   开启需要"扩展名白名单 + 单文件 ≤ 2 MB + 后台索引不阻塞查询"三件事一起做，
-   且会显著抬高索引体积与建索引时间。留 v2。
+1. **内容全文检索（`content:`）**：v1.5.9 起**已实现**，但走的是**另一套索引**
+   （`%Data%\file-content-tantivy`，schema 见 `src/ipidx/src/lib.rs` 的
+   `content_schema()`：path/pathid/ext/isdir/size/mtime/depth/body）。
+   正文用 `cjk_body = Ngram(2,3) + LowerCaser + RemoveLongFilter(40)`，**不 STORED**；
+   抽取在白名单文件上做（docx/xlsx/pptx 走 zip+xml，pdf 走 PdfPig，纯文本按
+   BOM → UTF-8 → GB18030 解码），单文件 2 MB / PDF 50 页 / 6.4 万字符封顶。
+   保留"两套索引"的理由与分段做法见 DECISIONS D36 与 `QbarContentOptions`。
 2. **USN Journal**：本轮用 `ReadDirectoryChangesW` + 目录 mtime 快照（F6）；USN 需要卷句柄 + 提权，
    能在"程序没运行期间产生的变更"上也做到 O(变更数)。留 v2。
 3. **网络盘 / 移动盘实时索引**：显式不做（P2 禁止项）。

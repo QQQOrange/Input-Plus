@@ -586,6 +586,24 @@ public static partial class SelfTest
     /// 这些断言看着琐碎，但文案是最容易被下一次改动破坏的东西：
     /// 谁顺手写回一句「打开失败：xxx」，全仓口径就又散了。
     /// </summary>
+    /// <summary>
+    /// 主题尺寸的单一来源：滚动条宽度。
+    ///
+    /// 收窄成 7 之后，凡是"给滚动条让一条缝"的布局都必须读同一个值；
+    /// 还在用 SystemParameters.VerticalScrollBarWidth（系统 17）的地方会差 10 DIP，
+    /// 表现为相邻卡片右边缘错开一条空带（用户截图里的那条）。
+    /// </summary>
+    private static void TestThemeMetrics()
+    {
+        CheckEqual("主题：滚动条宽度资源是 7", UI.ThemeMetrics.ScrollBarWidth, 7.0);
+
+        /* 按键映射页的最小窗口宽度里就含着这条缝：它必须跟着资源走，
+         * 不能退回系统默认的 17（那样窗口最小宽度会多算 10）。 */
+        double expected = 228 + 24 + 20 + 20 + 20 + 2 + UI.ThemeMetrics.ScrollBarWidth + 4;
+        CheckEqual("主题：按键映射最小宽度用的是同一条滚动条宽度",
+            UI.Views.KeysView.WindowFixedWidth, expected);
+    }
+
     private static void TestUiText()
     {
         CheckEqual("成功文案：已 + 动词", UiText.Done("恢复默认设置"), "已恢复默认设置");
@@ -1644,7 +1662,7 @@ public static partial class SelfTest
         var category = view.FindName("CategoryBox") as System.Windows.Controls.ComboBox;
         var action = view.FindName("ActionBox") as System.Windows.Controls.ComboBox;
         var clear = view.FindName("ClearBindButton") as System.Windows.Controls.Button;
-        var headerSearch = view.FindName("BindingSearchBox") as System.Windows.Controls.TextBox;
+        var headerSearch = view.FindName("BindingSearchBox") as InputPlus.UI.Controls.SearchField;
 
         Check("编辑区有普通分类行", picker != null && category != null && action != null && clear != null);
         if (picker == null || category == null || action == null || clear == null) return;

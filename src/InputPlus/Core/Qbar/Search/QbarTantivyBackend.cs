@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using InputPlus.Core.Qbar;
+using InputPlus.Core.Qbar.Content;
 
 namespace InputPlus.Core.Qbar.Search;
 
@@ -66,6 +67,14 @@ internal static class QbarTantivyBackend
         {
             detail = "空查询不走索引";
             return false;
+        }
+
+        /* 只看正文（`content:` 谓词或「只看正文」过滤器）→ 这次**只**查正文索引。
+         * 与文件名检索分两条路走，是为了让"我搜的是正文"这件事有确定语义：
+         * 混在一起会出现"名字里没有、正文里也没有，但结果里有"的错觉。 */
+        if (spec.ContentOnly || spec.ContentTerms.Count > 0 || spec.ContentPhrases.Count > 0)
+        {
+            return TryRunContent(spec, window, out hits, out queryUsed, out detail);
         }
 
         IndexQuery query = BuildQuery(spec);
@@ -144,7 +153,173 @@ internal static class QbarTantivyBackend
                  + $" · 本地复核剔除 {rejected} 条";
         LastDetail = detail;
         LastRejectedSample = string.Join("；", sample);
+
+        /* 普通关键词也顺手查一遍正文（默认开）。
+         * 只在"名字命中还没填满窗口"时补，而且分数压在名字命中之下 ——
+         * 用户凭记忆打文件名时，结果顺序不能因为开了正文索引就变。 */
+        AppendContentHits(spec, window, hits, ref detail);
+        LastDetail = detail;
         return true;
+    }
+
+    /// <summary>把 `content:` 查询交给正文索引，再用同一套谓词复核。</summary>
+    private static bool TryRunContent(
+        QbarSearchSpec spec,
+        int window,
+        out List<FileSearchHit> hits,
+        out string queryUsed,
+        out string detail)
+    {
+        hits = new List<FileSearchHit>();
+        detail = "";
+        /* 「只看正文」时关键词在 Terms 里（`content: 报表`），`content:报表` 时在
+         * ContentTerms 里 —— 两种来源都算，后端不必知道用户用的是哪种写法。 */
+        var contentTerms = new List<string>(spec.ContentTerms);
+        contentTerms.AddRange(spec.Terms);
+        var contentPhrases = new List<string>(spec.ContentPhrases);
+        contentPhrases.AddRange(spec.Phrases);
+        queryUsed = "content=" + string.Join("|", contentTerms.Concat(contentPhrases));
+        LastQuery = queryUsed;
+
+        if (!ContentIndex.Enabled)
+        {
+            detail = "正文索引已关闭（设置 → 搜索 → 索引与后端 → 正文索引）";
+            LastDetail = detail;
+            return false;
+        }
+        if (!ContentIndex.Ready)
+        {
+            detail = ContentIndex.Building
+                ? "正文索引正在建立（" + ContentIndex.Status + "）"
+                : "正文索引未就绪（" + ContentIndex.Status + "）";
+            LastDetail = detail;
+            return false;
+        }
+
+        ContentQuery query = BuildContentQuery(spec, contentTerms, contentPhrases);
+        int fetch = Math.Min(FetchCap, Math.Max(window, window * FetchFactor));
+        ContentSearchResult result = ContentIndex.Search(query, fetch);
+        if (!result.Ok)
+        {
+            detail = "正文检索失败：" + result.Error;
+            LastDetail = detail;
+            return false;
+        }
+
+        /* 复核用的 spec **去掉词**：词已经在正文索引里筛过了，
+         * 再拿它去比对文件名会把正文命中全部误杀（文件名里本来就没有这个词）。 */
+        var filter = new QbarSpecFilter(Termless(spec));
+        var kept = new List<(FileSearchHit Hit, int Score)>(result.Hits.Count);
+        foreach (ContentHit raw in result.Hits)
+        {
+            bool isDir = raw.IsDir == 1;
+            int sizeKb = raw.Size <= 0 ? 0 : (int)Math.Min(raw.Size / 1024L, int.MaxValue);
+            if (!filter.Accept(raw.Path, isDir, sizeKb, raw.Day, out int score, raw.Size)) continue;
+            kept.Add((new FileSearchHit(raw.Path, isDir, score + ContentHitBonus, sizeKb, raw.Day, null), score));
+        }
+
+        kept.Sort((a, b) =>
+        {
+            int byScore = b.Score.CompareTo(a.Score);
+            if (byScore != 0) return byScore;
+            int byLength = a.Hit.Path.Length.CompareTo(b.Hit.Path.Length);
+            if (byLength != 0) return byLength;
+            return string.CompareOrdinal(a.Hit.Path, b.Hit.Path);
+        });
+
+        int take = Math.Min(window, kept.Count);
+        for (int i = 0; i < take; i++) hits.Add(kept[i].Hit);
+
+        detail = $"正文索引 {result.Ms:0.0} ms · 命中 {result.Total} 条 · 复核保留 {kept.Count} 条";
+        LastDetail = detail;
+        LastIndexFacets = new List<(string Label, int Count)>();
+        return true;
+    }
+
+    /// <summary>普通关键词的正文补充：把正文命中追加在名字命中之后（去重、低分）。</summary>
+    private static void AppendContentHits(QbarSearchSpec spec, int window,
+                                          List<FileSearchHit> hits, ref string detail)
+    {
+        try
+        {
+            if (!ContentIndex.Ready || !ContentIndex.Enabled) return;
+            if (!QbarSearchEngine.ContentMergeEnabled) return;
+            if (spec.Terms.Count == 0 && spec.Phrases.Count == 0) return;
+            if (hits.Count >= window) return;          // 名字命中已经填满窗口，不抢位置
+
+            ContentQuery query = BuildContentQuery(spec, spec.Terms, spec.Phrases);
+            int fetch = Math.Max(50, window - hits.Count);
+            ContentSearchResult result = ContentIndex.Search(query, fetch);
+            if (!result.Ok || result.Hits.Count == 0) return;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (FileSearchHit h in hits) seen.Add(h.Path);
+
+            var filter = new QbarSpecFilter(Termless(spec));
+            int added = 0;
+            foreach (ContentHit raw in result.Hits)
+            {
+                if (hits.Count >= window) break;
+                if (!seen.Add(raw.Path)) continue;
+                bool isDir = raw.IsDir == 1;
+                int sizeKb = raw.Size <= 0 ? 0 : (int)Math.Min(raw.Size / 1024L, int.MaxValue);
+                if (!filter.Accept(raw.Path, isDir, sizeKb, raw.Day, out int score, raw.Size)) continue;
+                hits.Add(new FileSearchHit(raw.Path, isDir, ContentMergeBonus + score, sizeKb, raw.Day, null));
+                added++;
+            }
+            if (added > 0) detail += $" · 正文补充 {added} 条";
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "正文补充检索");
+        }
+    }
+
+    /// <summary>正文命中 + 这个分（让它排在名字全等/前缀命中之后）。</summary>
+    private const int ContentHitBonus = 120;
+
+    /// <summary>并入普通关键词时的分数：比名字命中低一大截，只起"有这件事"的作用。</summary>
+    private const int ContentMergeBonus = 60;
+
+    private static ContentQuery BuildContentQuery(QbarSearchSpec spec,
+                                                  IEnumerable<string> terms,
+                                                  IEnumerable<string> phrases)
+    {
+        var q = new ContentQuery();
+        q.Terms.AddRange(terms);
+        q.Phrases.AddRange(phrases);
+        q.Ext.AddRange(spec.Extensions);
+        q.NegExt.AddRange(spec.NegExtensions);
+        q.Path.AddRange(spec.PathPins);
+        q.NegPath.AddRange(spec.NegPathPins);
+        q.MinSize = spec.MinSize;
+        q.MaxSize = spec.MaxSize;
+        q.MinDay = spec.MinDay;
+        q.MaxDay = spec.MaxDay;
+        q.Files = spec.FilesOnly;
+        q.Dirs = spec.FoldersOnly;
+        return q;
+    }
+
+    /// <summary>复制一份"只剩过滤条件、没有关键词"的 spec（给正文命中的复核用）。</summary>
+    private static QbarSearchSpec Termless(QbarSearchSpec spec)
+    {
+        var copy = new QbarSearchSpec();
+        copy.NegTerms.AddRange(spec.NegTerms);
+        foreach (string e in spec.Extensions) copy.Extensions.Add(e);
+        foreach (string e in spec.NegExtensions) copy.NegExtensions.Add(e);
+        copy.PathPins.AddRange(spec.PathPins);
+        copy.NegPathPins.AddRange(spec.NegPathPins);
+        copy.MinSize = spec.MinSize;
+        copy.MaxSize = spec.MaxSize;
+        copy.MinDay = spec.MinDay;
+        copy.MaxDay = spec.MaxDay;
+        copy.FilesOnly = spec.FilesOnly;
+        copy.FoldersOnly = spec.FoldersOnly;
+        copy.Glob = spec.Glob;
+        copy.RegexText = spec.RegexText;
+        copy.CommandKeyword = spec.CommandKeyword;
+        return copy;
     }
 
     /// <summary>

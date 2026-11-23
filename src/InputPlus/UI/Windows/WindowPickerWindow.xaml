@@ -1,4 +1,4 @@
-﻿<Window x:Class="InputPlus.UI.Windows.WindowPickerWindow"
+<Window x:Class="InputPlus.UI.Windows.WindowPickerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
@@ -30,7 +30,7 @@
         </StackPanel>
 
         <!-- 悬停窗口的名称与范围提示 -->
-        <Border x:Name="HoverInfo" Style="{StaticResource Overlay.Card}" CornerRadius="10" Padding="12,8"
+        <Border x:Name="HoverInfo" Style="{StaticResource Overlay.Card}" CornerRadius="{DynamicResource Radius.Control}" Padding="12,8"
                 BorderBrush="{DynamicResource Brush.OverlayBorderAccent}" Visibility="Collapsed"
                 HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False">
             <StackPanel>
@@ -42,7 +42,7 @@
         </Border>
 
         <!-- 高亮框：跟随鼠标指向的窗口 -->
-        <Border x:Name="Highlight" BorderBrush="{DynamicResource Brush.OverlayAccent}" BorderThickness="2" CornerRadius="6"
+        <Border x:Name="Highlight" BorderBrush="{DynamicResource Brush.OverlayAccent}" BorderThickness="2" CornerRadius="{DynamicResource Radius.Small}"
                 Background="{DynamicResource Brush.OverlayAccentSoft}" Visibility="Collapsed" IsHitTestVisible="False" />
     </Grid>
 </Window>

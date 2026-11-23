@@ -125,7 +125,7 @@ public partial class MainWindow : Window
     {
         bool max = WindowState == WindowState.Maximized;
         ContentCard.Margin = max ? new Thickness(0) : new Thickness(8);
-        ContentCard.CornerRadius = max ? new CornerRadius(0) : new CornerRadius(16);
+        ContentCard.CornerRadius = max ? new CornerRadius(0) : new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusCard);
         ContentCard.BorderThickness = max ? new Thickness(0) : new Thickness(1);
     }
 

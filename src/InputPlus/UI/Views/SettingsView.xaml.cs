@@ -1282,7 +1282,7 @@ public partial class SettingsView : UserControl
         if (FontMonoBox != null) FontMonoBox.IsChecked = followMono;
         /* 只在"还没建过"时建：过滤器由 OnFontSearchChanged 自己重建，
          * 这里如果无条件重建，用户打一个字、保存一次，光标和下拉状态都会被冲掉。 */
-        if (FontBox.Items.Count == 0) BuildFontList(FontSearchBox?.Text);
+        if (FontBox.Items.Count == 0) BuildFontList(FontSearchBox?.SearchText);
         SelectFontItem(family);
     }
 
@@ -1363,12 +1363,16 @@ public partial class SettingsView : UserControl
     };
 
     /// <summary>过滤器输入框：输入即过滤，选中的字体不会被过滤掉（见 SelectFontItem）。</summary>
-    private void OnFontSearchChanged(object sender, TextChangedEventArgs e)
+    private void OnFontSearchChanged(object sender, RoutedEventArgs e)
     {
-        if (_host == null) return;
+        /* _suppress：我们自己清空过滤器（恢复默认 / 重新扫描）时也会走到这里，
+         * 那两处紧接着会显式重建并选中，不该在这里再跑一遍 ——
+         * 否则 SelectFontItem 里的选中会多触发一次 OnFontChanged，
+         * 屏幕上就多蹦一条「界面字体已改为…」的提示。 */
+        if (_host == null || _suppress) return;
         var g = _host.Settings.Global;
         _suppress = true;
-        BuildFontList(FontSearchBox.Text);
+        BuildFontList(FontSearchBox.SearchText);
         SelectFontItem(g.UiFont);
         _suppress = false;
     }
@@ -1401,7 +1405,7 @@ public partial class SettingsView : UserControl
         g.UiFont = "";
         FontManager.Apply("", g.UiFontMono);
         _suppress = true;
-        if (FontSearchBox != null) FontSearchBox.Text = "";
+        if (FontSearchBox != null) FontSearchBox.ClearSearch();
         BuildFontList("");
         SelectFontItem("");
         _suppress = false;
@@ -1416,7 +1420,7 @@ public partial class SettingsView : UserControl
         FontManager.InvalidateInstalled();
         var g = _host.Settings.Global;
         _suppress = true;
-        BuildFontList(FontSearchBox?.Text);
+        BuildFontList(FontSearchBox?.SearchText);
         SelectFontItem(g.UiFont);
         _suppress = false;
         _host.Notify(Loc.F("字体列表已刷新：{0} 种", FontManager.Installed().Count));

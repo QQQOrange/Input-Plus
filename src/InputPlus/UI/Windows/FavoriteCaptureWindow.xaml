@@ -31,7 +31,7 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Width="40" Height="40" CornerRadius="10"
+            <Border Grid.Column="0" Width="40" Height="40" CornerRadius="{DynamicResource Radius.Control}"
                     Background="{DynamicResource Brush.SurfaceAlt}"
                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                 <Grid>
@@ -62,7 +62,7 @@
              前台程序手里正开着一个文件时，顺手也能把它收进固定项。
              识别不到（浏览器、桌面、提权窗口）就整条不显示 —— 空着一条框比没有更难看。 -->
         <Border x:Name="OpenFileStrip" Visibility="Collapsed" Margin="0,6,0,4"
-                Padding="10,8" CornerRadius="8"
+                Padding="10,8" CornerRadius="{DynamicResource Radius.Control}"
                 Background="{DynamicResource Brush.SurfaceAlt}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
             <Grid>

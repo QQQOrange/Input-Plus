@@ -223,10 +223,11 @@ public partial class KeysView : UserControl
     /// 改任何一处布局都要回来改这里，否则算出来的最小宽度会差几十像素，
     /// 表现为"窗口到了所谓的最小尺寸，键盘却还在出横向滚动条"。
     ///
-    /// 滚动条那 17 DIP 是实测踩出来的：整页滚动条画在 PageScroll **内部**，
-    /// 它一出现就从可用宽度里扣掉 17，键盘于是"刚好差一点"而要横向滚。
-    /// 用 <see cref="SystemParameters.VerticalScrollBarWidth"/> 而不是写死 17，
-    /// 免得不同 DPI 下又对不上。
+    /// 滚动条那条缝是实测踩出来的：整页滚动条画在 PageScroll **内部**，
+    /// 它一出现就从可用宽度里扣掉一条滚动条，键盘于是"刚好差一点"而要横向滚。
+    /// 读 <see cref="ThemeMetrics.ScrollBarWidth"/>（主题里实际画的 7 DIP），
+    /// 不要用 SystemParameters.VerticalScrollBarWidth —— 那是系统默认的 17，
+    /// 滚动条收窄之后会把最小窗口宽度多算 10 DIP。
     ///
     /// 末尾的 +4 是取整余量：主窗口开了 UseLayoutRounding，
     /// 把窗口设成"刚好装下"的宽度时各层取整会抹掉零点几像素，
@@ -234,7 +235,7 @@ public partial class KeysView : UserControl
     /// </summary>
     internal static double WindowFixedWidth =>
         228 + 24 + 20 + 20 + 20 + 2
-        + SystemParameters.VerticalScrollBarWidth
+        + ThemeMetrics.ScrollBarWidth
         + 4;
 
     /// <summary>
@@ -488,6 +489,7 @@ public partial class KeysView : UserControl
     public void Initialize(AppHost host)
     {
         _host = host;
+        BuildSearchCategories();
         BuildKeyboard();
         RefreshAppLayerCard();
         Refresh();

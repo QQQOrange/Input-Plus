@@ -673,11 +673,7 @@ internal static class AltDragCore
 		{
 			return false;
 		}
-		if (alt.EdgeX == DragEdge.Center && alt.EdgeY == DragEdgeY.Center)
-		{
-			// 四向扩张两个轴都在动，WMSZ_* 里没有对应值（原版这里同样返回 FALSE）。
-			return false;
-		}
+		bool bothCenter = alt.EdgeX == DragEdge.Center && alt.EdgeY == DragEdgeY.Center;
 		int flag = WmszFlag(alt.EdgeX, alt.EdgeY);
 		if (flag == 0)
 		{
@@ -686,6 +682,10 @@ internal static class AltDragCore
 		nint buf = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Native.RECT)));
 		try
 		{
+			/* 先记下"我们算出来的"尺寸：中心缩放回正时要用它当基准（AltSnap 的 lw->width）。 */
+			int originalWidth = rc.Width;
+			int originalHeight = rc.Height;
+
 			Marshal.StructureToPtr(rc, buf, fDeleteOld: false);
 			if (Native.SendMessageTimeoutW(hwnd, Native.WM_SIZING, (nint)flag, buf, Native.SMTO_ABORTIFHUNG, 64u, out var _) == IntPtr.Zero)
 			{
@@ -701,6 +701,17 @@ internal static class AltDragCore
 				return false;
 			}
 			rc = back;
+
+			/* 中心缩放（两轴都是 Center）：WMSZ_* 里没有"四向同时扩张"的值，
+			 * AltSnap 的做法是拿 WMSZ_BOTTOMRIGHT 问一次，再把窗口按新尺寸**重新居中**
+			 * （hooks.c:1429 的 map[2][2] + hooks.c:1454-1457）。
+			 * 不补这一步的话，按字符格对齐的窗口（终端/控制台）被"问"完就会往右下角偏，
+			 * 用户看到的是"从中心拉窗口，它一边长一边往右下跑"。 */
+			if (bothCenter)
+			{
+				rc.Left += (originalWidth - back.Width) / 2;
+				rc.Top += (originalHeight - back.Height) / 2;
+			}
 			return true;
 		}
 		catch (Exception ex)
@@ -715,7 +726,7 @@ internal static class AltDragCore
 	}
 
 	/// <summary>hooks.c:1435-1445 的 map[3][3]：九宫格 → WM_SIZING 的 wParam。</summary>
-	private static int WmszFlag(DragEdge x, DragEdgeY y)
+	internal static int WmszFlag(DragEdge x, DragEdgeY y)
 	{
 		return (x, y) switch
 		{
@@ -727,6 +738,9 @@ internal static class AltDragCore
 			(_, DragEdgeY.Bottom) => Native.WMSZ_BOTTOM,
 			(DragEdge.Left, _) => Native.WMSZ_LEFT,
 			(DragEdge.Right, _) => Native.WMSZ_RIGHT,
+			/* 中心缩放没有对应的 WMSZ_*：照 AltSnap 的 map[2][2] 用 BOTTOMRIGHT 问一次，
+			 * 调用方随后会把窗口按新尺寸重新居中（见 LetWindowKickBack）。 */
+			(DragEdge.Center, DragEdgeY.Center) => Native.WMSZ_BOTTOMRIGHT,
 			_ => 0,
 		};
 	}

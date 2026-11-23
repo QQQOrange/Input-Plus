@@ -26,6 +26,129 @@ namespace InputPlus.Core.Windows;
 /// </summary>
 internal static class OfficeRecentFiles
 {
+    /// <summary>
+    /// 把 WPS / Office 的「最近文件」**全部**列出来（不只是按名字找一个）。
+    ///
+    /// 给「搜索前建议」里的「Windows 最近使用」用：用户从 WPS 里打开的文件，
+    /// 系统的 shell:recent 里往往没有 .lnk（WPS 只写自己的 MRU），
+    /// 于是那一栏看起来"只有文件夹、没有刚打开的文件"。这里把这份补上。
+    ///
+    /// 顺序：能读到时间的按时间倒序（Office 的 MRU 值带 <c>[T…]</c> 时间戳），
+    /// 读不到的（WPS）按子键编号倒序；同一条路径只出现一次。只收**现在还存在**的文件。
+    /// </summary>
+    internal static IReadOnlyList<(string Path, DateTime At)> Recent(int max = 60)
+    {
+        var found = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? raw, DateTime at)
+        {
+            string path = (raw ?? "").Trim();
+            if (path.Length == 0) return;
+            try
+            {
+                if (!File.Exists(path)) return;
+                path = RevealPath.Clean(path);
+            }
+            catch { return; }
+
+            if (found.TryGetValue(path, out DateTime old))
+            {
+                if (at > old) found[path] = at;
+                return;
+            }
+            found[path] = at;
+        }
+
+        // WPS：编号越大越新（编号不保证连续），先大后小。
+        try
+        {
+            using RegistryKey? root = Registry.CurrentUser.OpenSubKey(@"Software\Kingsoft\Office\6.0");
+            if (root != null)
+            {
+                foreach (string app in root.GetSubKeyNames())
+                {
+                    using RegistryKey? files = root.OpenSubKey($@"{app}\RecentFiles\files");
+                    if (files == null) continue;
+
+                    var indexes = new List<string>(files.GetSubKeyNames());
+                    indexes.Sort((a, b) => NumberOf(b).CompareTo(NumberOf(a)));
+
+                    foreach (string index in indexes)
+                    {
+                        using RegistryKey? item = files.OpenSubKey(index);
+                        if (item?.GetValue("path") is not string path) continue;
+
+                        /* WPS 不写时间：用文件自己的修改时间当排序依据。
+                         * 用"最小编号 = 最旧"去合成时间反而会把刚打开的老文件压到最下面。 */
+                        DateTime at = DateTime.MinValue;
+                        try { if (File.Exists(path)) at = File.GetLastWriteTime(path); } catch { }
+                        Add(path, at);
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "建议：读 WPS 最近文件"); }
+
+        // Microsoft Office：File MRU 的每个值形如 [F…][T…][O…]*C:\a\b.docx
+        try
+        {
+            using RegistryKey? root = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Office");
+            if (root != null)
+            {
+                foreach (string version in root.GetSubKeyNames())
+                {
+                    using RegistryKey? versionKey = root.OpenSubKey(version);
+                    if (versionKey == null) continue;
+
+                    foreach (string app in versionKey.GetSubKeyNames())
+                    {
+                        using RegistryKey? mru = versionKey.OpenSubKey($@"{app}\File MRU");
+                        if (mru == null) continue;
+
+                        foreach (string valueName in mru.GetValueNames())
+                        {
+                            if (mru.GetValue(valueName) is not string raw) continue;
+                            Add(ParseMruValue(raw), ParseMruTime(raw));
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "建议：读 Office 最近文件"); }
+
+        return found
+            .OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(0, max))
+            .Select(kv => (kv.Key, kv.Value))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Office MRU 里的 <c>[T01DA…]</c> → 时间。那是**十六进制的 FILETIME**（8 字节），
+    /// 解析不出来就返回 <see cref="DateTime.MinValue"/>（只影响排序，不影响收录）。
+    /// </summary>
+    internal static DateTime ParseMruTime(string? raw)
+    {
+        string text = (raw ?? "").Trim();
+        int t = text.IndexOf("[T", StringComparison.Ordinal);
+        int end = t < 0 ? -1 : text.IndexOf(']', t);
+        if (t < 0 || end < 0) return DateTime.MinValue;
+
+        string hex = text[(t + 2)..end];
+        if (hex.Length == 0 || hex.Length > 16) return DateTime.MinValue;
+
+        try
+        {
+            if (!long.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out long fileTime))
+                return DateTime.MinValue;
+            if (fileTime <= 0) return DateTime.MinValue;
+            return DateTime.FromFileTimeUtc(fileTime).ToLocalTime();
+        }
+        catch { return DateTime.MinValue; }
+    }
+
     /// <summary>按文件名在 WPS / Office 的最近列表里找真实路径；找不到返回 null。</summary>
     internal static string? FindByFileName(string? fileName)
     {

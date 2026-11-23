@@ -349,6 +349,17 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		}
 	}
 
+	/// <summary>
+	/// 自检用：这一次按压还在「长按计时」里（还没转正）。
+	///
+	/// 为什么要暴露它：v1.7.1 修的正是"自动重复把已经转正的那次按压重新打回 pending"，
+	/// 而那个状态只能从这里看 —— 只看 TriggerHeld 是看不出来的（转正了它也是 true）。
+	/// </summary>
+	internal bool PendingForTest => _triggerPending;
+
+	/// <summary>自检用：这一次按压是否已经转正（_alt），和 <see cref="TriggerHeld"/> 分开看。</summary>
+	internal bool ArmedForTest => _alt;
+
 	internal int SnapForTest
 	{
 		get
@@ -509,7 +520,14 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 				{
 					// 键盘自动重复会一遍遍进来：已经在计时就别把阈值重新数一遍，
 					// 否则按住不放永远转正不了（v1.6.0 的老 bug）。
-					if (!_triggerPending)
+					//
+					// v1.7.1：**已经转正过**（_alt）就更不能再开一轮计时。
+					// 以前这里只看 _triggerPending，而 ArmTrigger 转正时正好把它清掉了，
+					// 于是按住不放时每一个自动重复都会重新点着一轮 200ms 计时：
+					//   · 每 200ms 又"转正"一次 —— 日志里一串「触发键已按住」；
+					//   · 松手那一下 pending 正醒着，被当成短按（见下面抬起那段），
+					//     _alt/_triggerHeld 就再也不放下来了。
+					if (!_triggerPending && !_alt)
 					{
 						BeginPendingTrigger(cfg, (int)kb.vkCode);
 						HookProbe.W("HandleKey：开始长按计时 " + cfg.TriggerHoldMs + "ms");
@@ -519,7 +537,9 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 				// 阈值 0 = 按下即生效。但设备还没解析完就先别转正：否则「没勾的键盘」
 				// 会在阈值 0 下先接管一次，再被长按定时器撤销，等于漏拦。
 				// 解析结果回来的那一刻由 KickDeviceResolve 的回调补上一次转正。
-				if (_triggerDeviceKnown)
+				// 已经在按住（自动重复又发了一次 keydown）就别再转正一遍：那只会多刷一行日志，
+				// 还会把 _blockAltUp/_blockMouseUp 这些"这一笔拖动"的旗子重新拍平。
+				if (_triggerDeviceKnown && !_alt)
 				{
 					ArmTrigger(cfg);
 				}
@@ -528,12 +548,27 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 			// 这次按压还没到阈值就松开了 = 一次普通按键。
 			// 没开吞键时前台本来就已经收到，这里只收拾自己的状态；开了吞键则相反 ——
 			// keydown 被我们吃了，抬起时必须补发一次「按下+抬起」，用户按 Enter 还是得到一个回车。
+			//
+			// v1.7.1：**抬起这一下必须永远把「按住」放掉**。
+			// 以前这里是"pending 就 return"，而 `_alt` 只在下面那段里清 —— 于是只要松手时
+			// pending 醒着（自动重复把计时又点着了，或者按下鼠标那一刻的兜底刚转正），
+			// `_alt`/`_triggerHeld` 就留在 1 上：钩子自己记的按下状态已经是"松开"，
+			// 之后每一次按下鼠标都会在 BeginDrag 的「触发键复查」那一关被无声拦掉 ——
+			// 用户看到的就是「按住拖拽用着用着彻底没反应，只有重启才好」。
+			// 现场日志里对得上的形态：只有一串「触发键已按住」，既没有「已松开」也没有「接管」。
+			bool triggerWasArmed = _alt;
+			bool swallowedUp = _triggerSwallowed;
+			_triggerSwallowed = false;
 			if (_triggerPending)
 			{
-				bool swallowedPending = _triggerSwallowed;
-				_triggerSwallowed = false;
-				CancelPendingTrigger(replay: swallowedPending);
-				return swallowedPending;
+				// 没转正过：真·短按。吞过就把这一下按键还给前台，到此为止。
+				// 转正过：只是"转正之后 pending 又被点着了"，不能当成短按 —— 继续往下放状态。
+				CancelPendingTrigger(replay: swallowedUp && !triggerWasArmed);
+				if (!triggerWasArmed)
+				{
+					return swallowedUp;
+				}
+				_triggerSwallowed = swallowedUp;
 			}
 			// 用户排障时最想知道的一件事：触发键到底有没有松开。这行和 BeginDrag 的"接管"结对出现，
 			// 只看到"接管"、后面没有"已松开"，就说明 keyup 压根没送到钩子（钩子被系统摘了/被别的程序抢了）。
@@ -542,8 +577,6 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 				// 已经起拖（不管是真拖了窗口还是只按了鼠标键）就说明这一下是「按住」，
 				// 抬起不能再补发 —— 否则拖完窗口前台白白收到一个回车。
 				bool dragged = _triggerDragSeen || _action != Actions.CodeNone;
-				bool swallowedUp = _triggerSwallowed;
-				_triggerSwallowed = false;
 				// hooks.c:1064-1082：还有别的触发键按着就不收尾；否则把"用户按着触发键"瞒过去，
 				// 然后只把 alt 放下 —— 拖动本身要继续，直到鼠标键松开（原版就是这样）。
 				if (_blockAltUp || _action != Actions.CodeNone)
@@ -2020,7 +2053,13 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		/* 短按触发键（没到长按阈值）时，BeginPendingTrigger 已经把鼠标钩子装上了 ——
 		 * 这里必须把它卸掉，否则用户每按一次普通的 Enter，整条低级鼠标钩子就永久挂在链头：
 		 * 之后每一次鼠标移动都要先进我们的回调，还会和手势那套抢链头顺序。
-		 * altdrag 的 HookMouse()/UnhookMouse() 是成对的（hooks.c:1084-1086 松手就卸）。 */
+		 * altdrag 的 HookMouse()/UnhookMouse() 是成对的（hooks.c:1084-1086 松手就卸）。
+		 *
+		 * v1.7.1：判据只有这一处 —— `_alt` 还立着就说明「按住」还在（按下鼠标那一刻的兜底
+		 * 刚转正、或者自动重复把计时又点着了），这时卸掉鼠标钩子，用户下一次点击就
+		 * 根本进不到 BeginDrag，现象正是「按住触发键点鼠标没反应」。
+		 * 以前这里底下还有一句无条件 `if (_action == None) WantMouseHook(false);`，
+		 * 把上面这个闸绕过去了，等于刚装上就卸 —— 删掉。 */
 		if (_action == Actions.CodeNone && !_alt)
 		{
 			WantMouseHook(false);
@@ -2030,11 +2069,6 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 			// 走带记账的版本：同一次按压在「长按定时器取消」和「抬起」两条路上都要求补发时，
 			// 只补一次（用户按一下 Enter 不该得到两个回车）。
 			ReplaySwallowedTap(_pendingVk);
-		}
-		if (_action == Actions.CodeNone)
-		{
-			// 只是一次短按（或者长按没到点就松了）：没人在拖，鼠标钩子卸掉。
-			WantMouseHook(false);
 		}
 	}
 

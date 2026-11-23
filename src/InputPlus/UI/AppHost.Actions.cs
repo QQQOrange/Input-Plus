@@ -5,6 +5,7 @@ using InputPlus.Core.Actions;
 using InputPlus.Core.Input;
 using InputPlus.Core.Localization;
 using InputPlus.Core.Qbar;
+using InputPlus.Core.Qbar.Content;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Update;
 using InputPlus.Core.Windows;
@@ -191,6 +192,46 @@ public sealed partial class AppHost
         }
         _notifiedInCall = true;
         ToastWindow.Show(message);
+    }
+
+    /// <summary>正文索引是否正在显示右下角进度（用来区分"收尾事件"和启动时就绪）。</summary>
+    private bool _contentProgressShown;
+
+    /// <summary>
+    /// 正文索引进度 → 右下角常驻进度条；建完关掉它并弹一条"已完成"。
+    ///
+    /// 为什么不在 ContentIndex 里直接开窗口：那一层是 Core，不该知道 UI 存在；
+    /// 界面这一侧订阅事件，Core 只负责发进度。
+    /// </summary>
+    private void OnContentIndexProgress(ContentIndex.ProgressInfo info)
+    {
+        if (!_dispatcher.CheckAccess())
+        {
+            _dispatcher.BeginInvoke(new Action(() => OnContentIndexProgress(info)));
+            return;
+        }
+
+        if (info.Building)
+        {
+            _contentProgressShown = true;
+            IndexProgressToast.Show(info);
+            return;
+        }
+
+        /* 没显示过进度（例如启动时就绪）就不该弹"已完成" —— 那不是这次的事。 */
+        if (!_contentProgressShown) return;
+        _contentProgressShown = false;
+        IndexProgressToast.Hide();
+
+        if (info.Phase == "就绪")
+        {
+            Notify(Loc.F("正文索引已完成：{0} 条 · {1}",
+                ContentIndex.FormatCount(info.Docs), ContentIndex.FormatSize(ContentIndex.Bytes)));
+        }
+        else if (info.Phase is "已中断" or "失败")
+        {
+            Notify(ContentIndex.Status);
+        }
     }
 
     public void ToggleEnabled() => SetEnabled(!Engine.Enabled);

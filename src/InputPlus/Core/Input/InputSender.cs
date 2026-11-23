@@ -927,10 +927,18 @@ public static class InputSender
         ///
         /// 为什么长文本改用剪贴板：逐字注入在长文本上会被目标程序的输入吞吐
         /// 卡住，实测会零星丢字/错字符（见 <see cref="ClipboardPaster"/>）。
+        ///
+        /// ⚠ 输入法开着时短 ASCII 也改走 Unicode：软件不再为了敲几个字母
+        /// 去切用户的输入语言（见 <see cref="TryTextAsKeys"/>）。
         /// </summary>
         Auto,
 
-        /// <summary>强制用真实按键（受键盘布局与输入法影响，但最像手打）。</summary>
+        /// <summary>
+        /// 强制用真实按键（受键盘布局与输入法影响，但最像手打）。
+        ///
+        /// 注意它**不切换输入语言**：输入法开着时字母仍可能被拼成候选，
+        /// 想稳一点就用 Auto（会自动退回 Unicode）。
+        /// </summary>
         Keys,
 
         /// <summary>强制 Unicode 注入（不经过布局与输入法，中文/emoji 用它）。</summary>
@@ -956,11 +964,18 @@ public static class InputSender
          * 原路继续，一个字都不会少。 */
         if (mode == TextMode.Auto && ShouldUseClipboard(text) && ClipboardPaster.TryPaste(text)) return;
 
+        /* 通道选择：
+         *   · Auto（默认）：输入法没开时，短 ASCII 走真实按键 —— 密码框那类
+         *     不认 Unicode 注入的控件只认它；输入法开着就自动退回 Unicode，
+         *     绝不为了敲几个字母去动用户的输入法；
+         *   · Keys：同样走真实按键。原来这里会先把目标窗口的输入语言切到英文，
+         *     那条路已经删掉 —— 现在它和 Auto 的区别只剩"不先在剪贴板/Unicode
+         *     里挑"，能不能真敲出来取决于输入法状态（敲不出来就退回 Unicode）。 */
         if (mode == TextMode.Keys || (mode == TextMode.Auto && LooksLikePlainAscii(text)))
         {
             if (TryTextAsKeys(text)) return;
 
-            /* 按键模拟不可用（布局映射不出来 / 没有前台窗口）时退回 Unicode。
+            /* 按键模拟不可用（输入法开着 / 布局映射不出来 / 没有前台窗口）时退回 Unicode。
              * 强制 Keys 也一样退回 —— 什么都不输入比输入得"不够完美"更糟。 */
         }
 
@@ -1044,17 +1059,24 @@ public static class InputSender
     /// <summary>
     /// 用真实按键逐字敲一段纯 ASCII。返回 false = 这条路走不通，调用方应改用 Unicode。
     ///
-    /// 五个关键点：
+    /// 关键点：
     ///   1. 用**前台窗口所在线程的键盘布局**做映射（<c>VkKeyScanEx</c>），
     ///      否则德语键盘上打 `@` 会出错；
     ///   2. 需要 Ctrl/Alt 才能打出的字符直接放弃（会干扰系统快捷键）；
-    ///   3. 输入语言是中文/日文/韩文/越南文时，字母会被输入法拼成候选 ——
-    ///      临时把窗口切到英文布局，打完再切回（见 <see cref="ImeGuard"/>）；
-    ///      切不动就放弃，让调用方走 Unicode（那条路不经过布局，同样能落字）；
-    ///   4. 老式 IMM32 程序额外摘一次输入法上下文，便宜且更彻底；
+    ///   3. 输入语言是中文/日文/韩文/越南文时字母会被输入法拼成候选 ——
+    ///      默认**放弃真实按键**，让调用方走 Unicode（不经过布局与输入法，
+    ///      一样能落字，而且完全不碰用户的输入法）；
+    ///      只有显式打开 <see cref="ForceKeyTyping"/>（"目标程序不认 Unicode 注入"）
+    ///      时才继续；
+    ///   4. 老式 IMM32 程序额外摘一次输入法上下文 —— **只在 ForceKeyTyping 时做**，
+    ///      因为"摘上下文"本身也是改动这个窗口的输入法状态；
     ///   5. **大写锁定开着时字母的 Shift 语义是反的**，每批发送前把
     ///      「布局给的 Shift」与「CapsLock」异或一次，否则整串字母的大小写
     ///      会对调（见 <see cref="NeedsShift"/>）。
+    ///
+    /// ⚠ **绝不切换输入语言**：老做法是 WM_INPUTLANGCHANGEREQUEST 切英文布局、
+    /// 敲完再切回来。切换是异步的，目标程序一不理会（或切回失败），
+    /// 用户就被永久留在英文布局上 —— 用户的原话是"input plus 不应该能够自己换输入法"。
     /// </summary>
     public static bool TryTextAsKeys(string text)
     {
@@ -1067,128 +1089,90 @@ public static class InputSender
         uint tid = GetWindowThreadProcessId(target, out _);
         if (tid == 0) return false;
 
-        IntPtr original = GetKeyboardLayout(tid);
-        if (original == IntPtr.Zero) return false;
+        /* 用户当前的键盘布局：只用来**映射**字符 → 虚拟键，不激活、不改它。 */
+        IntPtr layout = GetKeyboardLayout(tid);
+        if (layout == IntPtr.Zero) return false;
 
-        /* 中文输入法开着时替用户敲 "hello"，输入法会当成拼音弹候选框，
-         * 文本框里一个字都没有。切到英文布局再敲 —— 也是唯一对 TSF 程序
-         * （Win11 记事本 / Edge / VS Code）有效的办法。
-         *
-         * 干跑（自检 / 离屏渲染）时**不能**真去切：
-         * 那会把用户当时前台窗口的输入语言改掉，等于测试干扰了桌面。 */
-        IntPtr typing = original;
-        bool switched = false;
+        /* 输入法开着时直接放弃真实按键（上层会自动退回 Unicode 注入）。
+         * 干跑（自检 / 离屏渲染）时也当成"输入法开着"：那时前台是开发者自己的窗口，
+         * 什么都不能碰。 */
+        bool forceKey = ForceKeyTyping;
+        if ((DryRun || ImeGuard.IsComposing(layout)) && !forceKey) return false;
 
-        /* ⚠ 输入法开着时，**不再**去切目标窗口的输入语言。
-         *
-         * 老做法是 WM_INPUTLANGCHANGEREQUEST → 切到英文布局 → 敲字 → 切回来。
-         * 问题是：切换是异步的，目标程序一旦不理会（或切回失败），
-         * 用户就被**永久留在英文布局**上 —— 用户的原话是"输入法也被变了"。
-         * 这比"字没打出来"更烦人，而且用户往往不知道去哪儿改回来。
-         *
-         * 现在：输入法开着就直接走 Unicode 注入（不经过布局和输入法，
-         * 中文/emoji 都能落字，也不会动用户的输入法状态）。
-         * TryTextAsKeys 返回 false，上层会自动退回 TextUnicode。 */
-        if (!DryRun && ImeGuard.IsComposing(original) && !ForceKeyTyping)
-            return false;
+        /* 先把整段文字映射成 (虚拟键, 布局是否需要 Shift, 是否受大写锁定影响)，
+         * 有一个映射不了就整体放弃。 */
+        var plan = new List<(int Vk, bool Shift, bool CapsSensitive)>(text.Length);
+        foreach (char ch in text)
+        {
+            short scan = VkKeyScanEx(ch, layout);
+            if (scan == -1) return false;
 
+            int vk = scan & 0xFF;
+            int state = (scan >> 8) & 0xFF;
+            if (vk == 0) return false;
+            if ((state & 0x06) != 0) return false;      // 需要 Ctrl / Alt
+            plan.Add((vk, (state & 0x01) != 0, IsCapsSensitive(ch)));
+        }
+
+        /* 摘 IMM32 上下文只对**老式程序**有效，而且它确实改变了这个窗口的输入法状态
+         * （虽然用完就还回去）。所以只在用户显式要求真实按键时才做；
+         * 默认档宁可改走 Unicode，也不碰用户的输入法。
+         * 干跑时一律不摘：那时前台是开发者自己的窗口，键盘布局/输入法都不该被测试影响。 */
+        IntPtr oldIme = forceKey && !DryRun ? SuppressIme(target) : IntPtr.Zero;
         try
         {
-            /* 先把整段文字映射成 (虚拟键, 布局是否需要 Shift, 是否受大写锁定影响)，
-             * 有一个映射不了就整体放弃。 */
-            var plan = new List<(int Vk, bool Shift, bool CapsSensitive)>(text.Length);
-            foreach (char ch in text)
+            const int Batch = 32;
+            for (int start = 0; start < plan.Count; start += Batch)
             {
-                short scan = VkKeyScanEx(ch, typing);
-                if (scan == -1) return false;
+                int len = Math.Min(Batch, plan.Count - start);
+                var arr = new List<INPUT>(len * 4);
 
-                int vk = scan & 0xFF;
-                int state = (scan >> 8) & 0xFF;
-                if (vk == 0) return false;
-                if ((state & 0x06) != 0) return false;      // 需要 Ctrl / Alt
-                plan.Add((vk, (state & 0x01) != 0, IsCapsSensitive(ch)));
-            }
+                /* 每批读一次大写锁定。
+                 *
+                 * 为什么必须读：布局给的 Shift 是"大写锁定关着"时的答案。
+                 * 大写锁定开着时字母键的语义是**反的** ——
+                 *   Caps + A = a，Caps + Shift + A = A，
+                 * 于是整串字母的大小写照原样翻个面：用户要 "Abc"，
+                 * 打出来是 "aBC"，密码框立刻报"大小写错误"。
+                 * 这在密码场景里最要命：错一次就可能被计一次失败。
+                 *
+                 * 为什么按批读而不是全程读一次：2000 字的文本要发几百毫秒，
+                 * 期间用户真去按了 CapsLock 也能立刻跟上（代价只是一次
+                 * GetKeyState，可以忽略）。 */
+                bool capsOn = CapsLockOn;
 
-            IntPtr oldIme = SuppressIme(target);
-            try
-            {
-                const int Batch = 32;
-                for (int start = 0; start < plan.Count; start += Batch)
+                for (int i = start; i < start + len; i++)
                 {
-                    int len = Math.Min(Batch, plan.Count - start);
-                    var arr = new List<INPUT>(len * 4);
+                    var (vk, shiftFromLayout, capsSensitive) = plan[i];
+                    bool shift = NeedsShift(shiftFromLayout, capsSensitive, capsOn);
 
-                    /* 每批读一次大写锁定。
-                     *
-                     * 为什么必须读：布局给的 Shift 是"大写锁定关着"时的答案。
-                     * 大写锁定开着时字母键的语义是**反的** ——
-                     *   Caps + A = a，Caps + Shift + A = A，
-                     * 于是整串字母的大小写照原样翻个面：用户要 "Abc"，
-                     * 打出来是 "aBC"，密码框立刻报"大小写错误"。
-                     * 这在密码场景里最要命：错一次就可能被计一次失败。
-                     *
-                     * 为什么按批读而不是全程读一次：2000 字的文本要发几百毫秒，
-                     * 期间用户真去按了 CapsLock 也能立刻跟上（代价只是一次
-                     * GetKeyState，可以忽略）。 */
-                    bool capsOn = CapsLockOn;
-
-                    for (int i = start; i < start + len; i++)
-                    {
-                        var (vk, shiftFromLayout, capsSensitive) = plan[i];
-                        bool shift = NeedsShift(shiftFromLayout, capsSensitive, capsOn);
-
-                        if (shift) arr.Add(KeyInput(VK.Shift, false));
-                        arr.Add(KeyInput(vk, false));
-                        arr.Add(KeyInput(vk, true));
-                        if (shift) arr.Add(KeyInput(VK.Shift, true));
-                    }
-
-                    Send(arr.ToArray());
-                    if (start + len < plan.Count) Thread.Sleep(6);
+                    if (shift) arr.Add(KeyInput(VK.Shift, false));
+                    arr.Add(KeyInput(vk, false));
+                    arr.Add(KeyInput(vk, true));
+                    if (shift) arr.Add(KeyInput(VK.Shift, true));
                 }
-            }
-            finally
-            {
-                RestoreIme(target, oldIme);
+
+                Send(arr.ToArray());
+                if (start + len < plan.Count) Thread.Sleep(6);
             }
         }
         finally
         {
-            /* 还原顺序是硬约束，踩过：
-             * 注入的按键进的是**输入队列**，而 PostMessage 的消息优先级
-             * **高于**输入消息（GetMessage 的取用顺序是 发送消息 > 投递消息 >
-             * 输入消息）。所以 post 完立刻还原，剩下的字母会带着中文布局
-             * 重新翻译 —— 现象是"只有第一个字母落了字，后面全被拼成拼音"。
-             * 必须等目标线程把按键消化完再还。 */
-            if (switched)
-            {
-                Thread.Sleep(TypingSettleMs);
-                ImeGuard.Restore(target, original, LayoutSwitchTimeoutMs);
-            }
+            RestoreIme(target, oldIme);
         }
 
         return true;
     }
 
     /// <summary>
-    /// 是否强制用"真实按键"输入文本（会临时切换目标的输入语言）。
+    /// 是否强制用"真实按键"输入文本（输入法开着时也照敲）。
     ///
     /// 默认 false：输入法开着时改走 Unicode 注入，绝不碰用户的输入法。
     /// 只有在"目标程序不认 Unicode 注入"（个别游戏、老式控件）时才需要打开。
+    ///
+    /// 注意它**不会**切换输入语言 —— 那个能力已经整条删掉了。
     /// </summary>
     public static bool ForceKeyTyping { get; set; }
-
-    /// <summary>切换输入语言的等待上限。切换是异步的，要轮询到真正生效。</summary>
-    private const int LayoutSwitchTimeoutMs = 200;
-
-    /// <summary>
-    /// 敲完字到还原输入语言之间必须留的间隔。
-    ///
-    /// 投递消息的优先级高于输入消息，间隔为 0 会让还没被消化的字母
-    /// 在中文布局下重新翻译（被输入法拼成拼音）。100ms 对响应正常的
-    /// 程序有足够余量，慢程序也有逐批 6ms 的节流兜着。
-    /// </summary>
-    private const int TypingSettleMs = 100;
 
     // ---------------- 输入法临时挂起 ----------------
 
@@ -1200,6 +1184,9 @@ public static class InputSender
     ///
     /// 不摘的话，中文输入法会把逐字发送的字母当成拼音组合，
     /// 屏幕上出现候选框而不是要输入的文字。
+    ///
+    /// 只在用户显式要求"真实按键"（<see cref="ForceKeyTyping"/> / TextMode.Keys）时调用：
+    /// 摘上下文本身就是**改动这个窗口的输入法状态**，默认档宁可走 Unicode。
     /// </summary>
     private static IntPtr SuppressIme(IntPtr hwnd)
     {

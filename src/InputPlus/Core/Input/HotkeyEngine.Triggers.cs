@@ -10,6 +10,15 @@ namespace InputPlus.Core.Input;
 /// </summary>
 public sealed partial class HotkeyEngine
 {
+    /* DEBUG-SNIP：`CLP_SNIPDBG=1` 时把片段判定的每一步写进日志。
+     * 只在排查"别名为什么不展开"时打开，平时零开销（一次静态读）。 */
+    private static readonly bool SnippetDebugOn =
+        Environment.GetEnvironmentVariable("CLP_SNIPDBG") == "1";
+
+    private string SnippetModsText()
+        => (_ctrlDown ? "C" : "-") + (_shiftDown ? "S" : "-")
+           + (_laltDown ? "A" : "-") + (_lwinDown || _rwinDown ? "W" : "-");
+
     /// <summary>
     /// 触发键的虚拟键码集合（缓存）。
     ///
@@ -572,8 +581,19 @@ public sealed partial class HotkeyEngine
             return false;
         }
 
+        /* 换控件就把缓冲清干净：上一个输入框的尾巴不能拼到这一框的触发词前面。
+         * 见 _snippetFocusHwnd 的说明 —— 这也是"第一次打不生效"的另一半原因。 */
+        NoteSnippetFocus();
+
         /* 记下"输入法刚提交过"的时刻，供下面的组字判定用。 */
         if (vk == 0xE5) _snippetImeTick = Environment.TickCount64;
+
+        if (SnippetDebugOn)
+        {
+            CoreLog.Info($"[片段DBG] vk=0x{vk:X2} mods={SnippetModsText()} " +
+                         $"buf=[{_snippetBuffer.Snapshot()}] trusted={_snippetBuffer.Trusted} " +
+                         $"cand={list.Count} fg={ForegroundProcess ?? "-"} composing={ImeHasCompositionString()}");
+        }
 
         /* ③ 输入法组字保护（新增）。
          *
@@ -585,6 +605,13 @@ public sealed partial class HotkeyEngine
             _snippetBuffer.MarkUntrusted();
             return false;
         }
+
+        /* 回读之前的物理缓冲快照。
+         *
+         * 中文输入法把字母收进组字串时，控件里只有前缀那一个字（`；`），
+         * 而 ④ 的回读是"权威"的、会把缓冲冲成 `；` —— 之后 ⑤ 自然匹配不到任何触发词。
+         * 这份快照是"用户确实打了 ;lsdv"的唯一证据，命中时按"被输入法吞了"处理。 */
+        string physicalBeforeMirror = vk == 0x20 ? _snippetBuffer.Snapshot() : "";
 
         /* ---- ④ 镜像回读（权威判据） ----
          *
@@ -616,6 +643,26 @@ public sealed partial class HotkeyEngine
         if (opt.ExpandOnSpace && vk == 0x20)
         {
             var ready = SnippetMatcher.MatchSpan(list, _snippetBuffer.Snapshot(), ForegroundProcess);
+            if (SnippetDebugOn)
+            {
+                CoreLog.Info($"[片段DBG] 空格判定：buf=[{_snippetBuffer.Snapshot()}] trusted={_snippetBuffer.Trusted} " +
+                             $"命中={(ready == null ? "null" : ready.Value.Snippet.Trigger)} " +
+                             $"删除数={(ready == null ? -1 : ready.Value.ConsumedLength)}");
+            }
+            bool fromImeComposition = false;
+            if (ready == null && physicalBeforeMirror.Length > 0)
+            {
+                /* 回读把缓冲冲掉了：再拿回读之前的物理缓冲判一次。
+                 * 命中就说明"字母确实打了、但没落进控件"= 被输入法吃进组字串。 */
+                ready = SnippetMatcher.MatchSpan(list, physicalBeforeMirror, ForegroundProcess);
+                if (ready != null)
+                {
+                    fromImeComposition = true;
+                    if (SnippetDebugOn)
+                        CoreLog.Info($"[片段DBG] 回读冲掉了缓冲，用回读前的物理缓冲命中 {ready.Value.Snippet.Trigger}");
+                }
+            }
+
             if (ready == null)
             {
                 /* 空格是硬边界：这句话到此为止，下一个 token 从零开始。
@@ -625,7 +672,32 @@ public sealed partial class HotkeyEngine
                 return false;               // 没命中 → 空格照常输入
             }
 
-            ExpandSnippet(ready.Value);
+            /* 输入法正在组字（中文/拼音模式）：触发词的字母还在输入法里，
+             * 屏幕上只有前缀那一个字。交给展开逻辑"取消组字、只删 1 个字"，
+             * 否则会按触发词长度去删正文，看起来就是"别名坏了"。
+             *
+             * 判据要**认得出这条触发词**：只要"有组字串"就算组字，会把用户正在打的
+             * 别的拼音一起取消掉。所以看组字串里是不是正在拼这个触发词的字母。 */
+            string composition = ImeCompositionText();
+            bool composing = fromImeComposition
+                             || CompositionCarriesTrigger(composition, ready.Value.Snippet)
+                             || SnippetLooksSwallowedByIme(ready.Value.Snippet);
+
+            if (composing && !CanHandleImeComposition())
+            {
+                /* 读不到控件文本、也没有 IMM 上下文：这次展开没有任何安全做法
+                 * （既算不出该删几个字，也不能取消组字），而**绝不能**退回去发 Esc ——
+                 * 微信 / QQ 用 Esc 关当前对话窗口。空格照常交给输入法（不吞），
+                 * 用户看到的还是 `;lsdv` 被提交成字，而不是"空格没反应"。 */
+                if (SnippetDebugOn)
+                    CoreLog.Info($"[片段DBG] 组字且无可用手段（{ForegroundProcess ?? "-"}）→ 不吞空格，放弃展开");
+                _snippetBuffer.Reset();
+                return false;
+            }
+
+            if (SnippetDebugOn && composing)
+                CoreLog.Info($"[片段DBG] 空格命中且组字串=[{composition}] → 取消组字（IMM32）后展开");
+            ExpandSnippet(ready.Value, composing, composition.Length);
             return true;                    // 通知调用方把这次空格吞掉
         }
 
@@ -666,6 +738,14 @@ public sealed partial class HotkeyEngine
 
         _snippetBuffer.Apply(TextEventKind.Insert, ch.Value);
 
+        /* ⚠ 这里**不碰**用户的输入语言。
+         *
+         * 曾经在这里"前缀一出现就把输入语言切到英文"，想让后面的字母老老实实落进控件
+         * （中文输入法会把它们收进组字串）。代价是软件替用户换了输入法 ——
+         * 用户的原话是「input plus 不应该能够自己换输入法」。
+         * 组字那条路本来就有解：展开时先取消组字、只回删前缀那一个字
+         * （见 ExpandSnippet 的 composing 分支），不需要动布局。 */
+
         /* 空格触发模式：命中先攒着，等空格；不在这里展开。 */
         if (opt.ExpandOnSpace) return false;
 
@@ -681,10 +761,14 @@ public sealed partial class HotkeyEngine
             _snippetPending = hit;
             _snippetPendingAt = DateTime.Now;
             _snippetPendingGen = _snippetBuffer.Generation;
+            string pendingComposition = ImeCompositionText();
+            _snippetPendingComposing = CompositionCarriesTrigger(pendingComposition, hit.Value.Snippet);
+            _snippetPendingCompositionChars = pendingComposition.Length;
             return false;
         }
 
-        ExpandSnippet(hit.Value);
+        string compositionNow = ImeCompositionText();
+        ExpandSnippet(hit.Value, CompositionCarriesTrigger(compositionNow, hit.Value.Snippet), compositionNow.Length);
         return false;
     }
 
@@ -703,9 +787,21 @@ public sealed partial class HotkeyEngine
     /// </summary>
     private void ApplyMirror(List<Snippet> list, string mirror)
     {
-        bool authoritative = !_snippetBuffer.Trusted
-                             || _snippetBuffer.Length == 0
-                             || HasNonAsciiTrigger(list);
+        /* 读回来的是窗口标题（Chromium/Electron 的 hwndFocus 就是顶层窗口）：
+         * 这不是用户打的字，灌进缓冲只会把一份对的缓冲冲坏。 */
+        if (TextMirror.LooksLikeWindowTitle(mirror)) return;
+
+        /* 什么时候"读到的就是真理"：
+         *   · 缓冲是空的 —— 没有别的可依据；
+         *   · 配置里有非 ASCII 触发词 —— 中文/日文别名只可能出现在控件文本里，
+         *     拼音字母和屏幕上的汉字根本不是同一串，只能无条件采纳（改造前就是这样）。
+         *
+         * **注意这里故意不再把"缓冲不可信"算作权威**：以前只要 Trusted=false 就直接覆盖，
+         * 而 WM_GETTEXT 在很多程序里返回的根本不是输入行（控制台整屏、Electron 的
+         * 顶层窗口、某些自绘控件）—— 一份"不可信但正确"的物理缓冲会被冲成一段无关文本，
+         * 于是同一个别名**第一次打不出来、第二次才成功**（第二次 Trusted 已被上一步修好）。
+         * 不可信但非空时改走下面的后缀校验：读回来的确实以刚打的字结尾才采纳。 */
+        bool authoritative = _snippetBuffer.Length == 0 || HasNonAsciiTrigger(list);
         if (authoritative)
         {
             _snippetBuffer.ReplaceWith(mirror, trusted: true);
@@ -754,33 +850,344 @@ public sealed partial class HotkeyEngine
         return Environment.TickCount64 - _snippetImeTick <= 300;   // 刚提交过，退格很可能还在改拼音
     }
 
+    /* 【已删除】_aliasImeHwnd / _aliasImePrevLayout / MaybeSwitchToEnglishForAlias /
+     * RestoreAliasImeIfNeeded / RestoreAliasImeAfterExpand。
+     *
+     * 它们做的事是：别名前缀一出现就把**前台程序的输入语言**切到英文（美国），
+     * 展开完或普通空格再切回去。用户的评价是「这是个很严重的 bug」——
+     * 软件不该替人换输入法。切换还是异步的，落在打字中途会把输入法打断，
+     * 触发词的字母一半进了组字串、一半进了控件，"第一次输入不触发"就是这么来的。
+     *
+     * 现在这条路整条不存在：组字由 ExpandSnippet 的 composing 分支处理
+     * （取消组字 + 只回删前缀），文字注入走 Unicode/剪贴板，都不碰布局。 */
+
+    /// <summary>
+    /// 焦点控件变了就把片段缓冲清空（换输入框 = 换一段文本）。
+    ///
+    /// 为什么必须清：缓冲里记的是"屏幕上这一串字符的尾巴"，它只对**同一个控件**有效。
+    /// 用户点了另一个输入框再打别名，尾巴却还是上一个框的最后几个字母 ——
+    /// 匹配器看到"字母 + ;mail"，以前会以"不在词边界"为由拒绝，
+    /// 于是第一次不展开；用户按下空格（失败）后缓冲被清空，第二遍才成功。
+    ///
+    /// 拿不到焦点（受保护进程 / 正在切桌面）时**不猜**：保持原样，
+    /// 让回读与匹配照旧工作 —— 误清空只损失一次展开，误拼接会连累下一框。
+    /// </summary>
+    private void NoteSnippetFocus()
+    {
+        IntPtr focus = ForegroundFocusHandle();
+        if (focus == IntPtr.Zero) return;
+        if (_snippetFocusHwnd == focus) return;
+
+        /* 第一次记录（启动后的第一个键）没有"上一个控件"，不需要清；
+         * 之后每次真正换控件都清 —— 里面记的内容属于别的输入框。 */
+        if (_snippetFocusHwnd != IntPtr.Zero) _snippetBuffer.Reset();
+        _snippetFocusHwnd = focus;
+    }
+
+    /// <summary>前台线程的焦点控件；拿不到就退回前台窗口本身，都没有返回 Zero。</summary>
+    private static IntPtr ForegroundFocusHandle()
+    {
+        try
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return IntPtr.Zero;
+
+            uint tid = GetWindowThreadProcessId(fg, out _);
+            if (tid == 0) return fg;
+
+            var info = new GUITHREADINFO
+            {
+                cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>(),
+            };
+            if (GetGUIThreadInfo(tid, ref info) && info.hwndFocus != IntPtr.Zero) return info.hwndFocus;
+            return fg;
+        }
+        catch
+        {
+            return IntPtr.Zero;
+        }
+    }
+
     /// <summary>问 IMM32：前台窗口的输入上下文里有没有组字串。</summary>
     private static bool ImeHasCompositionString()
     {
-        IntPtr hwnd = IntPtr.Zero;
-        IntPtr imc = IntPtr.Zero;
+        IntPtr fg = IntPtr.Zero;
+        IntPtr focus = IntPtr.Zero;
         try
         {
-            hwnd = GetForegroundWindow();
-            if (hwnd == IntPtr.Zero) return false;
+            fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
 
-            imc = ImmGetContext(hwnd);
-            if (imc == IntPtr.Zero) return false;      // TSF-only 窗口拿不到上下文，按"没在组字"处理
+            /* 组字属于**有焦点的那个子控件**，不属于顶层窗口。
+             * 以前只看 GetForegroundWindow()：WinForms/WPF/编辑器里的文本框
+             * 全都拿不到上下文（顶层窗口没有 IMM 上下文），于是"正在组字"
+             * 永远判成 false —— 中文模式下别名 / 退格保护全都不生效。 */
+            uint tid = GetWindowThreadProcessId(fg, out _);
+            if (tid != 0)
+            {
+                var info = new GUITHREADINFO
+                {
+                    cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>(),
+                };
+                if (GetGUIThreadInfo(tid, ref info)) focus = info.hwndFocus;
+            }
 
-            return ImmGetCompositionStringW(imc, GcsCompStr, null, 0) > 0;
+            return CompositionPending(focus) || CompositionPending(fg);
         }
         catch
         {
             /* 预期内：探针，拿不到就按"没在组字"处理（退格照旧记进缓冲）。 */
             return false;
         }
+    }
+
+    /// <summary>
+    /// 取前台焦点控件（拿不到就顶层窗口）当前的输入法组字串。
+    /// 空 = 没在组字 / 这个窗口不提供 IMM 上下文（TSF-only）。
+    /// </summary>
+    private static string ImeCompositionText()
+    {
+        IntPtr fg = IntPtr.Zero;
+        IntPtr focus = IntPtr.Zero;
+        try
+        {
+            fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return "";
+
+            uint tid = GetWindowThreadProcessId(fg, out _);
+            if (tid != 0)
+            {
+                var info = new GUITHREADINFO
+                {
+                    cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>(),
+                };
+                if (GetGUIThreadInfo(tid, ref info)) focus = info.hwndFocus;
+            }
+
+            string text = CompositionTextOn(focus);
+            if (text.Length == 0 && focus != fg) text = CompositionTextOn(fg);
+            return text;
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>这个窗口的组字串（没有就空串）。</summary>
+    private static string CompositionTextOn(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return "";
+
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            imc = ImmGetContext(hwnd);
+            if (imc == IntPtr.Zero) return "";         // TSF-only 窗口拿不到上下文
+
+            int bytes = ImmGetCompositionStringW(imc, GcsCompStr, null, 0);
+            if (bytes <= 0) return "";
+
+            /* 组字串是天量小数据，但上限得有：一个坏掉的输入法不能让这里申请 2 GB。 */
+            if (bytes > 2048) bytes = 2048;
+            var buf = new byte[bytes];
+            int got = ImmGetCompositionStringW(imc, GcsCompStr, buf, bytes);
+            if (got <= 0) return "";
+            return System.Text.Encoding.Unicode.GetString(buf, 0, Math.Min(got, bytes));
+        }
+        catch { return ""; }
         finally
         {
-            if (imc != IntPtr.Zero && hwnd != IntPtr.Zero)
+            if (imc != IntPtr.Zero)
             {
                 try { ImmReleaseContext(hwnd, imc); } catch { /* 释放失败不影响判定 */ }
             }
         }
+    }
+
+    /// <summary>
+    /// 组字串里是不是正在拼这条触发词 —— 也就是"触发词的字母还没上屏"。
+    ///
+    /// 触发词带前缀（`;lsdv`），而输入法只拿走了字母（`lsdv`，前缀那一个字符
+    /// 已经上屏成 `；`），所以看的是"触发词以组字串结尾"，或者组字串本身包含整条触发词。
+    /// 认不出就当没在拼它：多取消一次会把用户正在打的别的拼音吞掉。
+    /// </summary>
+    private static bool CompositionCarriesTrigger(string composition, Snippet hit)
+    {
+        string f = SnippetMatcher.Fold(SnippetMatcher.Trim(composition));
+        string t = SnippetMatcher.Fold(hit.Trigger ?? "");
+        if (f.Length == 0 || t.Length == 0) return false;
+        return t.EndsWith(f, StringComparison.Ordinal) || f.Contains(t);
+    }
+
+    /// <summary>
+    /// 能不能用 IMM32 取消组字：焦点控件（或顶层窗口）有输入上下文就行。
+    /// 返回 false 的窗口（纯 TSF 程序）只能"不展开"，因为替代手段只有发 Esc。
+    /// </summary>
+    private static bool CanCancelImeComposition()
+    {
+        IntPtr fg = IntPtr.Zero;
+        IntPtr focus = IntPtr.Zero;
+        try
+        {
+            fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+
+            uint tid = GetWindowThreadProcessId(fg, out _);
+            if (tid != 0)
+            {
+                var info = new GUITHREADINFO
+                {
+                    cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>(),
+                };
+                if (GetGUIThreadInfo(tid, ref info)) focus = info.hwndFocus;
+            }
+
+            return HasImeContext(focus) || HasImeContext(fg);
+        }
+        catch { return false; }
+    }
+
+    private static bool HasImeContext(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            imc = ImmGetContext(hwnd);
+            return imc != IntPtr.Zero;
+        }
+        catch { return false; }
+        finally
+        {
+            if (imc != IntPtr.Zero)
+            {
+                try { ImmReleaseContext(hwnd, imc); } catch { /* 同上 */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 取消输入法组字：只走 <c>ImmNotifyIME(NI_COMPOSITIONSTR, CPS_CANCEL)</c>，
+    /// **不向前台发任何按键**。
+    ///
+    /// 为什么不能用 Esc：Esc 是应用自己的快捷键 —— 微信 / QQ 的对话窗口、
+    /// 不少编辑器的弹层都用它关闭。替用户按 Esc 的后果就是"打个别名，
+    /// 聊天窗口直接没了"（v1.5.8.2 现场事故，2026-11-23）。
+    ///
+    /// 返回 true = 现在确实没有组字串了；
+    /// false = 这个窗口没有输入上下文，或不是 IMM 输入法。
+    ///
+    /// <paramref name="hadComposition"/>：我们**亲手取消掉**了一个非空组字串。
+    /// 光看"现在的组字串是空的"分不清两种情况，而它们的删除数完全不同：
+    ///   · 取消成功 → 那几个字母从没上过屏，屏幕上只剩前缀 → 只回删前缀；
+    ///   · 取消时本来就没有组字串 → 字母是**输入法已经提交**到控件里的 →
+    ///     屏幕上确实有 `ipdv`，必须按触发词长度回删。
+    /// 以前一律当成前一种，于是"提交"那一次只删掉 1 个字、`ipdv` 留在原地 ——
+    /// 用户报的「第一次输入失败了」正是这个画面。
+    /// </summary>
+    private static bool CancelImeComposition(out bool hadComposition)
+    {
+        hadComposition = false;
+        IntPtr fg = IntPtr.Zero;
+        IntPtr focus = IntPtr.Zero;
+        try
+        {
+            fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+
+            uint tid = GetWindowThreadProcessId(fg, out _);
+            if (tid != 0)
+            {
+                var info = new GUITHREADINFO
+                {
+                    cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>(),
+                };
+                if (GetGUIThreadInfo(tid, ref info)) focus = info.hwndFocus;
+            }
+
+            if (CancelCompositionOn(focus, ref hadComposition)) return true;
+            if (focus != fg && CancelCompositionOn(fg, ref hadComposition)) return true;
+            return false;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>在一个窗口的输入上下文里取消组字。</summary>
+    private static bool CancelCompositionOn(IntPtr hwnd, ref bool hadComposition)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            imc = ImmGetContext(hwnd);
+            if (imc == IntPtr.Zero) return false;
+
+            /* 已经没有组字串 = 这个窗口没什么可取消的。
+             * 注意**不能**记成"取消成功"：字母可能已经被输入法提交到控件里了
+             * （见 CancelImeComposition 的说明）。 */
+            if (ImmGetCompositionStringW(imc, GcsCompStr, null, 0) <= 0) return true;
+
+            hadComposition = true;
+            return ImmNotifyIME(imc, NiCompositionStr, CpsCancel, 0);
+        }
+        catch { return false; }
+        finally
+        {
+            if (imc != IntPtr.Zero)
+            {
+                try { ImmReleaseContext(hwnd, imc); } catch { /* 同上 */ }
+            }
+        }
+    }
+
+    /// <summary>这个窗口的输入上下文里有没有组字串。</summary>
+    private static bool CompositionPending(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            imc = ImmGetContext(hwnd);
+            if (imc == IntPtr.Zero) return false;      // TSF-only 窗口拿不到上下文
+            return ImmGetCompositionStringW(imc, GcsCompStr, null, 0) > 0;
+        }
+        catch { return false; }
+        finally
+        {
+            if (imc != IntPtr.Zero)
+            {
+                try { ImmReleaseContext(hwnd, imc); } catch { /* 释放失败不影响判定 */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// TSF 程序（浏览器 / Electron / 新版记事本）拿不到 IMM 上下文，
+    /// 只能从**屏幕上的字**反推：控件尾巴里看不到触发词、却只剩前缀那一个字，
+    /// 说明字母被输入法收进了组字串。
+    /// </summary>
+    private bool SnippetLooksSwallowedByIme(Snippet hit)
+    {
+        try
+        {
+            string trigger = hit.Trigger ?? "";
+            if (trigger.Length == 0) return false;
+            if (!TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string tail) || tail.Length == 0)
+                return false;
+
+            /* 标题栏文字不是"屏幕上的正文"：拿它判"触发词没上屏"会把
+             * 一次正常的展开误判成组字，最后只删 1 个字（`;ipdv` 留在原地）。 */
+            if (TextMirror.LooksLikeWindowTitle(tail)) return false;
+
+            string foldedTail = SnippetMatcher.Fold(SnippetMatcher.Trim(tail));
+            string foldedTrigger = SnippetMatcher.Fold(trigger);
+            if (foldedTrigger.Length == 0) return false;
+            if (foldedTail.EndsWith(foldedTrigger, StringComparison.Ordinal)) return false;   // 触发词就在屏幕上
+
+            /* 屏幕上只剩前缀那一个字（`；` / `;` / `、` …）→ 字母确实没落进控件。 */
+            return foldedTail.EndsWith(SnippetMatcher.Fold(trigger.Substring(0, 1)), StringComparison.Ordinal);
+        }
+        catch { return false; }
     }
 
     /// <summary>IMM32：GCS_COMPSTR（"取组字串"）。</summary>
@@ -790,6 +1197,19 @@ public sealed partial class HotkeyEngine
      * 就地声明在 partial 类里，效果完全一样。 */
     [System.Runtime.InteropServices.DllImport("imm32.dll")]
     private static extern int ImmGetCompositionStringW(IntPtr hIMC, int dwIndex, byte[]? lpBuf, int dwBufLen);
+
+    /* 取消组字：这是**唯一**正确的做法。
+     * 以前这里是 InputSender.Tap(0x1B)（替用户按 Esc），结果微信里一展开别名就把
+     * 对话窗口关了 —— Esc 是应用自己的快捷键，不能借来清输入法。 */
+    [System.Runtime.InteropServices.DllImport("imm32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool ImmNotifyIME(IntPtr hIMC, uint dwAction, uint dwIndex, uint dwValue);
+
+    /// <summary>ImmNotifyIME 的动作：对组字串做点什么。</summary>
+    private const uint NiCompositionStr = 0x0015;
+
+    /// <summary>ImmNotifyIME 的参数：取消组字。</summary>
+    private const uint CpsCancel = 0x0004;
 
 
     /// <summary>这批候选里有没有非 ASCII 触发词（中文/日文/全角符号）。</summary>

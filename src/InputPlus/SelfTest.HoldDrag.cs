@@ -48,6 +48,20 @@ public static partial class SelfTest
         Check("按住拖拽：默认是关的", !fresh.HoldDragEnabled);
         CheckEqual("按住拖拽：默认没存过配置", fresh.HoldDragJson, "");
 
+        /* WM_SIZING 的九宫格映射：中心缩放这一格以前返回 0（等于"不问了"），
+         * AltSnap 的 map[2][2] 给的是 BOTTOMRIGHT + 事后回正中心（hooks.c:1429/1454）。
+         * 这里把整张表钉住，免得以后有人把"中心"那一格又改回 0。 */
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-左上", AltDragCore.WmszFlag(DragEdge.Left, DragEdgeY.Top), Native.WMSZ_TOPLEFT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-上", AltDragCore.WmszFlag(DragEdge.Center, DragEdgeY.Top), Native.WMSZ_TOP);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-右上", AltDragCore.WmszFlag(DragEdge.Right, DragEdgeY.Top), Native.WMSZ_TOPRIGHT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-左", AltDragCore.WmszFlag(DragEdge.Left, DragEdgeY.Center), Native.WMSZ_LEFT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-右", AltDragCore.WmszFlag(DragEdge.Right, DragEdgeY.Center), Native.WMSZ_RIGHT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-左下", AltDragCore.WmszFlag(DragEdge.Left, DragEdgeY.Bottom), Native.WMSZ_BOTTOMLEFT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-下", AltDragCore.WmszFlag(DragEdge.Center, DragEdgeY.Bottom), Native.WMSZ_BOTTOM);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-右下", AltDragCore.WmszFlag(DragEdge.Right, DragEdgeY.Bottom), Native.WMSZ_BOTTOMRIGHT);
+        CheckEqual("按住拖拽：WM_SIZING 九宫格-中心（AltSnap 用 BOTTOMRIGHT 问一次）",
+            AltDragCore.WmszFlag(DragEdge.Center, DragEdgeY.Center), Native.WMSZ_BOTTOMRIGHT);
+
         TestHoldDragConfig();
         TestResizeEdges();
         TestHoldDragRules();
@@ -673,10 +687,27 @@ public static partial class SelfTest
             }
             Thread.Sleep(140);
             Native.GetWindowRect(hwnd, out Native.RECT b1);
+            /* 断言分两层（和 ⑤ 同一套规矩，v1.7.1）：
+             *   ① 解算层：纯函数，必须**精确**给出「宽 +40、高 +40、左上角不动」。
+             *   ② 落地层：真窗口那张矩形还要过一遍目标程序的 WM_SIZING（KickBack，出厂开、
+             *      AltSnap 同款），所以只能断言方向与量级 —— 探针实测这个 STATIC 靶子在
+             *      收养那一帧被 WM_SIZING 改写成 471 宽，按 ±2 钉死会误报成回归。 */
+            var adoptSolver = new AltState();
+            var adoptTrack = new Native.RECT { Left = 260, Top = 240, Right = 680, Bottom = 560 };
+            adoptSolver.MinTrack = new Native.POINT(100, 100);
+            adoptSolver.MaxTrack = new Native.POINT(4000, 4000);
+            AltDragCore.Rebase(adoptSolver, move: false, new Native.POINT(676, 400), adoptTrack, cfg);
+            bool adoptSolved = AltDragCore.AdoptFollowAxis(adoptSolver, new Native.POINT(708, 460), adoptTrack, cfg);
+            int sxs = 0, sys = 0, sws = 0, shs = 0;
+            AltDragCore.ResizeGeometry(adoptSolver, new Native.POINT(716, 500), adoptTrack, ref sxs, ref sys, ref sws, ref shs);
+            Check("按住拖拽：收养之后宽只跟光标走（+40）、高只跟收养点走（+40），左上角不动（解算层）",
+                adoptSolved && sws == 460 && shs == 360 && sxs == 260 && sys == 240,
+                "解算 " + sxs + "," + sys + " " + sws + "x" + shs + " 收养=" + adoptSolved);
             // 高度只涨「越过阈值之后」的那一段（100-60=40）：收养时重算 offset 是为了不跳，
             // 代价是阈值之前那段位移不计入 —— 这是有意的，跳一下比少涨一点难看得多。
             Check("按住拖拽：边带起手斜着拖，宽高同时变（收养另一轴，m05425）",
-                b1.Height >= b0.Height + 30 && b1.Height <= b0.Height + 50 && Near(b1.Width, b0.Width + 40),
+                b1.Width >= b0.Width + 30 && b1.Height >= b0.Height + 30 && b1.Height <= b0.Height + 56
+                && Near(b1.Left, b0.Left) && Near(b1.Top, b0.Top),
                 Fmt(b1) + " 起点 " + Fmt(b0));
             var b1Up = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
             sink.OnMouse(Native.WM_RBUTTONUP, ref b1Up);
@@ -1007,6 +1038,60 @@ public static partial class SelfTest
             var repUp = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
             sink.OnKeyboard(false, ref repUp);
             Check("按住拖拽：自动重复那一轮松开也能收尾", !sink.TriggerHeld);
+
+            /* ---- v1.7.1：自动重复不能把「已经转正」的那次按压重新打回长按计时 ----
+             *
+             * 现场（holddrag.log）就是这个形状：只有一串「触发键已按住」，既没有「已松开」
+             * 也没有「接管」—— 用户按住了触发键，可鼠标点击全被无声拦掉。原因链：
+             *   1) ArmTrigger 转正时会把 _triggerPending 清掉；
+             *   2) 自动重复的下一次 keydown 于是又开了一轮 200ms 计时（旧代码只看 pending）；
+             *   3) 用户松手时 pending 正醒着 → 抬起那一段把它当"短按"直接 return，
+             *      _alt / _triggerHeld 留在 1 上：钩子记的是"已松开"，于是之后每一次
+             *      mousedown 都在 BeginDrag 的「触发键复查」那一关被拦掉。
+             * 现在 (2) 被闸掉、(3) 改成一定放状态 —— 两条分别钉住。 */
+            var holdDown = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+            sink.OnKeyboard(true, ref holdDown);
+            Thread.Sleep(320);
+            Check("按住拖拽：按住够阈值就转正（自动重复之前）", sink.TriggerHeld && sink.ArmedForTest,
+                "held=" + sink.TriggerHeld + " armed=" + sink.ArmedForTest);
+            for (int i = 0; i < 4; i++)
+            {
+                var repeatDown = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+                sink.OnKeyboard(true, ref repeatDown);
+            }
+            Check("按住拖拽：自动重复不会把已经转正的按压重新打回长按计时（v1.7.1）",
+                !sink.PendingForTest, "pending=" + sink.PendingForTest + " armed=" + sink.ArmedForTest);
+            var holdUp = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+            sink.OnKeyboard(false, ref holdUp);
+            Check("按住拖拽：按住一阵再松开一定放掉按住状态（不留下让后续点击全被拦的锁存位）",
+                !sink.TriggerHeld && !sink.ArmedForTest && !sink.PendingForTest,
+                "held=" + sink.TriggerHeld + " armed=" + sink.ArmedForTest + " pending=" + sink.PendingForTest);
+
+            /* ---- v1.7.1：鼠标钩子的「装/卸」请求成对 ----
+             *
+             * 鼠标钩子是按需装的（不拖的时候必须卸着）。但 CancelPendingTrigger 末尾曾经有一句
+             * 无条件的 WantMouseHook(false)，它绕过了 `_alt` 这道闸 —— 短按（或任何一次取消）
+             * 都可能把刚装上的钩子卸掉，而钩子不在链上就等于"这一下点击根本进不来"，
+             * 用户看到的是「按住触发键点鼠标完全没反应」。这里直接盯请求序列。 */
+            var wants = new List<bool>();
+            var hookSink = new AltDragSink(() => cfg, w => { lock (wants) wants.Add(w); });
+            try
+            {
+                var pressDown = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+                hookSink.OnKeyboard(true, ref pressDown);
+                Check("按住拖拽：按下触发键就请求鼠标钩子（兜底点击要靠它）", wants.Count > 0 && wants[0],
+                    string.Join(",", wants));
+                var pressUp = new Native.KBDLLHOOKSTRUCT { vkCode = 0x0D, scanCode = 0x1C };
+                hookSink.OnKeyboard(false, ref pressUp);
+                Check("按住拖拽：短按之后把鼠标钩子请求撤回（不常驻在钩子链头）",
+                    wants.Count > 0 && !wants[wants.Count - 1], string.Join(",", wants));
+                Check("按住拖拽：短按也不会留下按住状态", !hookSink.TriggerHeld && !hookSink.ArmedForTest,
+                    "held=" + hookSink.TriggerHeld + " armed=" + hookSink.ArmedForTest);
+            }
+            finally
+            {
+                try { hookSink.Dispose(); } catch { }
+            }
 
             // 阈值 0 = 老行为：按下立刻算按住，留给不想等的人。
             cfg.TriggerHoldMs = 0;

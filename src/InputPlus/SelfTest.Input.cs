@@ -320,14 +320,19 @@ public static partial class SelfTest
     }
 
     /// <summary>
-    /// 输入法守卫：判断"这个输入语言会不会把字母拼成候选"，以及切语言的失败路径。
+    /// 输入法守卫：判断"这个输入语言会不会把字母拼成候选"，**以及"这个类不能再切输入法"**。
     ///
     /// 用户报的现象是"我用中文输入法，按了快捷键，屏幕上弹出英文输入法候选框，
     /// 文本框里一个字都没有"。根因是输入语言是中文时真实按键会被输入法截走。
     ///
-    /// 这里钉住的是**判定规则**：宁可多切一次英文布局（多花几十毫秒），
-    /// 也不能漏判 —— 漏判等于用户按了没反应。真实切换行为由
-    /// `tools/e2e_ime_typing.py` 在真机上验证。
+    /// 曾经的解法是"临时把目标窗口的输入语言切到英文、打完再切回来"，
+    /// 代价是软件会自己换输入法（用户原话：「input plus 不应该能够自己换输入法，
+    /// 这是个很严重的 bug」）。那条路已经整条删掉，这里钉两件事：
+    ///   ① <see cref="Core.Input.ImeGuard.IsComposing"/> 的判定规则不变 ——
+    ///      漏判等于用户按了没反应；
+    ///   ② **ImeGuard 里不再存在任何切换输入语言/输入法模式的入口** ——
+    ///      这条用反射钉，谁再把 SwitchTo / EnsureEnglish / EnsureComposing /
+    ///      Restore 加回来，自检立刻红。
     /// </summary>
     private static void TestImeGuard()
     {
@@ -342,29 +347,65 @@ public static partial class SelfTest
         Check("韩文判定为会拼候选", Core.Input.ImeGuard.IsComposing(Hkl(0x0412)));
         Check("越南文判定为会拼候选", Core.Input.ImeGuard.IsComposing(Hkl(0x042A)));
 
-        // ---- 不该被误判的（误判只是多花时间，但也不该无缘无故切）----
+        // ---- 不该被误判的（误判只是多走一次 Unicode 注入，但也不该无缘无故）----
         Check("英文（美国）不判定为会拼候选", !Core.Input.ImeGuard.IsComposing(Hkl(0x0409)));
         Check("德文不判定为会拼候选", !Core.Input.ImeGuard.IsComposing(Hkl(0x0407)));
         Check("法文不判定为会拼候选", !Core.Input.ImeGuard.IsComposing(Hkl(0x040C)));
         Check("俄文不判定为会拼候选", !Core.Input.ImeGuard.IsComposing(Hkl(0x0419)));
         Check("空布局句柄不判定为会拼候选", !Core.Input.ImeGuard.IsComposing(IntPtr.Zero));
 
-        // ---- 必须能拿到英文布局：拿不到就只能退回 Unicode 注入 ----
+        // ---- 必须能拿到英文布局：自检靠它算 Shift 位与扫描码 ----
         IntPtr english = Core.Input.ImeGuard.EnglishLayout;
         Check("能加载英文（美国）布局", english != IntPtr.Zero);
         if (english != IntPtr.Zero)
         {
             // kbdus.dll 是系统自带的，语言 ID 必须是 0x0409
             CheckEqual("英文布局的语言 ID 是 en-US", (int)(english.ToInt64() & 0xFFFF), 0x0409);
-            // 切过去之后不能再被判成"会拼候选"，否则切了也白切
             Check("英文布局本身不会拼候选", !Core.Input.ImeGuard.IsComposing(english));
         }
 
-        // ---- 失败路径：句柄不合法时必须返回 false，让调用方退回 Unicode ----
-        Check("没有目标窗口时切换失败",
-            !Core.Input.ImeGuard.SwitchTo(IntPtr.Zero, english, 30));
-        Check("没有目标布局时切换失败",
-            !Core.Input.ImeGuard.SwitchTo(new IntPtr(0x1234), IntPtr.Zero, 30));
+        /* ---- ① 不再有"切输入法"的入口 ----
+         *
+         * 盯的是**方法名**而不是实现：只要这四个名字重新出现，就说明有人又把
+         * "偷偷切用户的输入语言"这条路接了回来。用户对这种现象的容忍度是零。 */
+        var banned = new[] { "SwitchTo", "EnsureEnglish", "EnsureComposing", "Restore", "ForceNativeMode" };
+        var found = typeof(Core.Input.ImeGuard)
+            .GetMethods(System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Static
+                        | System.Reflection.BindingFlags.Instance)
+            .Select(m => m.Name)
+            .Where(n => banned.Contains(n, StringComparer.Ordinal))
+            .Distinct()
+            .ToList();
+        Check("输入法：ImeGuard 不再有切换输入语言的入口", found.Count == 0, string.Join(",", found));
+
+        /* 引擎那边同样不许再出现"别名前缀偷偷切英文 / 展开后切回来"。
+         * 这两个名字就是 v1.5.8.2 的现场代码，删掉之后不能再长回来。 */
+        var aliasSwitch = new[] { "MaybeSwitchToEnglishForAlias", "RestoreAliasImeIfNeeded", "RestoreAliasImeAfterExpand" };
+        var aliasFound = typeof(HotkeyEngine)
+            .GetMethods(System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic
+                        | System.Reflection.BindingFlags.Static
+                        | System.Reflection.BindingFlags.Instance)
+            .Select(m => m.Name)
+            .Where(n => aliasSwitch.Contains(n, StringComparer.Ordinal))
+            .Distinct()
+            .ToList();
+        Check("输入法：别名路径不再偷偷切英文", aliasFound.Count == 0, string.Join(",", aliasFound));
+
+        /* ---- 镜像文本 ≠ 窗口标题 ----
+         *
+         * Chromium / Electron 的 hwndFocus 是顶层窗口，WM_GETTEXT 拿回来的是标题栏文字。
+         * 这条判据挡的就是"把窗口标题当成用户打的字"：一旦当真，组字判定会误以为
+         * 触发词没上屏，于是只回删 1 个字（`;ipdv` 留在屏幕上，2026-11-23 现场）。
+         * 只钉"不误伤"这一侧：正例依赖当前前台窗口，CI 上没有桌面，判了只会抖。 */
+        Check("镜像：普通正文不会被当成窗口标题",
+            !Core.Input.TextMirror.LooksLikeWindowTitle(@"D:\Local AI\git\Input-Plus源代码"));
+        Check("镜像：空尾巴不会被当成窗口标题",
+            !Core.Input.TextMirror.LooksLikeWindowTitle(""));
+        Check("镜像：null 尾巴不会被当成窗口标题",
+            !Core.Input.TextMirror.LooksLikeWindowTitle(null));
     }
 
     /// <summary>

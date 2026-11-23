@@ -23,7 +23,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <Border Width="34" Height="36" CornerRadius="10" Background="{DynamicResource Brush.AccentSoft}">
+                    <Border Width="34" Height="36" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.AccentSoft}">
                         <TextBlock Text="&#xE7C9;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
                                    Foreground="{DynamicResource Brush.Accent}" HorizontalAlignment="Center"
                                    VerticalAlignment="Center" />

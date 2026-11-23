@@ -19,7 +19,7 @@
              窗口留白（Margin 18）不动，面板本身的尺寸和排版跟以前完全一样。 -->
 
         <!-- 面板 -->
-        <Border x:Name="Panel" CornerRadius="14" BorderThickness="1.5"
+        <Border x:Name="Panel" CornerRadius="{DynamicResource Radius.Card}" BorderThickness="1.5"
                 Background="Transparent"
                 BorderBrush="{DynamicResource Brush.OverlayBorder}">
             <Border.RenderTransform>
@@ -51,7 +51,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Border x:Name="ModeIconBox" Grid.Column="0" Width="30" Height="30" CornerRadius="9" VerticalAlignment="Center"
+                    <Border x:Name="ModeIconBox" Grid.Column="0" Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}" VerticalAlignment="Center"
                             Visibility="Collapsed"
                             Background="{DynamicResource Brush.OverlayRowHover}">
                         <TextBlock x:Name="ModeIcon" Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -62,18 +62,18 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,10,0"
                                 VerticalAlignment="Center">
                         <!-- 关键词标签：输入 "bd " 后出现 -->
-                        <Border x:Name="ChipBox" Visibility="Collapsed" CornerRadius="9" Height="32"
+                        <Border x:Name="ChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Control}" Height="32"
                                 Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
                                 Background="{DynamicResource Brush.OverlayAccentSoft}" BorderThickness="1"
                                 BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <!-- 有图标：显示图标 -->
-                                <Border x:Name="ChipIconBox" Width="18" Height="18" CornerRadius="5"
+                                <Border x:Name="ChipIconBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.Small}"
                                         Visibility="Collapsed" ClipToBounds="True">
                                     <Image x:Name="ChipIcon" Stretch="UniformToFill" />
                                 </Border>
                                 <!-- 没有图标：显示首字色块 -->
-                                <Border x:Name="ChipInitialBox" Width="18" Height="18" CornerRadius="5"
+                                <Border x:Name="ChipInitialBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.Small}"
                                         Visibility="Collapsed">
                                     <TextBlock x:Name="ChipInitial" FontSize="10.5" FontWeight="SemiBold"
                                                Foreground="White" HorizontalAlignment="Center"
@@ -93,7 +93,7 @@
                         <!-- 过滤器 chip：输入 "doc:" 并选中命中项后出现在这里。
                              它和上面那个关键词 chip 是两回事：关键词 chip 改的是"去哪儿搜"，
                              这个改的是"搜什么"（扩展名/范围/时间），所以两个可以同时存在。 -->
-                        <Border x:Name="FilterChipBox" Visibility="Collapsed" CornerRadius="9" Height="32"
+                        <Border x:Name="FilterChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Control}" Height="32"
                                 Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
                                 Background="{DynamicResource Brush.OverlayRowHover}" BorderThickness="1"
                                 BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
@@ -122,7 +122,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border CornerRadius="7" Padding="8,4" VerticalAlignment="Center"
+                        <Border CornerRadius="{DynamicResource Radius.Control}" Padding="8,4" VerticalAlignment="Center"
                                 Background="{DynamicResource Brush.OverlayRowHover}">
                             <TextBlock x:Name="HintText" Text="{loc:T 'Enter 执行'}" FontSize="11"
                                        Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
@@ -150,7 +150,7 @@
                      键盘焦点还要在两个 HWND 之间来回切，↑↓/Enter 很容易丢。同 Grid 加行由布局
                      自动把面板撑高，输入框永远在最上面，最稳，也不会挡输入框。 -->
                 <Border x:Name="SuggestBox" Grid.Row="1" Visibility="Collapsed"
-                        Margin="16,0,16,8" Padding="6,4" CornerRadius="12"
+                        Margin="16,0,16,8" Padding="6,4" CornerRadius="{DynamicResource Radius.Card}"
                         Background="{DynamicResource Brush.OverlayRowHover}">
                     <ListBox x:Name="SuggestList" Background="Transparent" BorderThickness="0"
                              MaxHeight="248" Padding="0" SelectionMode="Single"
@@ -189,7 +189,7 @@
                     <!-- 右键某个文件后，列表整块变成针对它的操作菜单；
                          这个抬头显示"现在这些操作是给谁的"。 -->
                     <Border x:Name="MenuHeaderBox" Grid.Row="0" Visibility="Collapsed"
-                            Margin="16,4,16,0" Padding="10,7" CornerRadius="9"
+                            Margin="16,4,16,0" Padding="10,7" CornerRadius="{DynamicResource Radius.Control}"
                             Background="{DynamicResource Brush.OverlayRowHover}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
@@ -232,18 +232,18 @@
                                 <!-- 结果图标：有条目图标就显示图标，否则用品牌色首字 -->
                                 <Grid Grid.Column="0" Width="28" Height="28" Margin="0,0,11,0"
                                       VerticalAlignment="Center">
-                                    <Border x:Name="IconTile" CornerRadius="8"
+                                    <Border x:Name="IconTile" CornerRadius="{DynamicResource Radius.Control}"
                                             Background="{DynamicResource Brush.OverlayRowHover}">
                                         <TextBlock Text="{Binding IconGlyph}"
                                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                                    FontSize="12.5" Foreground="{DynamicResource Brush.OverlayTextSecondary}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
-                                    <Border x:Name="IconImageTile" CornerRadius="8" Visibility="Collapsed"
+                                    <Border x:Name="IconImageTile" CornerRadius="{DynamicResource Radius.Control}" Visibility="Collapsed"
                                             ClipToBounds="True">
                                         <Image Source="{Binding IconSource}" Stretch="UniformToFill" />
                                     </Border>
-                                    <Border x:Name="IconLetterTile" CornerRadius="8" Visibility="Collapsed"
+                                    <Border x:Name="IconLetterTile" CornerRadius="{DynamicResource Radius.Control}" Visibility="Collapsed"
                                             Background="{Binding LetterBrush}">
                                         <TextBlock Text="{Binding Letter}" FontSize="12" FontWeight="SemiBold"
                                                    Foreground="White" HorizontalAlignment="Center"
@@ -262,7 +262,7 @@
                                 </StackPanel>
 
                                 <!-- 徽标：文件操作菜单那些行没有徽标文本，空着会剩一个空心胶囊，所以空串时整块收起来 -->
-                                <Border x:Name="BadgeChip" Grid.Column="2" CornerRadius="6" Padding="7,2"
+                                <Border x:Name="BadgeChip" Grid.Column="2" CornerRadius="{DynamicResource Radius.Small}" Padding="7,2"
                                         Background="{DynamicResource Brush.OverlayRowHover}"
                                         VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Badge}" FontSize="10.5"
@@ -294,7 +294,7 @@
                     <!-- 查询调试面板：翻译层每一层的中间结果 + 请求参数 + 命中数与耗时。
                          默认收起，设置里打开或用 Ctrl+D 就地切换。 -->
                     <Border x:Name="DebugBox" Grid.Row="2" Visibility="Collapsed"
-                            Margin="16,2,16,8" Padding="10,7" CornerRadius="9"
+                            Margin="16,2,16,8" Padding="10,7" CornerRadius="{DynamicResource Radius.Control}"
                             Background="{DynamicResource Brush.OverlayRowHover}">
                         <TextBlock x:Name="DebugText" FontFamily="Consolas, Cascadia Mono" FontSize="10.5"
                                    TextWrapping="Wrap" MaxHeight="170"

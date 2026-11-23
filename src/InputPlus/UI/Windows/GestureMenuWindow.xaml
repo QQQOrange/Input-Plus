@@ -74,6 +74,41 @@
             </Grid>
         </DataTemplate>
 
+        <!-- 二级菜单的一行：**只有名称**。
+             以前沿用一级的模板，第二行会把 URL / 命令关键字一起画出来 —— 历史记录里
+             每条都拖着一条 https://…，行高被撑到 30 多，一屏放不下几条。
+             图标/序号那一列保留，和一级菜单左对齐；不再留右侧箭头列（子项没有下级）。 -->
+        <DataTemplate x:Key="SubEntryTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 图标列宽 Auto：二级条目大多数没有图标（历史记录是网址、命令是关键字），
+                     固定 22 会在标题左边留出一块看不到东西的空白，看起来像"左边距太大"。 -->
+                <Grid Grid.Column="0" Width="Auto" Margin="1,0,9,0">
+                    <Image Source="{Binding Icon}" Width="18" Height="18" Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding IconVisibility}" />
+                    <TextBlock Text="{Binding Glyph}"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{DynamicResource Brush.TextSecondary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding GlyphVisibility}" />
+                    <TextBlock Text="{Binding Index}" FontSize="11"
+                               Foreground="{DynamicResource Brush.TextTertiary}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding IndexVisibility}" />
+                </Grid>
+
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="12"
+                           Foreground="{DynamicResource Brush.TextPrimary}"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
+
         <!-- 行容器：和主题的 RowItem 同一套观感（圆角、悬停 Brush.Hover、选中 Brush.Selected），
              但内边距更紧（8,2）—— 菜单是一行一行扫的，RowItem 的 10,7 太肥。
              模板自己给、而不是只改 Padding：RowItem 模板里的 Padding 是写死的，
@@ -87,7 +122,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="8,2">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}"
+                                Padding="{TemplateBinding Padding}">
                             <ContentPresenter />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -119,17 +155,77 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <!-- 二级菜单的行：和一级同一套观感，只是左右内边距更小（6,2）。
+             用户的原话是"二级的左右边距还是太宽" —— 卡片的 Padding 已经收到 4，
+             行再来 8 就又是一圈看不见的空白。行高不变（MinHeight 照样 24）。 -->
+        <Style x:Key="SubMenuRow" TargetType="ListBoxItem" BasedOn="{StaticResource MenuRow}">
+            <Setter Property="Padding" Value="6,2" />
+        </Style>
+        <!-- 附加菜单自己的滚动条：比全局（7）再细一档，4 DIP。
+             用户原话是"这个滚动条也特别粗，收窄收窄再收窄"。
+             只覆盖**本窗口内部**的隐式样式，其它页面仍是主题的 7。 -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Width" Value="4" />
+            <!-- 同主题里那条注释：不把 MinWidth 归零，系统默认的 17 会把 4 盖掉。 -->
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="{DynamicResource Brush.BorderStrong}"
+                                                        CornerRadius="{DynamicResource Radius.Tiny}" Margin="0.5" />
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
+                                </Track.IncreaseRepeatButton>
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
+                                </Track.DecreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Orientation" Value="Horizontal">
+                                <Setter Property="Height" Value="4" />
+                                <Setter Property="Width" Value="Auto" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <!-- 固定宽度：菜单宽窄不该随条目文字长短变（用户要求）。
          128 的时候"历史记录"这四个字 + 右侧二级菜单箭头已经放不下，标题被省略号截成"历史记…"；
          160 是能稳稳放下四到六个汉字、又不至于像 192 那样空出半条街的宽度。
-         更长的标题照旧省略号截，菜单不跟着内容变宽。二级菜单（SubPopup）另给 MinWidth。 -->
-    <Border Margin="14" Width="160"
-            Padding="6,4,6,4" CornerRadius="14"
-            Background="{DynamicResource Brush.Surface}"
-            BorderBrush="{DynamicResource Brush.Border}"
-            BorderThickness="1">
+         更长的标题照旧省略号截，菜单不跟着内容变宽。二级卡片用同样的 160，两块等宽。 -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 一级卡片：宽度 / 内边距 / 投影留白都不动，只是把二级菜单从 Popup 挪到右边第二列。
+             Popup 那条路走不通：Right 在屏幕边缘会翻边压住菜单，Custom 回调第一次又拿不到
+             真实尺寸（设备像素甚至 0），摆出来的位置怎么调都对不上。放进同一棵视觉树里，
+             位置由布局算 —— 拼接、宽度一致都是布局的自然结果。 -->
+        <Border Grid.Column="0" x:Name="MainCard" Margin="14,14,0,14" Width="160"
+                VerticalAlignment="Top"
+                Padding="6,4,6,4" CornerRadius="{DynamicResource Radius.Card}"
+                Background="{DynamicResource Brush.Surface}"
+                BorderBrush="{DynamicResource Brush.Border}"
+                BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="18" ShadowDepth="0" Opacity="0.18" Color="Black" />
         </Border.Effect>
@@ -189,30 +285,34 @@
                        Style="{StaticResource Text.Tertiary}" Margin="12,6,12,10"
                        Visibility="Collapsed" />
 
-            <!-- 二级菜单：贴着父项右侧展开，鼠标悬停就到，离开父项也不会立刻收 ——
-                 用户从父项挪到子项的过程会先离开父项，收早了根本点不到。
-                 放在 StackPanel 里是因为 Window 只能有一个子级；Popup 本身不占布局。 -->
-            <Popup x:Name="SubPopup" AllowsTransparency="True" StaysOpen="True"
-                   PopupAnimation="None" Placement="Right" HorizontalOffset="2" VerticalOffset="-8">
-                <!-- Popup 是独立的一棵视觉树：Foreground 这类可继承属性**不会**从主窗口传进来，
-                     不在这里再写一遍，二级菜单在夜间模式下就是黑字压黑底。 -->
-                <Border Padding="6" CornerRadius="14" Margin="12"
-                        TextElement.Foreground="{DynamicResource Brush.TextPrimary}"
-                        Background="{DynamicResource Brush.Surface}"
-                        BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.18" Color="Black" />
-                    </Border.Effect>
-                    <ListBox x:Name="SubList" Background="Transparent" BorderThickness="0" Padding="0"
-                             Foreground="{DynamicResource Brush.TextPrimary}"
-                             Focusable="False" FocusVisualStyle="{x:Null}"
-                             ItemContainerStyle="{StaticResource RowItem}"
-                             ItemTemplate="{StaticResource EntryTemplate}"
-                             MinWidth="180" MaxWidth="320"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             PreviewMouseLeftButtonUp="OnSubEntryClick" />
-                </Border>
-            </Popup>
         </StackPanel>
-    </Border>
+        </Border>
+
+        <!-- 二级菜单：和一级并排的第二块卡片，默认收起。
+             - 宽度 / 圆角 / 投影留白和一级一致（160、14、12）；宽度相等是"同一个菜单"的前提；
+             - 左边**不留下边距**：用户要的是"紧紧贴在一级菜单上"，2px 在 200% 缩放下是 4 个像素，
+               看起来就是一条缝；
+             - 内边距收到 4（一级是 6）：二级条目没有右侧箭头、也没有禁用态，
+               同一圈留白会显得空；行容器另用 SubMenuRow（6,2）。
+             - 纵向由代码按"父项行的位置"设 Margin.Top，默认对齐卡片顶。 -->
+        <Border Grid.Column="1" x:Name="SubCard" Width="160" Visibility="Collapsed"
+                Margin="0,14,14,0" Padding="4,4,4,4" CornerRadius="{DynamicResource Radius.Card}"
+                VerticalAlignment="Top"
+                TextElement.Foreground="{DynamicResource Brush.TextPrimary}"
+                Background="{DynamicResource Brush.Surface}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.18" Color="Black" />
+            </Border.Effect>
+            <ListBox x:Name="SubList" Background="Transparent" BorderThickness="0" Padding="0"
+                     Foreground="{DynamicResource Brush.TextPrimary}"
+                     Focusable="False" FocusVisualStyle="{x:Null}"
+                     ItemContainerStyle="{StaticResource SubMenuRow}"
+                     ItemTemplate="{StaticResource SubEntryTemplate}"
+                     MaxHeight="200"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     PreviewMouseLeftButtonUp="OnSubEntryClick" />
+        </Border>
+    </Grid>
 </Window>

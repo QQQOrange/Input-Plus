@@ -1,19 +1,23 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using InputPlus.Core.Icons;
 using InputPlus.Core.Qbar;
+using InputPlus.Core.Qbar.Content;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Suggestions;
+using InputPlus.UI.Controls;
 using InputPlus.UI.Windows;
 
 namespace InputPlus.UI.Views;
@@ -56,6 +60,20 @@ public partial class QbarSettingsView : UserControl
     {
         InitializeComponent();
         BuildFileToc();
+
+        /* 分类 = 只搜哪一列。列头是「关键字 / 内容 / 备注」三列，这里给「关键字 / 备注」
+         * 两个精确列 + 一个「全部」；「内容」（网址 / 命令那一列）不单列成分类 ——
+         * 它长得像路径，用户想按它找时通常直接粘贴一段，在「全部」里就能命中。
+         *
+         * 默认停在「全部」，用的仍是 QEntry.Matches（自检验的就是它）：
+         * 这一页的常用姿势是"记不住关键字就按中文备注找"，默认收窄成只搜关键字
+         * 等于把这个用法删掉。 */
+        FilterSearch.SetCategories(
+            new SearchCategory(Loc.T("全部"), "all"),
+            new SearchCategory(Loc.T("关键字"), "key"),
+            new SearchCategory(Loc.T("内容"), "value"),
+            new SearchCategory(Loc.T("备注"), "comment"));
+
         _titleTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         _titleTimer.Tick += async (_, _) =>
         {
@@ -135,12 +153,13 @@ public partial class QbarSettingsView : UserControl
         }
         Tabs.SelectedIndex = 0;
         _tab = "search";        // 重新进设置页一律从「搜索指令」开始，别停在上次的标签
-        /* 顶部说明卡的右边距 = 系统纵向滚动条宽度。
-           右栏是一个常驻滚动条的 ScrollViewer，卡片因此比整栏窄一条滚动条的宽度；
-           说明卡跟着让出同样的宽度，两张卡的右边缘才落在同一条竖线上（以前差 17px，
-           看着就是"上面那张比下面宽一截"）。用系统值而不是写死数字：换 DPI / 换主题都不跑偏。 */
+        /* 顶部说明卡的右边距 = **主题里滚动条的宽度**（7 DIP）。
+           右栏是一个常驻滚动条的 ScrollViewer，卡片因此比整栏窄一条滚动条；
+           说明卡跟着让出同样的宽度，两张卡的右边缘才落在同一条竖线上。
+           以前这里用的是 SystemParameters.VerticalScrollBarWidth（系统默认 17），
+           滚动条收窄到 7 之后就多让了 10 DIP —— 用户截图里那条空带就是这么来的。 */
         if (IntroCard != null)
-            IntroCard.Margin = new Thickness(0, 0, SystemParameters.VerticalScrollBarWidth, 14);
+            IntroCard.Margin = new Thickness(0, 0, ThemeMetrics.ScrollBarWidth, 14);
         ApplyEntryColumnWidths();   // 用户拖过的列宽先摆回去，再灌数据
         Refresh();
     }
@@ -231,6 +250,7 @@ public partial class QbarSettingsView : UserControl
         RefreshFilterList(rebindEditor: true);
         RefreshRuleList(rebindEditor: true);
         RefreshIndexStatus();
+        RefreshContentCard();
     }
 
     private List<QEntry> CurrentList() => _tab switch
@@ -252,8 +272,8 @@ public partial class QbarSettingsView : UserControl
 
         // 过滤：按关键字 / 备注 / 内容模糊匹配，大小写不敏感。
         // 这样内置 300 多个引擎也能很快找到想要的那个。
-        // 匹配规则抽在 QEntry.Matches 里，自检能直接验。
-        string filter = FilterBox?.Text?.Trim() ?? "";
+        // 匹配规则抽在 QEntry.Matches 里，自检能直接验；分类下拉选具体列时走 MatchesEntry。
+        string filter = FilterSearch?.SearchText?.Trim() ?? "";
         var all = CurrentList().ToList();
         /* 默认搜索引擎原来是列表里单独的一行（备注"默认搜索"）。现在那行不再出现，
          * 改成正牌必应行上的「默认」徽标 —— 同一个引擎没必要占两行。
@@ -282,7 +302,8 @@ public partial class QbarSettingsView : UserControl
             }
         }
         int total = all.Count;
-        var items = QEntry.Filter(all, filter)
+        var items = all
+            .Where(e => MatchesEntry(e, filter, FilterSearch?.SelectedTag))
             .Select(e => new EntryVm(e, _tab != "run", _tab is "pinned" or "run" or "web",
                 defaultEngineKey.Length > 0 && string.Equals(e.Key, defaultEngineKey, StringComparison.Ordinal)))
             .ToList();
@@ -290,7 +311,7 @@ public partial class QbarSettingsView : UserControl
         _entryItems = items;
         /* 数据换了 → 显示顺序已经回到原始顺序，列头的排序箭头也要跟着灭掉，
            否则箭头还指着"按备注降序"，底下却是原顺序。 */
-        ClearEntrySortArrows();
+        ResetEntrySortState();
 
         /* 搜索联想的参数卡只在「搜索指令」这一页出现：联想是"选定搜索引擎之后打关键词"
            才有的事，其余三页（启动程序/常用网址/固定项）里它一个控件都用不上。 */
@@ -474,7 +495,24 @@ public partial class QbarSettingsView : UserControl
         IconFallback.Foreground = (Brush)FindResource("Brush.TextTertiary");
     }
 
-    private void OnFilterChanged(object sender, TextChangedEventArgs e) => LoadEntries();
+    /// <summary>
+    /// 关键词 / 分类变了，重算当前标签的列表。
+    /// 分类换了也会走到这里 —— 统一搜索框在 CategoryChanged 之后紧跟着再发一次
+    /// SearchChanged，所以不需要单独接 CategoryChanged。
+    /// </summary>
+    private void OnFilterChanged(object sender, RoutedEventArgs e) => LoadEntries();
+
+    /// <summary>
+    /// 当前分类下这条记录是否命中。
+    ///
+    /// 判定收在 <see cref="QEntry.MatchesColumn"/> 里（纯函数、自检能直接验）：
+    /// 「全部」= 关键字 ∪ 备注 ∪ 内容，行为一个字没变；
+    /// 选了具体列就只认那一列 —— 选了「备注」却因为关键字里凑巧有同一个词留下整行，
+    /// 比不给分类更让人迷惑。
+    /// 「内容」额外把换行/制表折起来比，多行正文里的相邻两行也搜得到。
+    /// </summary>
+    private static bool MatchesEntry(QEntry entry, string filter, string? tag)
+        => QEntry.MatchesColumn(entry, filter, tag);
 
     private void OnTabChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -505,54 +543,136 @@ public partial class QbarSettingsView : UserControl
     }
 
     /// <summary>
-    /// 点列头排序。两种玩法：
+    /// 点列头排序。**四页（搜索指令 / 启动程序 / 常用网址 / 固定项）同一套规则**：
+    /// 第一次点升序、第二次降序、第三次又升序 —— 永远在这两态之间翻，
+    /// 不会出现"第三次点变成不排序"（DataGrid 默认就是那样）。
     ///
-    /// · **「附加菜单」列是两态**：点一下把勾选的全排到最上面，再点一下回到原始顺序。
-    ///   这一列只有"勾了 / 没勾"两种值，翻升降序只会让人看花 ——
-    ///   用户要的就是"点一下看勾了哪些，再点一下还回去"。
-    /// · 其它列还是升序 ↔ 降序，但每次都从**原始顺序**重新排，不叠加上一次的排序结果
-    ///   （否则按备注排完再按内容排，两列相等的行会保留上一种排序的次序）。
+    /// 「附加菜单」那一列以前是两态特例（置顶 ↔ 原序），现在也走这条统一规则：
+    /// 同一张表里两套行为，用户点哪一列都得先猜，猜错就以为坏了。
     ///
-    /// 排序只改显示顺序，不动设置文件里的存储顺序。
+    /// 为什么自己接 Click 而不是用 <c>DataGrid.Sorting</c>：
+    /// DataGrid 的排序是把 SortDescription 挂到 ItemsSource 的 CollectionView 上，
+    /// 而我们每次刷新都会换 ItemsSource —— 换完它再排一遍，两套比较器打架，
+    /// 屏幕上的顺序和列头箭头就对不上。现在 SortDirection 只负责画箭头。
     /// </summary>
-    private void OnEntryGridSorting(object sender, DataGridSortingEventArgs e)
+    private bool SortFromEntryHeader(object? source, string via)
     {
-        if (e.Column == null) return;
-        string path = e.Column.SortMemberPath ?? "";
-        if (path.Length == 0) return;
-        e.Handled = true;
+        if (_host == null) return false;
 
-        var original = _entryItems ?? new List<EntryVm>();
-
-        if (path == "ShowInMiddleMenu")
+        var header = FindEntryHeader(source);
+        if (header == null)
         {
-            /* 当前没按这列排（箭头空 / 降序）→ 置顶；已经在按它升序排 → 回原始顺序。 */
-            bool checkedFirst = e.Column.SortDirection != System.ComponentModel.ListSortDirection.Ascending;
-            ClearEntrySortArrows();
-            e.Column.SortDirection = checkedFirst
-                ? System.ComponentModel.ListSortDirection.Ascending
-                : null;
-            BindEntryView(checkedFirst
-                ? original.OrderByDescending(x => x.ShowInMiddleMenu).ToList()
-                : original);
-            return;
+            /* 鼠标被上一次点击的捕获占住时，OriginalSource 不是列头 —— 按坐标补一次命中测试。 */
+            header = FindEntryHeader(EntryGrid.InputHitTest(Mouse.GetPosition(EntryGrid)) as DependencyObject);
         }
 
-        var dir = e.Column.SortDirection == System.ComponentModel.ListSortDirection.Ascending
-            ? System.ComponentModel.ListSortDirection.Descending
-            : System.ComponentModel.ListSortDirection.Ascending;
-        ClearEntrySortArrows();
-        e.Column.SortDirection = dir;
+        if (header?.Column == null) return false;
+        string path = header.Column.SortMemberPath ?? "";
+        if (path.Length == 0) return false;
 
-        var list = original.ToList();
+        /* 同列再点 → 翻方向；换列 → 从升序开始。状态自己记，
+         * 因为换 ItemsSource 会把 DataGrid 的 SortDirection 清掉。 */
+        _entrySortDir = string.Equals(path, _entrySortPath, StringComparison.Ordinal)
+                        && _entrySortDir == ListSortDirection.Ascending
+            ? ListSortDirection.Descending
+            : ListSortDirection.Ascending;
+        _entrySortPath = path;
+
+        ApplyEntrySort(path, _entrySortDir);
+        SetEntrySortArrow(path, _entrySortDir);
+
+        /* 列头在 mouse-down 时捕获鼠标，我们同一拍换了 ItemsSource —— 它可能收不到
+         * mouse-up，捕获一直挂着，下一次点击就被吃掉。排完主动放开。 */
+        if (Mouse.Captured is DependencyObject cap && EntryGrid.IsAncestorOf(cap)) Mouse.Capture(null);
+
+        EntrySortTrace($"{via} {path} {_entrySortDir} → {string.Join(",", (_entryItems ?? new List<EntryVm>()).Take(4).Select(x => x.Key))}");
+        return true;
+    }
+
+    /// <summary>从任意元素往上找列头。</summary>
+    private static DataGridColumnHeader? FindEntryHeader(object? source)
+    {
+        if (source is not DependencyObject src) return null;
+        var header = src as DataGridColumnHeader;
+        while (header == null)
+        {
+            src = VisualTreeHelper.GetParent(src);
+            if (src == null) return null;
+            header = src as DataGridColumnHeader;
+        }
+        return header;
+    }
+
+    /// <summary>
+    /// 把 ▲/▼ 画到对应列头上。
+    ///
+    /// 不用 DataGrid 自带的排序箭头：`CanUserSortColumns=False` 之后模板里那枚箭头不画，
+    /// 于是"点了排序但没有任何指示"。这里直接把箭头写进列头文字，一定看得见。
+    /// </summary>
+    private void SetEntrySortArrow(string path, ListSortDirection dir)
+    {
+        foreach (var col in EntryGrid.Columns)
+        {
+            string key = col.SortMemberPath ?? "";
+            if (key.Length == 0) continue;
+
+            if (!_entryHeaderLabels.TryGetValue(key, out string? label))
+            {
+                label = col.Header as string ?? "";
+                _entryHeaderLabels[key] = label;
+            }
+
+            bool active = string.Equals(key, path, StringComparison.Ordinal);
+            col.Header = active
+                ? label + (dir == ListSortDirection.Ascending ? "  ▲" : "  ▼")
+                : label;
+            col.SortDirection = active ? dir : null;
+        }
+    }
+
+    /// <summary>列头原始文字（加箭头之前那份）。</summary>
+    private readonly Dictionary<string, string> _entryHeaderLabels = new();
+
+    /* 列头排序状态自己记：DataGrid 的 SortDirection 在 ItemsSource 换掉时会被清，
+     * 拿它当状态会永远"第一次点击"（升/降翻不过来）。 */
+    private string _entrySortPath = "";
+    private ListSortDirection _entrySortDir = ListSortDirection.Ascending;
+
+    /// <summary>排序现场（明文，最长 64KB）：和别名页共用同一个排查口径。</summary>
+    private static void EntrySortTrace(string line)
+    {
+        try
+        {
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clp-alias-sort.txt");
+            System.IO.File.AppendAllText(path,
+                DateTime.Now.ToString("HH:mm:ss") + " qbar " + line + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+        }
+        catch { /* 诊断写不出去不影响排序 */ }
+    }
+
+    /// <summary>当前排序列（没排就是空串）。</summary>
+    private string ActiveEntrySortColumn() => _entrySortPath;
+
+    private ListSortDirection ActiveEntrySortDirection() => _entrySortDir;
+
+    /// <summary>
+    /// 按某一列重排。每次从 <see cref="_entryItems"/>（过滤后的原始顺序）重算，
+    /// 不在上一次排好的结果上再排 —— 否则两列值相同的行会保留上一次的次序，
+    /// 看着像"越点越乱"。
+    /// </summary>
+    private void ApplyEntrySort(string path, ListSortDirection dir)
+    {
+        var list = (_entryItems ?? new List<EntryVm>()).ToList();
         Comparison<EntryVm> cmp = path switch
         {
             "Key" => (a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCultureIgnoreCase),
             "Value" => (a, b) => string.Compare(a.Value, b.Value, StringComparison.CurrentCultureIgnoreCase),
             "Comment" => (a, b) => string.Compare(a.Comment, b.Comment, StringComparison.CurrentCultureIgnoreCase),
+            "ShowInMiddleMenu" => (a, b) => a.ShowInMiddleMenu.CompareTo(b.ShowInMiddleMenu),
             _ => (a, b) => 0,
         };
-        if (dir == System.ComponentModel.ListSortDirection.Descending)
+        if (dir == ListSortDirection.Descending)
         {
             var forward = cmp;
             cmp = (a, b) => forward(b, a);
@@ -571,6 +691,10 @@ public partial class QbarSettingsView : UserControl
         _suppress = true;
         EntryGrid.ItemsSource = items;
         _suppress = false;
+
+        /* 换 ItemsSource 会把列头的 SortDirection 清掉 —— 箭头重画，别让状态凭空消失。 */
+        if (_entrySortPath.Length > 0) SetEntrySortArrow(_entrySortPath, _entrySortDir);
+
         if (keep != null && items.Contains(keep)) EntryGrid.SelectedItem = keep;
         else if (items.Count > 0) EntryGrid.SelectedIndex = 0;
 
@@ -601,10 +725,24 @@ public partial class QbarSettingsView : UserControl
         EntryGrid.ScrollIntoView(hit);
     }
 
-    /// <summary>四列的排序箭头一起清掉：排序是我们手写的，DataGrid 不会替我们清别的列。</summary>
+    /// <summary>四列的排序箭头一起清掉（只动显示，列头文字还原）。</summary>
     private void ClearEntrySortArrows()
     {
-        foreach (var col in EntryGrid.Columns) col.SortDirection = null;
+        foreach (var col in EntryGrid.Columns)
+        {
+            col.SortDirection = null;
+            string key = col.SortMemberPath ?? "";
+            if (key.Length > 0 && _entryHeaderLabels.TryGetValue(key, out string? label))
+                col.Header = label;
+        }
+    }
+
+    /// <summary>换数据/换标签时彻底放弃列头排序：箭头灭掉，状态也归零。</summary>
+    private void ResetEntrySortState()
+    {
+        _entrySortPath = "";
+        _entrySortDir = ListSortDirection.Ascending;
+        ClearEntrySortArrows();
     }
 
     private void OnEntrySelected(object sender, SelectionChangedEventArgs e)
@@ -716,10 +854,13 @@ public partial class QbarSettingsView : UserControl
 
     /// <summary>能不能拖：只有「固定项」页、没有过滤词、也没有按列头排序时，行序 == 列表序。</summary>
     private bool CanDragEntries =>
-        _tab == "pinned" && (FilterBox?.Text?.Trim().Length ?? 0) == 0;
+        _tab == "pinned" && (FilterSearch?.SearchText?.Trim().Length ?? 0) == 0;
 
     private void OnEntryRowPressDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
+        /* 列头按下 = 排序（放在最前面：拖拽那套的守卫会提前 return）。 */
+        if (SortFromEntryHeader(e.OriginalSource, "down")) return;
+
         if (!CanDragEntries) return;
         var source = e.OriginalSource as DependencyObject;
         /* 勾选框、滚动条、列头拖动把手都不是"抓这一行"：点它们照旧走原来的功能。 */
@@ -1514,6 +1655,169 @@ public partial class QbarSettingsView : UserControl
 
     private void OnRefreshIndex(object sender, RoutedEventArgs e) => RefreshIndexStatus();
 
+    // ─────────────────────────── 正文索引 ───────────────────────────
+
+    /// <summary>正文索引那张卡：控件跟随设置，状态行跟随后台服务。</summary>
+    private void RefreshContentCard()
+    {
+        if (_host == null) return;
+        QbarContentOptions opt = _host.Settings.Qbar.Content ??= new QbarContentOptions();
+
+        _suppress = true;
+        ContentEnabledBox.IsChecked = opt.Enabled;
+        ContentExtBox.Text = opt.Extensions ?? "";
+        ContentMaxMbBox.Text = Math.Max(1, opt.MaxFileBytes / 1024 / 1024).ToString();
+        ContentPdfPagesBox.Text = Math.Max(1, opt.MaxPdfPages).ToString();
+        _suppress = false;
+
+        ContentState.Text = ContentIndex.Describe();
+        ContentRootList.ItemsSource = new List<string>(opt.Roots ?? new List<string>());
+        ContentInfo.Text = Loc.T("索引目录：") + ContentIndex.IndexDir
+                           + "\n" + Loc.T("当前实际范围：") + (ContentIndex.Roots.Count == 0
+                               ? Loc.T("（还没开始建）")
+                               : string.Join(" ；", ContentIndex.Roots))
+                           + "\n" + Loc.T("改扩展名 / 上限 / 范围后需要点「重建正文索引」才生效；关掉开关后立刻退回只按文件名搜索。");
+    }
+
+    private void OnContentAddFolder(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        using var dlg = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = Loc.T("选择要索引正文的文件夹"),
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        AddContentRoot(dlg.SelectedPath);
+    }
+
+    private void OnContentAddDrive(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || sender is not Button btn) return;
+        var menu = new ContextMenu();
+        foreach (System.IO.DriveInfo drive in System.IO.DriveInfo.GetDrives())
+        {
+            try
+            {
+                if (!drive.IsReady) continue;
+                if (drive.DriveType != System.IO.DriveType.Fixed && drive.DriveType != System.IO.DriveType.Removable) continue;
+                string root = drive.RootDirectory.FullName;
+                string label = (drive.VolumeLabel ?? "").Trim();
+                var item = new MenuItem { Header = label.Length > 0 ? root + "  " + label : root };
+                item.Click += (_, _) => AddContentRoot(root);
+                menu.Items.Add(item);
+            }
+            catch { /* 盘刚好被拔掉 / 没就绪 */ }
+        }
+        if (menu.Items.Count == 0)
+        {
+            _host.Notify(Loc.T("没有可添加的磁盘"));
+            return;
+        }
+        menu.PlacementTarget = btn;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void OnContentRemoveRoot(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        if (ContentRootList.SelectedItem is not string root) return;
+
+        var roots = new List<string>(_host.Settings.Qbar.Content?.Roots ?? new List<string>());
+        roots.RemoveAll(x => string.Equals(x, root, StringComparison.OrdinalIgnoreCase));
+        ApplyContentRoots(roots);
+    }
+
+    private void AddContentRoot(string path)
+    {
+        if (_host == null || string.IsNullOrWhiteSpace(path)) return;
+        var roots = new List<string>(_host.Settings.Qbar.Content?.Roots ?? new List<string>());
+        if (roots.Any(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase))) return;
+        roots.Add(path);
+        ApplyContentRoots(roots);
+
+        /* 整块盘要单独提醒：目录项可能是几百万条，首次抽取会跑很久。
+         * 不拦着用户选 —— 只把代价说清楚，并告诉他进度在右下角、可以随时关。 */
+        bool isDrive = path.Length <= 3 && path.EndsWith(":\\", StringComparison.Ordinal);
+        if (isDrive)
+        {
+            _host.Notify(Loc.T("已添加整块磁盘：首次抽取可能要几十分钟，进度在右下角，可随时关掉开关或改成具体文件夹。"));
+        }
+    }
+
+    private void ApplyContentRoots(List<string> roots)
+    {
+        if (_host == null) return;
+        QbarContentOptions opt = _host.Settings.Qbar.Content ??= new QbarContentOptions();
+        opt.Roots = roots;
+        _host.SaveSettings();
+        RefreshContentCard();
+        _host.Notify(Loc.T("生效范围已改：点「重建正文索引」后按新范围重抽。"));
+    }
+
+    private void OnContentRefresh(object sender, RoutedEventArgs e) => RefreshContentCard();
+
+    private void OnContentEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        QbarContentOptions opt = _host.Settings.Qbar.Content ??= new QbarContentOptions();
+        opt.Enabled = ContentEnabledBox.IsChecked == true;
+        _host.SaveSettings();
+
+        if (opt.Enabled)
+        {
+            ContentIndex.Start();
+            _host.Notify(Loc.T("已启用正文索引：第一次会在后台建立，建好之前按文件名搜索不受影响。"));
+        }
+        else
+        {
+            ContentIndex.Stop();
+            _host.Notify(Loc.T("已关闭正文索引：现在只按文件名搜索（索引文件留在磁盘上，重新打开即用）。"));
+        }
+        RefreshContentCard();
+    }
+
+    private void OnContentOptionsChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        QbarContentOptions opt = _host.Settings.Qbar.Content ??= new QbarContentOptions();
+
+        opt.Extensions = (ContentExtBox.Text ?? "").Trim();
+        if (int.TryParse(ContentMaxMbBox.Text, out int mb)) opt.MaxFileBytes = Math.Clamp(mb, 1, 512) * 1024 * 1024;
+        if (int.TryParse(ContentPdfPagesBox.Text, out int pages)) opt.MaxPdfPages = Math.Clamp(pages, 1, 2000);
+        _host.SaveSettings();
+        RefreshContentCard();
+    }
+
+    private void OnContentRebuild(object sender, RoutedEventArgs e)
+    {
+        _host?.Notify(Loc.T("正在重建正文索引…（后台抽取，不影响搜索）"));
+        Task.Run(() =>
+        {
+            ContentIndex.RequestRebuild();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                RefreshContentCard();
+                _host?.Notify(Loc.T("正文索引已在后台重建：抽完之前，正文搜索会明确提示「还没就绪」。"));            }));
+        });
+    }
+
+    private void OnContentClear(object sender, RoutedEventArgs e)
+    {
+        Task.Run(() =>
+        {
+            bool ok = ContentIndex.ClearAll();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                RefreshContentCard();
+                _host?.Notify(ok ? Loc.T("正文索引已清空") : Loc.T("清空正文索引失败，详情见日志"));
+            }));
+        });
+    }
+
+
     /// <summary>
     /// 「重建索引」：清空索引目录重扫。索引在本进程里，所以这件事不需要启动任何外部程序，
     /// 也不需要用户去别处点一下再回来。
@@ -1586,6 +1890,7 @@ public partial class QbarSettingsView : UserControl
     {
         if (FileToc == null || FileToc.Children.Count > 0) return;
         AddTocChip(Loc.T("索引与后端"), CardBackend);
+        AddTocChip(Loc.T("正文索引"), CardContent);
         AddTocChip(Loc.T("过滤器"), CardFilters);
         AddTocChip(Loc.T("优先级"), CardPriority);
         AddTocChip(Loc.T("文件对话框浮层"), FileDialogBarCard);
@@ -1759,7 +2064,7 @@ public partial class QbarSettingsView : UserControl
             Background = Res("Brush.AccentSoft"),
             BorderBrush = Res("Brush.AccentSoftBorder"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusTiny),
             Padding = new Thickness(6, 1, 6, 1),
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
@@ -1822,7 +2127,7 @@ public partial class QbarSettingsView : UserControl
         var row = new Border
         {
             Height = 44,
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusSmall),
             Child = grid,
             Background = Brushes.Transparent,
             Cursor = System.Windows.Input.Cursors.Hand,
@@ -2255,7 +2560,7 @@ public partial class QbarSettingsView : UserControl
         var row = new Border
         {
             Height = string.IsNullOrEmpty(subtitle) ? 42 : 50,
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusSmall),
             Child = grid,
             Background = Brushes.Transparent,
             Cursor = onSelect != null ? System.Windows.Input.Cursors.Hand : System.Windows.Input.Cursors.Arrow,
@@ -2562,7 +2867,7 @@ public partial class QbarSettingsView : UserControl
         var row = new Border
         {
             Height = 50,
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(InputPlus.UI.ThemeMetrics.RadiusSmall),
             Child = grid,
             Background = Brushes.Transparent,
             Cursor = System.Windows.Input.Cursors.Hand,

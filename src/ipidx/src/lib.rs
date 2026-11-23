@@ -1735,6 +1735,703 @@ fn dir_size(p: &Path) -> u64 {
     total
 }
 
+// ─────────────────────────── 正文索引（独立目录） ───────────────────────────
+//
+// 为什么是**第二套** Index/Schema/Writer/Reader，而不是往文件名索引里加一个
+// `content` 字段：
+//   · 正文的倒排比路径大两个数量级（2-3 gram 按 MB 算），塞进同一个索引会让
+//     "打两个字 10ms 出结果"的文件名检索去和正文的段合并抢同一份 IO；
+//   · 正文索引必须能单独开关、单独重建、单独清空 —— 用户在设置里关掉它时，
+//     不该连带把 67 万条文件名索引也重建一遍。
+//
+// 两套索引共享的是**纪律**，不是数据：同样的 catch_unwind、同样的 UTF-8 字节入参、
+// 同样的"提交后立刻 reload"、同样的"查询只取超集，语义复核在 C#"。
+
+/// 正文索引的落盘 schema 版本（与 C# 的 `ContentIndex.SchemaVersion` 同值）。
+pub const CONTENT_SCHEMA_VERSION: u32 = 1;
+
+const TOKENIZER_BODY: &str = "cjk_body";
+
+#[derive(Clone, Copy)]
+struct ContentFields {
+    /// 完整路径（ngram）—— `path:` 片段过滤用。
+    path: Field,
+    /// 小写全路径（raw）—— 精确 join / 按路径删除用。
+    pathid: Field,
+    /// 扩展名（raw，小写，无点）。
+    ext: Field,
+    isdir: Field,
+    size: Field,
+    mtime: Field,
+    depth: Field,
+    /// 正文：2-3 gram，**不 STORED**（正文只进倒排，摘要靠回读原文）。
+    body: Field,
+}
+
+struct ContentEngine {
+    /// 持有 `Index` 是为了让 dir/tokenizer 注册随引擎一起活着（writer/reader 已各持一份）。
+    #[allow(dead_code)]
+    index: Index,
+    writer: IndexWriter,
+    reader: IndexReader,
+    f: ContentFields,
+    dir: PathBuf,
+    docs_added: u64,
+    docs_deleted: u64,
+}
+
+static CENGINE: Mutex<Option<ContentEngine>> = Mutex::new(None);
+
+fn content_schema() -> (Schema, ContentFields) {
+    let mut b = Schema::builder();
+    let mut body_options = TextOptions::default();
+    body_options = body_options.set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer(TOKENIZER_BODY)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    );
+    // 注意：不 set_stored()。正文本身不落 store —— 存了等于索引体积翻倍，
+    // 而摘要只需要"命中那一段"，那是回读原文算出来的（C# 侧 LRU 缓存）。
+
+    let path = b.add_text_field("path", ngram_options());
+    let pathid = b.add_text_field("pathid", raw_options());
+    let ext = b.add_text_field("ext", raw_options());
+    let isdir = b.add_u64_field("isdir", FAST | STORED | INDEXED);
+    let size = b.add_u64_field("size", FAST | STORED);
+    let mtime = b.add_i64_field("mtime", FAST | STORED);
+    let depth = b.add_u64_field("depth", FAST | STORED);
+    let body = b.add_text_field("body", body_options);
+    (
+        b.build(),
+        ContentFields { path, pathid, ext, isdir, size, mtime, depth, body },
+    )
+}
+
+fn register_body_tokenizer(index: &Index) -> tantivy::Result<()> {
+    /* 正文不要用 (1,2)：1-gram 在正文上等于给每个汉字建一条倒排，体积和查询都会爆。
+     * (2,3) 是中文无词典分词的折中：2 字词/3 字词都能直接命中，子串召回完整；
+     * 4 字以上的词由 2-gram AND 覆盖（超集，交给 C# 复核真子串）。 */
+    let body = TextAnalyzer::builder(NgramTokenizer::all_ngrams(2, 3)?)
+        .filter(LowerCaser)
+        .filter(RemoveLongFilter::limit(40))
+        .build();
+    index.tokenizers().register(TOKENIZER_BODY, body);
+    Ok(())
+}
+
+fn default_sort() -> String {
+    "score".to_string()
+}
+
+#[derive(Deserialize)]
+struct ContentDocIn {
+    /// 完整路径（原样大小写）
+    p: String,
+    /// 扩展名（小写、无点）
+    #[serde(default)]
+    x: String,
+    /// 0 文件 / 1 目录
+    #[serde(default)]
+    d: u8,
+    /// 字节数
+    #[serde(default)]
+    s: u64,
+    /// 距 2000-01-01 的天数；-1 = 未知
+    #[serde(default = "minus_one")]
+    t: i64,
+    #[serde(default)]
+    dp: u64,
+    /// 正文（已抽取、已截断）
+    #[serde(default)]
+    c: String,
+}
+
+#[derive(Deserialize)]
+struct ContentSpec {
+    #[serde(default)]
+    terms: Vec<String>,
+    #[serde(default)]
+    phrases: Vec<String>,
+    #[serde(default)]
+    ext: Vec<String>,
+    #[serde(default)]
+    negext: Vec<String>,
+    #[serde(default)]
+    path: Vec<String>,
+    #[serde(default)]
+    negpath: Vec<String>,
+    #[serde(default = "minus_one")]
+    minsize: i64,
+    #[serde(default = "minus_one")]
+    maxsize: i64,
+    #[serde(default = "minus_one")]
+    minday: i64,
+    #[serde(default = "minus_one")]
+    maxday: i64,
+    #[serde(default)]
+    files: bool,
+    #[serde(default)]
+    dirs: bool,
+    #[serde(default = "default_sort")]
+    sort: String,
+    #[serde(default = "default_true")]
+    desc: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize)]
+struct ContentHitOut {
+    p: String,
+    d: u8,
+    s: u64,
+    t: i64,
+}
+
+#[derive(Serialize)]
+struct ContentSearchOut {
+    ok: bool,
+    total: usize,
+    ms: f64,
+    hits: Vec<ContentHitOut>,
+    #[serde(default)]
+    error: String,
+}
+
+#[derive(Serialize)]
+struct ContentStatsOut {
+    ok: bool,
+    schema_version: u32,
+    dir: String,
+    docs: u64,
+    segments: usize,
+    bytes: u64,
+    #[serde(default)]
+    error: String,
+}
+
+fn content_error_json(msg: &str) -> String {
+    format!(
+        "{{\"ok\":false,\"total\":0,\"ms\":0.0,\"hits\":[],\"error\":\"{}\"}}",
+        escape_json(msg)
+    )
+}
+
+fn content_stats_error_json(msg: &str) -> String {
+    format!(
+        "{{\"ok\":false,\"schema_version\":0,\"dir\":\"\",\"docs\":0,\"segments\":0,\"bytes\":0,\"error\":\"{}\"}}",
+        escape_json(msg)
+    )
+}
+
+fn write_content_doc(engine: &mut ContentEngine, d: &ContentDocIn) -> Result<(), String> {
+    let f = engine.f;
+    let mut doc = TantivyDocument::default();
+    doc.add_text(f.path, &d.p);
+    doc.add_text(f.pathid, d.p.to_lowercase());
+    doc.add_text(f.ext, &d.x.to_lowercase());
+    doc.add_u64(f.isdir, if d.d == 1 { 1 } else { 0 });
+    doc.add_u64(f.size, d.s);
+    doc.add_i64(f.mtime, if d.t < 0 { UNKNOWN_DAY } else { d.t });
+    doc.add_u64(f.depth, d.dp);
+    /* 正文为空也照写：这样"这个文件我们抽过、但是空的"和"还没抽过"在索引里
+     * 是两种状态 —— 前者不会每轮重建又被抽一遍。 */
+    doc.add_text(f.body, &d.c);
+    if let Err(e) = engine.writer.add_document(doc) {
+        set_last_error(format!("写入正文文档失败：{e}"));
+        return Err(e.to_string());
+    }
+    engine.docs_added += 1;
+    Ok(())
+}
+
+fn with_content_engine<T>(what: &str, f: impl FnOnce(&mut ContentEngine) -> Result<T, i32>) -> Result<T, i32> {
+    let mut g = match CENGINE.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            set_last_error(format!("{what}：索引状态锁已中毒"));
+            return Err(-8);
+        }
+    };
+    match g.as_mut() {
+        Some(e) => f(e),
+        None => {
+            set_last_error(format!("{what}：正文索引未打开"));
+            Err(-1)
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_schema_version() -> u32 {
+    CONTENT_SCHEMA_VERSION
+}
+
+/// 打开（或新建）正文索引目录。目录不存在会创建。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_open(dir_ptr: *const u8, dir_len: usize) -> i32 {
+    guard("ipidx_content_open", || {
+        let dir = match as_str(dir_ptr, dir_len) {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                set_last_error(e);
+                return -2;
+            }
+        };
+        if dir.is_empty() {
+            set_last_error("正文索引目录为空");
+            return -2;
+        }
+        let path = PathBuf::from(&dir);
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            set_last_error(format!("创建正文索引目录失败：{e}"));
+            return -3;
+        }
+        let (schema, f) = content_schema();
+        let mmap = match MmapDirectory::open(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                set_last_error(format!("打开正文索引目录失败：{e}"));
+                return -4;
+            }
+        };
+        let index = match Index::open_or_create(mmap, schema) {
+            Ok(i) => i,
+            Err(e) => {
+                set_last_error(format!("打开正文索引失败：{e}"));
+                return -4;
+            }
+        };
+        if let Err(e) = register_body_tokenizer(&index) {
+            set_last_error(format!("注册正文分词器失败：{e}"));
+            return -5;
+        }
+        /* path 字段复用了文件名索引那套 `cjk_ngram` —— 分词器注册表是**按 index 实例**
+         * 分开的，所以这里必须把它也注册一遍，否则 commit 时报
+         * "Error getting tokenizer for field: path"。 */
+        if let Err(e) = register_tokenizers(&index) {
+            set_last_error(format!("注册路径分词器失败：{e}"));
+            return -5;
+        }
+        /* 2 个写入线程 / 128 MB：正文段的合并比文件名索引贵得多，
+         * 线程再多只会在这个进程里和 UI、和文件名索引抢 CPU。 */
+        let writer = match index.writer_with_num_threads(2, 128 * 1024 * 1024) {
+            Ok(w) => w,
+            Err(e) => {
+                set_last_error(format!("创建正文写入器失败：{e}"));
+                return -6;
+            }
+        };
+        let reader = match index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error(format!("创建正文读取器失败：{e}"));
+                return -7;
+            }
+        };
+        let _ = reader.reload();
+        let mut g = match CENGINE.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                set_last_error("正文索引状态锁已中毒");
+                return -8;
+            }
+        };
+        *g = Some(ContentEngine {
+            index,
+            writer,
+            reader,
+            f,
+            dir: path,
+            docs_added: 0,
+            docs_deleted: 0,
+        });
+        0
+    }) as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_close() -> i32 {
+    guard("ipidx_content_close", || {
+        let mut g = match CENGINE.lock() {
+            Ok(g) => g,
+            Err(_) => return -8,
+        };
+        *g = None;
+        0
+    }) as i32
+}
+
+/// 追加一批正文文档（JSON 数组）。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_add_docs(json_ptr: *const u8, json_len: usize) -> i64 {
+    guard("ipidx_content_add_docs", || {
+        let text = match as_str(json_ptr, json_len) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e);
+                return -2;
+            }
+        };
+        let docs: Vec<ContentDocIn> = match serde_json::from_str(text) {
+            Ok(d) => d,
+            Err(e) => {
+                set_last_error(format!("解析正文文档 JSON 失败：{e}"));
+                return -3;
+            }
+        };
+        if docs.is_empty() {
+            return 0;
+        }
+        let n = docs.len() as i64;
+        let r = with_content_engine("写入正文", |engine| {
+            for d in &docs {
+                if let Err(e) = write_content_doc(engine, d) {
+                    set_last_error(e);
+                    return Err(-4);
+                }
+            }
+            Ok(n)
+        });
+        match r {
+            Ok(v) => v,
+            Err(code) => code as i64,
+        }
+    })
+}
+
+/// 按路径删除（大小写不敏感）。返回删除条数，失败 < 0。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_delete_paths(json_ptr: *const u8, json_len: usize) -> i64 {
+    guard("ipidx_content_delete_paths", || {
+        let text = match as_str(json_ptr, json_len) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e);
+                return -2;
+            }
+        };
+        let paths: Vec<String> = match serde_json::from_str(text) {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error(format!("解析路径 JSON 失败：{e}"));
+                return -3;
+            }
+        };
+        let n = paths.len() as i64;
+        let r = with_content_engine("删除正文", |engine| {
+            for p in &paths {
+                engine
+                    .writer
+                    .delete_term(Term::from_field_text(engine.f.pathid, &p.to_lowercase()));
+                engine.docs_deleted += 1;
+            }
+            Ok(n)
+        });
+        match r {
+            Ok(v) => v,
+            Err(code) => code as i64,
+        }
+    })
+}
+
+/// 提交并立刻 reload —— 与文件名索引同一条纪律。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_commit() -> i32 {
+    guard("ipidx_content_commit", || {
+        let r = with_content_engine("提交正文", |engine| {
+            if let Err(e) = engine.writer.commit() {
+                set_last_error(format!("提交正文索引失败：{e}"));
+                return Err(-1);
+            }
+            if let Err(e) = engine.reader.reload() {
+                set_last_error(format!("reload 正文索引失败：{e}"));
+                return Err(-2);
+            }
+            Ok(())
+        });
+        match r {
+            Ok(()) => 0i64,
+            Err(code) => code as i64,
+        }
+    }) as i32
+}
+
+/// 清空全部正文文档（设置页「清空正文索引」）。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_clear() -> i32 {
+    guard("ipidx_content_clear", || {
+        let r = with_content_engine("清空正文", |engine| {
+            if let Err(e) = engine.writer.delete_all_documents() {
+                set_last_error(format!("清空正文索引失败：{e}"));
+                return Err(-1);
+            }
+            if let Err(e) = engine.writer.commit() {
+                set_last_error(format!("清空后提交失败：{e}"));
+                return Err(-2);
+            }
+            if let Err(e) = engine.reader.reload() {
+                set_last_error(format!("清空后 reload 失败：{e}"));
+                return Err(-3);
+            }
+            Ok(())
+        });
+        match r {
+            Ok(()) => 0i64,
+            Err(code) => code as i64,
+        }
+    }) as i32
+}
+
+fn content_build_query(spec: &ContentSpec, f: &ContentFields) -> Box<dyn Query> {
+    let mut must: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+
+    for t in spec.terms.iter().chain(spec.phrases.iter()) {
+        let t = t.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(q) = gram_query(f.body, t) {
+            must.push((Occur::Must, q));
+        }
+    }
+
+    if !spec.ext.is_empty() {
+        let clauses: Vec<(Occur, Box<dyn Query>)> = spec
+            .ext
+            .iter()
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty())
+            .map(|e| {
+                (
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(f.ext, &e),
+                        IndexRecordOption::Basic,
+                    )) as Box<dyn Query>,
+                )
+            })
+            .collect();
+        if !clauses.is_empty() {
+            must.push((Occur::Must, Box::new(BooleanQuery::new(clauses))));
+        }
+    }
+
+    for e in &spec.negext {
+        let e = e.trim().to_lowercase();
+        if e.is_empty() {
+            continue;
+        }
+        must.push((
+            Occur::MustNot,
+            Box::new(TermQuery::new(
+                Term::from_field_text(f.ext, &e),
+                IndexRecordOption::Basic,
+            )),
+        ));
+    }
+
+    for p in &spec.path {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if let Some(q) = gram_query(f.path, p) {
+            must.push((Occur::Must, q));
+        }
+    }
+
+    for p in &spec.negpath {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if let Some(q) = gram_query(f.path, p) {
+            must.push((Occur::MustNot, q));
+        }
+    }
+
+    if spec.minsize >= 0 || spec.maxsize >= 0 {
+        let lo = if spec.minsize < 0 { 0 } else { spec.minsize as u64 };
+        let hi = if spec.maxsize < 0 { u64::MAX } else { spec.maxsize as u64 };
+        must.push((Occur::Must, Box::new(FastRange::u64_range(f.size, lo, hi))));
+    }
+
+    if spec.minday >= 0 || spec.maxday >= 0 {
+        let lo = if spec.minday < 0 { 0 } else { spec.minday };
+        /* 上限取 60000：UNKNOWN_DAY=65535 比任何真实日期都大，
+         * 这样"不知道修改时间"的文档不会因为 date: 过滤被无辜剔掉。 */
+        let hi = if spec.maxday < 0 { 60000 } else { spec.maxday };
+        must.push((Occur::Must, Box::new(FastRange::i64_range(f.mtime, lo, hi))));
+    }
+
+    if spec.files && !spec.dirs {
+        must.push((
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_u64(f.isdir, 0),
+                IndexRecordOption::Basic,
+            )),
+        ));
+    }
+    if spec.dirs && !spec.files {
+        must.push((
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_u64(f.isdir, 1),
+                IndexRecordOption::Basic,
+            )),
+        ));
+    }
+
+    if must.is_empty() {
+        Box::new(AllQuery)
+    } else {
+        Box::new(BooleanQuery::new(must))
+    }
+}
+
+/// 把任意排序的 TopDocs 收成地址列表 —— 正文查询要支持 score / size / mtime 三种排序，
+/// 而它们的 Fruit 元组首元素类型不同（f32 / u64 / i64）。
+fn content_collect<T, C>(
+    searcher: &tantivy::Searcher,
+    query: &dyn Query,
+    top: C,
+) -> tantivy::Result<Vec<tantivy::DocAddress>>
+where
+    C: tantivy::collector::Collector<Fruit = Vec<(T, tantivy::DocAddress)>> + 'static,
+    T: Send + 'static,
+{
+    let fruits = searcher.search(query, &top)?;
+    Ok(fruits.into_iter().map(|(_, addr)| addr).collect())
+}
+
+/// 正文查询。返回 JSON（`ContentSearchOut`）。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_search(spec_ptr: *const u8, spec_len: usize, limit: u32) -> IpIdxBuf {
+    guard_buf("ipidx_content_search", || {
+        let started = std::time::Instant::now();
+        let text = match as_str(spec_ptr, spec_len) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.clone());
+                return content_error_json(&e);
+            }
+        };
+        let spec: ContentSpec = match serde_json::from_str(text) {
+            Ok(s) => s,
+            Err(e) => {
+                let m = format!("解析正文查询 JSON 失败：{e}");
+                set_last_error(m.clone());
+                return content_error_json(&m);
+            }
+        };
+        let limit = if limit == 0 { 200 } else { limit as usize };
+
+        let mut g = match CENGINE.lock() {
+            Ok(g) => g,
+            Err(_) => return content_error_json("正文索引状态锁已中毒"),
+        };
+        let engine = match g.as_mut() {
+            Some(e) => e,
+            None => return content_error_json("正文索引未打开"),
+        };
+
+        let query = content_build_query(&spec, &engine.f);
+        let searcher = engine.reader.searcher();
+        let order = if spec.desc { Order::Desc } else { Order::Asc };
+        let addrs = match spec.sort.as_str() {
+            "size" => content_collect(
+                &searcher,
+                &*query,
+                TopDocs::with_limit(limit).order_by_fast_field::<u64>("size", order),
+            ),
+            "mtime" => content_collect(
+                &searcher,
+                &*query,
+                TopDocs::with_limit(limit).order_by_fast_field::<i64>("mtime", order),
+            ),
+            _ => content_collect(&searcher, &*query, TopDocs::with_limit(limit).order_by_score()),
+        };
+        let addrs = match addrs {
+            Ok(a) => a,
+            Err(e) => {
+                let m = format!("正文查询失败：{e}");
+                set_last_error(m.clone());
+                return content_error_json(&m);
+            }
+        };
+
+        let mut hits = Vec::with_capacity(addrs.len());
+        for addr in addrs {
+            let doc: TantivyDocument = match searcher.doc(addr) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let p = doc
+                .get_first(engine.f.path)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if p.is_empty() {
+                continue;
+            }
+            let isdir = doc.get_first(engine.f.isdir).and_then(|v| v.as_u64()).unwrap_or(0);
+            let size = doc.get_first(engine.f.size).and_then(|v| v.as_u64()).unwrap_or(0);
+            let day = doc.get_first(engine.f.mtime).and_then(|v| v.as_i64()).unwrap_or(UNKNOWN_DAY);
+            hits.push(ContentHitOut {
+                p,
+                d: if isdir == 1 { 1 } else { 0 },
+                s: size,
+                t: if day == UNKNOWN_DAY { -1 } else { day },
+            });
+        }
+
+        let out = ContentSearchOut {
+            ok: true,
+            total: hits.len(),
+            ms: started.elapsed().as_secs_f64() * 1000.0,
+            hits,
+            error: String::new(),
+        };
+        serde_json::to_string(&out)
+            .unwrap_or_else(|e| content_error_json(&format!("序列化失败：{e}")))
+    })
+}
+
+/// 正文索引统计。
+#[no_mangle]
+pub unsafe extern "C" fn ipidx_content_stats() -> IpIdxBuf {
+    guard_buf("ipidx_content_stats", || {
+        let mut g = match CENGINE.lock() {
+            Ok(g) => g,
+            Err(_) => return content_stats_error_json("正文索引状态锁已中毒"),
+        };
+        let engine = match g.as_mut() {
+            Some(e) => e,
+            None => return content_stats_error_json("正文索引未打开"),
+        };
+        let searcher = engine.reader.searcher();
+        let out = ContentStatsOut {
+            ok: true,
+            schema_version: CONTENT_SCHEMA_VERSION,
+            dir: engine.dir.to_string_lossy().to_string(),
+            docs: searcher.num_docs(),
+            segments: searcher.segment_readers().len(),
+            bytes: dir_size(&engine.dir),
+            error: String::new(),
+        };
+        serde_json::to_string(&out)
+            .unwrap_or_else(|e| content_stats_error_json(&format!("序列化失败：{e}")))
+    })
+}
+
 // ─────────────────────────── 单元测试 ───────────────────────────
 
 #[cfg(test)]
@@ -1764,6 +2461,57 @@ mod tests {
         let terms = gram_terms(f.name, "银行报表");
         let got: Vec<String> = terms.iter().map(|t| t.value().as_str().unwrap_or("").to_string()).collect();
         assert_eq!(got, vec!["银行", "行报", "报表"]);
+    }
+
+    /// 正文索引最小闭环：open → add → commit → search → 删除 → 不再命中。
+    #[test]
+    fn content_index_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipidx-content-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dir_text = dir.to_string_lossy().to_string();
+
+        let rc = unsafe { ipidx_content_open(dir_text.as_ptr(), dir_text.len()) };
+        assert_eq!(rc, 0, "open 失败：{}", take_last_error());
+
+        let docs = r#"[{"p":"D:\\tmp\\年度总结报告.docx","x":"docx","t":9000,"s":2048,"c":"本季度销售额同比增长百分之二十，主要来自华东区。"}]"#;
+        let n = unsafe { ipidx_content_add_docs(docs.as_ptr(), docs.len()) };
+        assert_eq!(n, 1, "写入失败：{}", take_last_error());
+        assert_eq!(
+            unsafe { ipidx_content_commit() },
+            0,
+            "commit 失败：{}",
+            take_last_error()
+        );
+
+        let spec = r#"{"terms":["销售额"]}"#;
+        let buf = unsafe { ipidx_content_search(spec.as_ptr(), spec.len(), 10) };
+        let json = unsafe { std::str::from_utf8(std::slice::from_raw_parts(buf.ptr, buf.len)) }
+            .unwrap_or("")
+            .to_string();
+        unsafe { ipidx_buf_free(buf) };
+        assert!(json.contains("\"ok\":true"), "查询失败：{json}");
+        assert!(json.contains("年度总结报告"), "没命中正文关键词：{json}");
+
+        let paths = r#"["d:\\tmp\\年度总结报告.docx"]"#;
+        assert_eq!(unsafe { ipidx_content_delete_paths(paths.as_ptr(), paths.len()) }, 1);
+        assert_eq!(unsafe { ipidx_content_commit() }, 0);
+
+        let buf2 = unsafe { ipidx_content_search(spec.as_ptr(), spec.len(), 10) };
+        let json2 = unsafe { std::str::from_utf8(std::slice::from_raw_parts(buf2.ptr, buf2.len)) }
+            .unwrap_or("")
+            .to_string();
+        unsafe { ipidx_buf_free(buf2) };
+        assert!(json2.contains("\"total\":0"), "删除后仍命中：{json2}");
+
+        assert_eq!(unsafe { ipidx_content_close() }, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

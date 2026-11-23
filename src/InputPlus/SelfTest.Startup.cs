@@ -208,7 +208,25 @@ public static partial class SelfTest
 
     private static void TestClipboardBackup()
     {
-        var userBackup = Core.Text.ClipboardBackup.Capture();
+        /* 整个用例都活在这份"租约"里：进来拍快照，出去由 Dispose 负责还原。
+         *
+         * 2026-11-23 的事故正是漏在 finally 之外：方法末尾"复制到系统剪贴板"
+         * 那一段写在 finally **后面**，哨兵串 selftest-copy-slot 被永久留在
+         * 用户剪贴板上，把用户刚剪切的一整段长文本顶掉了。
+         * 租约把"拍快照 / 记账 / 还原"收进一个对象，写操作只要走它就不会漏。 */
+        using var lease = new Core.Text.ClipboardLease();
+
+        /* 写文字的重试包装：剪贴板被别的程序（输入法、剪贴板工具、截图工具）
+         * 短暂独占时重试几次，仍失败就当环境限制跳过 —— 和原来的 TryOp 语义一致。 */
+        bool TryWrite(string text)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                if (lease.WriteText(text)) return true;
+                Thread.Sleep(40);
+            }
+            return false;
+        }
 
         /* 剪贴板是全局独占资源：本程序自己（运行中的实例）还在监听剪贴板历史，
          * 别的程序也可能随时打开它 —— 实测会出现 CLIPBRD_E_CANT_OPEN。
@@ -276,14 +294,14 @@ public static partial class SelfTest
         try
         {
             /* ---- ① 纯文本 ---- */
-            if (!TryOp(() => Clipboard.SetText("原始文字A")))
+            if (!TryWrite("原始文字A"))
             {
                 Check("（环境限制）剪贴板被占用，跳过快照验证", true);
                 return;
             }
 
             var textBackup = Core.Text.ClipboardBackup.Capture();
-            if (!TryOp(() => Clipboard.SetText("中转文字B")))
+            if (!TryWrite("中转文字B"))
             {
                 Check("（环境限制）剪贴板被占用，跳过文本验证", true);
                 return;
@@ -368,10 +386,10 @@ public static partial class SelfTest
 
             /* ---- ③ 文件列表 ---- */
             var files = new System.Collections.Specialized.StringCollection { @"C:\Windows\notepad.exe" };
-            if (TryOp(() => Clipboard.SetFileDropList(files)))
+            if (lease.WriteData(d => d.SetFileDropList(files)))
             {
                 var fileBackup = Core.Text.ClipboardBackup.Capture();
-                if (TryOp(() => Clipboard.SetText("中转文字D")))
+                if (TryWrite("中转文字D"))
                 {
                     fileBackup.Restore();
                     int fileCount = SafeFileCount();
@@ -394,10 +412,10 @@ public static partial class SelfTest
             }
 
             /* ---- ④ 守卫：期间用户自己复制了别的，不能再盖回去 ---- */
-            if (TryOp(() => Clipboard.SetText("用户原内容")))
+            if (TryWrite("用户原内容"))
             {
                 var guarded = Core.Text.ClipboardBackup.Capture();
-                if (TryOp(() => Clipboard.SetText("中转内容")) && TryOp(() => Clipboard.SetText("用户后来复制")))
+                if (TryWrite("中转内容") && TryWrite("用户后来复制"))
                 {
                     guarded.Restore(currentTextGuard: "中转内容");
                     CheckEqual("期间用户复制的内容不会被覆盖", WaitText("用户后来复制"), "用户后来复制");
@@ -412,10 +430,7 @@ public static partial class SelfTest
         {
             Check("剪贴板快照/还原", false, ex.Message);
         }
-        finally
-        {
-            userBackup.Restore();       // 把用户原来的剪贴板还回去
-        }
+        /* 没有 finally：还原由上面的 lease 负责（Dispose 时按内容/序号守卫还原）。 */
 
 
         /* 设置页那两个按钮走的是"复制到系统剪贴板"（不是 Paste）：
@@ -425,7 +440,7 @@ public static partial class SelfTest
         clip.ClearSlot(1);
         Check("空槽位复制不出东西", !clip.CopySlotToSystem(1));
         Check("空文本复制直接拒绝", !clip.CopyTextToSystem(""));
-        if (ClipboardPaster.TrySetText(""))
+        if (lease.WriteText(""))
         {
             /* 写剪贴板本身也可能失败：别的程序（输入法、剪贴板工具、截图工具）
              * 会用 OpenClipboard 短暂独占它，这时 CopyTextToSystem 直接返回 false。
@@ -437,6 +452,15 @@ public static partial class SelfTest
                 if (!copied) System.Threading.Thread.Sleep(80);
             }
 
+            /* 只要 CopyTextToSystem 返回成功，剪贴板里就是我们的哨兵 —— 立刻记账。
+             *
+             * 不能等"读回来确认"再记：剪贴板被别的程序短暂占住时读会失败，
+             * 这一等就漏账，Dispose 会以为"用户插了一手"而放弃还原，
+             * 哨兵串就永久留在用户剪贴板上（实测复现过：after=[selftest-copy-slot]）。
+             * 记账只认"我们自己写的那串字"，所以万一这期间真有人覆盖，
+             * 守卫比对失败 → 仍然不会去动人家的内容。 */
+            if (copied) lease.NoteOwnWrite("selftest-copy-slot");
+
             uint seqBefore = ClipboardSeq();
             string got = "";
             for (int i = 0; i < 8; i++)
@@ -447,6 +471,11 @@ public static partial class SelfTest
             }
 
             bool takenOver = ClipboardSeq() != seqBefore;
+
+            /* 读回来确认时再补一次账：写成功但上面那次记账之前发生过重试/失败的话，
+             * 这里补上；只认哨兵本身，读到别的说明是别人写的，不要冒认。 */
+            if (string.Equals(got, "selftest-copy-slot", StringComparison.Ordinal))
+                lease.NoteOwnWrite(got);
 
             if (!copied && (takenOver || ClipboardBusy()))
             {
@@ -466,6 +495,82 @@ public static partial class SelfTest
         {
             Check("（环境限制）剪贴板被占用，跳过复制验证", true);
         }
+    }
+
+    /* 回归：自检跑完，用户剪贴板必须原封不动。
+     * 事故现场 2026-11-23 18:49 —— 剪贴板里被留下的是 selftest-copy-slot。 */
+    private static void TestSelfTestDoesNotLeakSentinel()
+    {
+        const string userText = "用户原内容-回归";
+        try { Clipboard.SetText(userText); }
+        catch { Check("（环境限制）剪贴板被占用，跳过哨兵泄漏回归", true); return; }
+
+        using (var lease = new Core.Text.ClipboardLease())
+        {
+            if (!lease.WriteText("selftest-copy-slot"))
+            {
+                Check("（环境限制）剪贴板被占用，跳过哨兵泄漏回归", true);
+                return;
+            }
+        }
+
+        /* 剪贴板写入是异步落地的：Dispose 里刚写完就读，偶尔会读到上一次的尾巴。
+         * 400ms 内稳定下来都算通过（和 TestClipboardBackup 里 WaitText 的理由一样）。 */
+        string got = "";
+        long deadline = Environment.TickCount64 + 400;
+        while (Environment.TickCount64 < deadline)
+        {
+            try { got = Clipboard.GetText(); } catch { got = ""; }
+            if (got == userText) break;
+            Thread.Sleep(40);
+        }
+
+        Check("自检不把哨兵留在用户剪贴板上", got == userText, got);
+    }
+
+    /* 管理器把内容包了一层（文字整体变了，但我们的内容还在里面）：仍然要还原。
+     * 这是"偶发没还回来"的主因 —— 逐字相等的守卫一被改写就放弃。 */
+    private static void TestLeaseSurvivesManagerRewrite()
+    {
+        const string userText = "用户原内容-改写道具";
+        try { Clipboard.SetText(userText); }
+        catch { Check("（环境限制）剪贴板被占用，跳过改写还原回归", true); return; }
+
+        using (var lease = new Core.Text.ClipboardLease())
+        {
+            if (!lease.WriteText("selftest-copy-slot"))
+            {
+                Check("（环境限制）剪贴板被占用，跳过改写还原回归", true);
+                return;
+            }
+
+            /* 模拟剪贴板管理器：整串文字被包装过（加了引号和来源），但我们的内容还在里面。 */
+            try { Clipboard.SetText("「selftest-copy-slot」 · 来自剪贴板管理器"); }
+            catch { Check("（环境限制）剪贴板被占用，跳过改写还原回归", true); return; }
+        }
+
+        string got;
+        try { got = Clipboard.GetText(); } catch { got = ""; }
+        Check("内容被管理器包装过也要把用户剪贴板还回来", got == userText, got);
+    }
+
+    /* 反向用例：守卫不能退化成"永远不还原" */
+    private static void TestLeaseYieldsToUserCopy()
+    {
+        using (var lease = new Core.Text.ClipboardLease())
+        {
+            if (!lease.WriteText("selftest-copy-slot"))
+            {
+                Check("（环境限制）剪贴板被占用，跳过租约让位回归", true);
+                return;
+            }
+            try { Clipboard.SetText("用户后来复制"); }
+            catch { Check("（环境限制）剪贴板被占用，跳过租约让位回归", true); return; }
+        }
+
+        string got;
+        try { got = Clipboard.GetText(); } catch { got = ""; }
+        Check("期间用户复制的不会被自检还原覆盖", got == "用户后来复制", got);
     }
     /// <summary>
     /// 动作失败通知的文案。

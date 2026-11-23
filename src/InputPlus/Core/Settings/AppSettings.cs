@@ -163,10 +163,14 @@ public sealed class HotstringOptions
     /// 展开之后替用户按一下 Shift。
     ///
     /// 别名基本都用英文打（触发词不能以字母开头，但整串通常是 ASCII），而正文多数是中文；
-    /// 打完拼音再切回来，每展开一次就得多按一次 Shift。勾上这个开关，展开完由软件补这一下。
-    /// 默认开：一次单独的 Shift 抬起/按落在别的程序里几乎无副作用。
+    /// 打完拼音再切回来，每展开一次就得多按一次 Shift。
+    ///
+    /// **默认关（2026-11-23 改）**：按 Shift 就是替用户切换输入法的中/英模式，
+    /// 和「软件不该自己换输入法」是同一件事 —— 用户报的正是这个。
+    /// 需要的人可以在「别名」页显式勾上；勾了之后软件才会替他按这一下。
+    /// 老配置里存着开的人不受影响（他们当初是自己选的）。
     /// </summary>
-    public bool RestoreImeAfterExpand { get; set; } = true;
+    public bool RestoreImeAfterExpand { get; set; }
 
     /// <summary>
     /// 界面上可选的触发符号（全是半角）。
@@ -239,6 +243,15 @@ public sealed class HotstringOptions
 
     /// <summary>分组列表的排序方式：name（按名称）/ count（按条目数）/ custom（自定义拖拽顺序）。</summary>
     public string GroupSortMode { get; set; } = "name";
+
+    /// <summary>
+    /// 「全部别名」那张表的列宽，按列序：关键字 / 正文 / 备注 / 分组 / 使用。
+    ///
+    /// 0 = 这一列保持自适应（正文列是星号宽度，记成像素就把它钉死了）。
+    /// 和 Qbar 的 <see cref="QbarOptions.EntryColumnWidths"/> 同一套规则，
+    /// 免得两页的表一个记住宽度、一个每次忘。
+    /// </summary>
+    public List<double> ColumnWidths { get; set; } = new();
 
     /// <summary>
     /// 4.19.2 之前"列表显示替换内容"默认是开的；新版默认改为显示备注。
@@ -347,6 +360,60 @@ public sealed class QEntry
     /// <summary>按过滤词筛一组记录。</summary>
     public static List<QEntry> Filter(IEnumerable<QEntry> source, string? filter) =>
         source.Where(e => Matches(e, filter)).ToList();
+
+    /// <summary>
+    /// 按**某一列**匹配（设置页搜索框里选的那一列）。
+    ///
+    /// 为什么单独给「内容」一条路：这一列装的是 URL 模板、程序路径、片段正文，
+    /// 常常是多行 / 带制表符的。用户按屏幕上的样子打"两个词"，原来的 Contains
+    /// 会因为词中间夹着换行而永远搜不到 —— 所以内容列先把连续空白折成一个空格再比。
+    /// 其余列保持"原样包含"，和以前逐字节一致（自检钉着那一套）。
+    /// </summary>
+    public static bool MatchesColumn(QEntry entry, string? filter, string? column)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return true;
+        string f = filter.Trim();
+
+        switch (column)
+        {
+            case "key":
+                return entry.Key?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false;
+
+            case "comment":
+                return entry.Comment?.Contains(f, StringComparison.OrdinalIgnoreCase) ?? false;
+
+            case "value":
+                return ValueContains(entry.Value, f);
+
+            default:
+                return Matches(entry, f);
+        }
+    }
+
+    /// <summary>
+    /// 内容列专用：先按原样比一次（快，也覆盖单行最常见的情况），
+    /// 不中再把两边空白折起来比 —— 多行正文里的"相邻两行"于是也能被搜到。
+    /// </summary>
+    private static bool ValueContains(string? haystack, string needle)
+    {
+        if (string.IsNullOrEmpty(haystack)) return false;
+        if (haystack.Contains(needle, StringComparison.OrdinalIgnoreCase)) return true;
+        return FoldWhitespace(haystack).Contains(FoldWhitespace(needle), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>把连续空白（换行、制表、多个空格）折成一个空格，并去掉首尾空白。</summary>
+    private static string FoldWhitespace(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        bool pendingSpace = false;
+        foreach (char c in text)
+        {
+            if (char.IsWhiteSpace(c)) { pendingSpace = sb.Length > 0; continue; }
+            if (pendingSpace) { sb.Append(' '); pendingSpace = false; }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     public string Key { get; set; } = "";
     public string Value { get; set; } = "";
@@ -1344,6 +1411,12 @@ public sealed class QbarOptions
     public List<QbarCommand> Commands { get; set; } = new();
 
     /// <summary>
+    /// 正文（全文）索引的参数。与文件名索引分开：正文索引有自己的目录、
+    /// 自己的开关和重建按钮，关掉它不影响按文件名搜索。
+    /// </summary>
+    public QbarContentOptions Content { get; set; } = new();
+
+    /// <summary>
     /// 条目表（搜索指令 / 启动程序 / 常用网址 / 固定项）四列的宽度，按列序：[关键字, 内容, 备注, 附加菜单]。
     ///
     /// 0 或缺失 = 用默认值（关键字 96 / 内容 自适应 / 备注 140 / 附加菜单 84）。
@@ -1353,6 +1426,50 @@ public sealed class QbarOptions
     /// 为什么要记：用户把「备注」拉宽过一次，下次进这一页又变回原样，等于每次都在跟它对打。
     /// </summary>
     public List<double> EntryColumnWidths { get; set; } = new();
+}
+
+/// <summary>
+/// 正文索引（全文搜索）的参数。
+///
+/// 为什么单独一类而不是塞进 <see cref="QbarSearchOptions"/>：那一类是"查询期"的
+/// 参数（窗口大小、去抖、模糊），改一条立刻生效；这里的每一条都影响**建索引**
+/// （抽哪些、抽多大、放哪），改完要重建才生效，设置页也要如实提示这一点。
+/// </summary>
+public sealed class QbarContentOptions
+{
+    /// <summary>总开关。关掉后 Qbar 只按文件名/路径搜索（老行为）。</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>要抽正文的扩展名，分号/逗号分隔，不带点。</summary>
+    public string Extensions { get; set; } = "pdf;docx;xlsx;pptx;txt;md;html;htm;csv;json;log";
+
+    /// <summary>单文件上限（字节）。超过就跳过 —— 正文索引的体积与这个值线性相关。</summary>
+    public int MaxFileBytes { get; set; } = 2 * 1024 * 1024;
+
+    /// <summary>PDF 最多读多少页。</summary>
+    public int MaxPdfPages { get; set; } = 50;
+
+    /// <summary>最多索引多少个文件（防止第一次打开就把几十万文件全抽一遍）。</summary>
+    public int MaxFiles { get; set; } = 200_000;
+
+    /// <summary>是否连隐藏/系统文件一起抽。默认否。</summary>
+    public bool IncludeHidden { get; set; }
+
+    /// <summary>正文索引目录。空 = 数据目录下的 file-content-tantivy。</summary>
+    public string IndexDir { get; set; } = "";
+
+    /// <summary>
+    /// 生效范围。空 = 用户目录（桌面 / 文档 / 下载 / 图片 / 视频）。
+    /// 可以写盘根（<c>D:\</c>）表示整块盘，也可以写具体文件夹；
+    /// 改完要点「重建正文索引」才生效（旧索引里已有的条目不会自动消失）。
+    /// </summary>
+    public List<string> Roots { get; set; } = new();
+
+    /// <summary>
+    /// 普通关键词（不带 content:）是否也去正文里找。
+    /// 关掉之后只有显式写 content:词 才查正文。
+    /// </summary>
+    public bool MergeIntoKeywordSearch { get; set; } = true;
 }
 
 /// <summary>

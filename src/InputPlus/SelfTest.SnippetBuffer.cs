@@ -166,7 +166,7 @@ public static partial class SelfTest
         CheckEqual("跨度：最长优先命中 ;mail", m2?.Snippet.Trigger ?? "", ";mail");
         CheckEqual("跨度：最长优先的删除数", m2?.ConsumedLength ?? -1, 5);
 
-        // ③ 词边界：前面是词字符就不算
+        // ③ 词边界：前面紧挨着字母/数字就不算（"my;mail" 是词中间）
         Check("跨度：abc;mail 不命中（词边界）", SnippetMatcher.MatchSpan(one, "abc;mail", "") == null);
 
         // ④ 大小写敏感：;Mail 与 ;mail 各自精确命中
@@ -213,6 +213,44 @@ public static partial class SelfTest
 
     private static void TestSnippetStreamEngine()
     {
+        /* ⓪ 组字路径的回删数（纯函数）：这里错一个数，删掉的就是用户的正文。
+         *
+         * 现场记录（%TEMP%\clp-snippet-last.txt，2026-11-23）长这样：
+         *   17:49:57 展开=;ipdv 删除=1 组字=True    ← 只删了前缀，ipdv 原样留着
+         *   18:54:26 展开=;ipdv 删除=5 组字=False   ← 正常
+         * 前一种来自老逻辑"组字串现在是空的 = 我们取消成功"。可它还有另一种解释：
+         * **输入法已经把字母提交进控件了**（空格那一下最常见）—— 那时屏幕上
+         * 确实有 `ipdv`，只删 1 个字就是用户说的「第一次输入失败」。 */
+        CheckEqual("组字回删：亲手取消了组字 → 只删前缀",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: true, compositionGone: true, committedChars: 0,
+                compositionChars: 4, consumedLength: 5, prefixChars: 1), 1);
+
+        CheckEqual("组字回删：组字串自己消失（输入法已提交）→ 按触发词长度删",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: false, compositionGone: true, committedChars: 0,
+                compositionChars: 4, consumedLength: 5, prefixChars: 1), 5);
+
+        CheckEqual("组字回删：量到提交出来的字数 → 前缀 + 提交数",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: false, compositionGone: true, committedChars: 4,
+                compositionChars: 4, consumedLength: 5, prefixChars: 1), 5);
+
+        CheckEqual("组字回删：取消不掉、提交也量不到 → 前缀 + 组字串长度",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: false, compositionGone: false, committedChars: 0,
+                compositionChars: 2, consumedLength: 5, prefixChars: 1), 3);
+
+        CheckEqual("组字回删：连组字串都读不到 → 按触发词长度删",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: false, compositionGone: false, committedChars: 0,
+                compositionChars: 0, consumedLength: 5, prefixChars: 1), 5);
+
+        CheckEqual("组字回删：双符号前缀单独算",
+            HotkeyEngine.DecideComposingDeletes(
+                cancelledComposition: true, compositionGone: true, committedChars: 0,
+                compositionChars: 2, consumedLength: 5, prefixChars: 2), 2);
+
         /* ① 没有别名时：一个按键都不该去读控件文本（R4 的"零开销"）。
          *    用引擎自己的计数器观察 —— 空配置下连探针都不该走。 */
         {
@@ -370,6 +408,161 @@ public static partial class SelfTest
             if (captured.Count > 0) captured[0]();
             Check("引擎：空格命中后删了字符", e.SnippetDeletesForTest == 5,
                 e.SnippetDeletesForTest.ToString());
+
+            e.Dispose();
+            q.Dispose();
+        }
+
+        /* ⑥ 用户报的「一个别名第一次输入失败、第二次才成功」（2026-11-23）。
+         *
+         * 这里钉**状态机**这一侧：同一串按键连打两遍，两遍都必须当场命中，
+         * 第一遍不许留下任何"下一次才生效"的东西（残留缓冲、回读锁、
+         * 挂起中的展开都会造成这种表现）。
+         *
+         * 另一半原因在输入法那边：软件曾偷偷把前台窗口的输入语言切到英文，
+         * 而切换是**异步**的 —— 第一遍打字时它落在中途，触发词的字母一半进了
+         * 组字串、一半进了控件，展开时怎么删都错；第二遍布局已经是英文，
+         * 看起来就"正常了"。那条路已整条删掉（由 TestImeGuard 的反射用例钉住）。 */
+        {
+            var s = DefaultSettings.Create();
+            foreach (var t in s.Triggers) t.Enabled = false;
+            s.Global.Snippets.Clear();
+            s.Hotstring.Prefix = ";";
+            s.Hotstring.ExpandOnSpace = true;
+            s.Hotstring.RestoreImeAfterExpand = false;
+            s.Global.Snippets.Add(new Snippet { Trigger = ";mail", Text = "a@b.com" });
+
+            var q = new ActionQueue();
+            var e = new HotkeyEngine(q, () => s, (_, _) => true);
+            e.EditableForTest = () => true;
+
+            var captured = new List<Action>();
+            e.QueueForTest = a => { lock (captured) captured.Add(a); return true; };
+
+            /* 打一遍 `;mail` + 空格，把排队的展开真跑一次（干跑：不往系统里打字），
+             * 返回 (本次命中数, 本次回删数)。 */
+            (int Hits, int Deletes) TypeOnce()
+            {
+                int hitsBefore = e.SnippetMatchesForTest;
+                int deletesBefore = e.SnippetDeletesForTest;
+
+                int postedBefore;
+                lock (captured) postedBefore = captured.Count;
+
+                foreach (int vk in new[] { 0xBA, 'M', 'A', 'I', 'L' })
+                {
+                    e.SimulateKey(vk, true);
+                    e.SimulateKey(vk, false);
+                }
+                e.SimulateKey(0x20, true);              // 空格 = 触发
+                e.SimulateKey(0x20, false);
+
+                Action? work = null;
+                lock (captured) { if (captured.Count > postedBefore) work = captured[postedBefore]; }
+                work?.Invoke();
+
+                return (e.SnippetMatchesForTest - hitsBefore, e.SnippetDeletesForTest - deletesBefore);
+            }
+
+            var first = TypeOnce();
+            CheckEqual("引擎：别名第一次输入就命中（不是第二次才成功）", first.Hits, 1);
+            CheckEqual("引擎：第一次命中按触发词长度回删", first.Deletes, 5);
+
+            var second = TypeOnce();
+            CheckEqual("引擎：同一别名紧接着第二次输入也命中", second.Hits, 1);
+            CheckEqual("引擎：第二次命中同样按触发词长度回删", second.Deletes, 5);
+
+            e.Dispose();
+            q.Dispose();
+        }
+
+        /* ⑦ 缓冲刚被标成"不可信"（换了焦点 / 上一步有键被引擎吞掉）时，
+         * 第一次输入也要命中。这一路会强制回读控件文本，而回读可能把一份
+         * 正确的缓冲冲成别的样子 —— 兜底是"回读之前的物理缓冲"（见 ObserveSnippet ④⑤）。 */
+        {
+            var s = DefaultSettings.Create();
+            foreach (var t in s.Triggers) t.Enabled = false;
+            s.Global.Snippets.Clear();
+            s.Hotstring.Prefix = ";";
+            s.Hotstring.ExpandOnSpace = true;
+            s.Hotstring.RestoreImeAfterExpand = false;
+            s.Global.Snippets.Add(new Snippet { Trigger = ";mail", Text = "a@b.com" });
+
+            var q = new ActionQueue();
+            var e = new HotkeyEngine(q, () => s, (_, _) => true);
+            e.EditableForTest = () => true;
+
+            /* 展开动作走真实队列时是**异步**执行的（SnippetMatchesForTest 在队列里才加）。
+             * 把它抓下来当场干跑，才能断言"这一次就命中"，而不是断言"过一会儿命中"。 */
+            var captured = new List<Action>();
+            e.QueueForTest = a => { lock (captured) captured.Add(a); return true; };
+
+            e.SnippetBufferForTest.MarkUntrusted();     // "屏幕状态未知"
+
+            int hitsBefore = e.SnippetMatchesForTest;
+            foreach (int vk in new[] { 0xBA, 'M', 'A', 'I', 'L' })
+            {
+                e.SimulateKey(vk, true);
+                e.SimulateKey(vk, false);
+            }
+            e.SimulateKey(0x20, true);
+            lock (captured) { foreach (var work in captured) work(); }
+            CheckEqual("引擎：缓冲不可信时第一次输入也命中",
+                e.SnippetMatchesForTest - hitsBefore, 1);
+            e.SimulateKey(0x20, false);
+
+            e.Dispose();
+            q.Dispose();
+        }
+
+        /* ⑧ 换输入框：上一个框的尾巴不能拼到这一框的触发词前面。
+         *
+         * 现场：用户点了另一个输入框，直接打 `;mail` —— 缓冲尾部还是上一个框最后打的
+         * 几个字母，匹配器看到"字母 + ;mail"，按词边界判据（"my;mail" 不算词首）
+         * 拒绝匹配，于是第一次不展开；用户接着按的空格把缓冲清空了，第二遍才成功。
+         * 正确做法是**换控件就清缓冲**（见 HotkeyEngine.NoteSnippetFocus）。 */
+        {
+            var s = DefaultSettings.Create();
+            foreach (var t in s.Triggers) t.Enabled = false;
+            s.Global.Snippets.Clear();
+            s.Hotstring.Prefix = ";";
+            s.Hotstring.ExpandOnSpace = true;
+            s.Hotstring.RestoreImeAfterExpand = false;
+            s.Global.Snippets.Add(new Snippet { Trigger = ";mail", Text = "a@b.com" });
+
+            var q = new ActionQueue();
+            var e = new HotkeyEngine(q, () => s, (_, _) => true);
+            e.EditableForTest = () => true;
+
+            var captured = new List<Action>();
+            e.QueueForTest = a => { lock (captured) captured.Add(a); return true; };
+
+            /* 先在"旧输入框"里打三个字母 —— 它们只属于那个框。 */
+            foreach (int vk in new[] { 'A', 'B', 'C' })
+            {
+                e.SimulateKey(vk, true);
+                e.SimulateKey(vk, false);
+            }
+
+            /* 用户点到另一个输入框：把记录的焦点改成一个不存在的句柄，
+             * 下一次按键就会被判定成"换控件了"。 */
+            e.SnippetFocusForTest = new IntPtr(1);
+
+            int hitsBefore = e.SnippetMatchesForTest;
+            int deletesBefore = e.SnippetDeletesForTest;
+            foreach (int vk in new[] { 0xBA, 'M', 'A', 'I', 'L' })
+            {
+                e.SimulateKey(vk, true);
+                e.SimulateKey(vk, false);
+            }
+            e.SimulateKey(0x20, true);
+            lock (captured) { foreach (var work in captured) work(); }
+
+            CheckEqual("引擎：换输入框后第一次打别名就命中",
+                e.SnippetMatchesForTest - hitsBefore, 1);
+            CheckEqual("引擎：换输入框后只删触发词（上一个框的字没被删）",
+                e.SnippetDeletesForTest - deletesBefore, 5);
+            e.SimulateKey(0x20, false);
 
             e.Dispose();
             q.Dispose();

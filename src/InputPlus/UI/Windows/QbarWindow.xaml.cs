@@ -1,4 +1,4 @@
-﻿using System.Collections.Specialized;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -192,13 +192,16 @@ public partial class QbarWindow : Window
             Keyboard.Focus(Input);
             Input.CaretIndex = Input.Text.Length;
 
-            /* 输入法只在**焦点真正拿到之后**切：盲按 Shift 是"切换"，不是"确保"，
-             * 现在已经是中文时再按一下反而变英文。这里用 ImeGuard 查布局后按需切。 */
+            /* 输入法只在**焦点真正拿到之后**才动，而且只在本窗口自己身上动：
+             * 盲按 Shift 是"切换"，不是"确保" —— 现在已经是中文时再按一下反而变英文。
+             *
+             * 这里**不用** ImeGuard 去查/改键盘布局：那个能力已经整条删掉了
+             * （用户报的「input plus 不应该能够自己换输入法」）。面板要中文时
+             * 只拨自己的 WPF 输入法状态，绝不碰系统的输入语言。 */
             if (!_imeApplied && IsActive)
             {
-                /* EnsureComposing 会同时检查“布局”和“输入法的中/英模式”。
-                 * 只有真的成功才记账；失败时保持 false，等下一次激活/焦点
-                 * 事件再试一次（中文输入法刚启动时 IMM 上下文可能还没就绪）。 */
+                /* 只有真的成功才记账；失败时保持 false，等下一次激活/焦点
+                 * 事件再试一次（中文输入法刚启动时输入法状态可能还没就绪）。 */
                 _imeApplied = ApplyImePreference();
                 if (!_imeApplied) QueueImePreference(180);
             }

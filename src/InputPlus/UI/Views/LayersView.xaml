@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
+             xmlns:controls="clr-namespace:InputPlus.UI.Controls"
              FontFamily="{DynamicResource Font.Ui}">
     <Grid Margin="24,4,20,20">
         <Grid.RowDefinitions>
@@ -149,37 +150,14 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <!-- 搜索框：左侧放大镜 + 空内容时的提示文字，
-                                             一眼能看出这里是搜索，而不是一个空输入框。 -->
-                                        <Grid>
-                                            <TextBox x:Name="DoubleTapSearchBox" Style="{StaticResource TextBox.Base}"
-                                                     MinHeight="34" VerticalContentAlignment="Center"
-                                                     Padding="32,0,10,0"
-                                                     ToolTip="{loc:T '搜索动作名称、分类或 ID'}"
-                                                     TextChanged="OnDoubleTapSearchChanged" />
-                                            <TextBlock Text="&#xE721;"
-                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                       FontSize="14"
-                                                       Foreground="{DynamicResource Brush.TextTertiary}"
-                                                       VerticalAlignment="Center" HorizontalAlignment="Left"
-                                                       Margin="11,0,0,0" IsHitTestVisible="False" />
-                                            <TextBlock Text="{loc:T '搜索动作名称、分类或 ID'}"
-                                                       Foreground="{DynamicResource Brush.TextTertiary}"
-                                                       FontSize="12"
-                                                       VerticalAlignment="Center" HorizontalAlignment="Left"
-                                                       Margin="33,0,10,0" IsHitTestVisible="False">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding Text, ElementName=DoubleTapSearchBox}" Value="">
-                                                                <Setter Property="Visibility" Value="Visible" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </Grid>
+                                        <!-- 搜索框换成全软件统一的 SearchField：放大镜、清空叉、分类下拉
+                                             都在框**里面**，外层不用再单画一个图标 + 一层占位文字
+                                             （以前是两件东西叠着，看着像"图标旁边一个空盒子"）。
+                                             分类下拉选的是"搜哪一列"，和下面那个「先选分类」是两个方向：
+                                             一个是搜索范围，一个是动作分类过滤。 -->
+                                        <controls:SearchField x:Name="DoubleTapSearch"
+                                                              Placeholder="{loc:T '搜索动作名称、分类或 ID'}"
+                                                              SearchChanged="OnDoubleTapSearchChanged" />
                                         <ComboBox x:Name="DoubleTapCategoryBox" Style="{StaticResource ComboBox.Base}"
                                                   Margin="0,8,0,0" MaxDropDownHeight="320"
                                                   ToolTip="{loc:T '先选分类'}"
@@ -218,7 +196,7 @@
                             <ItemsControl x:Name="LayerList" Margin="0,12,0,0">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="10"
+                                        <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
                                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                                 BorderBrush="{Binding RowBorder}" BorderThickness="1">
                                             <Grid>

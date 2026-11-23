@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -22,6 +22,7 @@ internal sealed class QbarFilterCatalog
     internal const string IdAudio = "builtin.audio";
     internal const string IdFile = "builtin.file";
     internal const string IdFolder = "builtin.folder";
+    internal const string IdContent = "builtin.content";
 
     /* 扩展名表照用户需求文档 2.4 抄下来，顺序也保持原样：
      * 这批表本身是 Listary 的默认值，用户换过来时希望一眼认出"和我以前的一样"。
@@ -219,6 +220,13 @@ internal sealed class QbarFilterCatalog
         {
             Id = IdFolder, Name = "只看文件夹", Keyword = "folder", Icon = "\uE8B7",
             SearchForFiles = false, SearchForFolders = true,
+        };
+        yield return new QbarFilter
+        {
+            /* 只看正文：关键词只去正文索引里匹配。
+             * 关键字用 content —— 和 content: 谓词同一个词，用户不用记两套写法。 */
+            Id = IdContent, Name = "只看正文", Keyword = "content", Icon = "\uE721",
+            SearchForFiles = true, SearchForFolders = false, ContentOnly = true,
         };
     }
 

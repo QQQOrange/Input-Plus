@@ -23,14 +23,14 @@
                    Text="{loc:T '进入本层后再按住下面配置的键，就能用到另一套独立绑定。子层键可以是任意物理键（Ctrl、Tab、CapsLock…），也能给它起个名字。最多 10 个。'}" />
 
         <!-- 子层列表 -->
-        <Border Grid.Row="2" Margin="0,14,0,0" CornerRadius="10"
+        <Border Grid.Row="2" Margin="0,14,0,0" CornerRadius="{DynamicResource Radius.Control}"
                 Background="{DynamicResource Brush.SurfaceAlt}"
                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10">
                 <ItemsControl x:Name="SubList">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Margin="0,0,0,8" Padding="10,9" CornerRadius="9"
+                            <Border Margin="0,0,0,8" Padding="10,9" CornerRadius="{DynamicResource Radius.Control}"
                                     Background="{DynamicResource Brush.Surface}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                 <Grid>

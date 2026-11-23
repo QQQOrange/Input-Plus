@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="InputPlus.UI.Windows.OsdCard"
+<UserControl x:Class="InputPlus.UI.Windows.OsdCard"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              SnapsToDevicePixels="True" UseLayoutRounding="True"
@@ -18,7 +18,7 @@
          覆盖一遍 —— 那边是唯一的真相，因为它们是从系统横条的
          截图上逐像素量出来的（见 OsdPlacement 的注释）。 -->
     <Grid x:Name="Root">
-        <Border x:Name="Card" Margin="12" CornerRadius="7.5" Background="#F02D2D2D"
+        <Border x:Name="Card" Margin="12" CornerRadius="{DynamicResource Radius.Control}" Background="#F02D2D2D"
                 BorderThickness="0" Padding="12.25,0,13,0">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="14" ShadowDepth="0" Opacity="0.24" Color="#000000" />
@@ -64,13 +64,13 @@
                 <!-- 进度条：底槽 + 填充（星号比例列，避免布局未完成时宽度为 0）。
                      槽 = 白色 55%，填充 = 系统强调色浅档（运行时注入）。 -->
                 <Grid x:Name="Track" Grid.Column="2" Height="4" VerticalAlignment="Center">
-                    <Border x:Name="TrackBar" CornerRadius="2" Background="#8CFFFFFF" />
+                    <Border x:Name="TrackBar" CornerRadius="{DynamicResource Radius.Tiny}" Background="#8CFFFFFF" />
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition x:Name="FillColumn" />
                             <ColumnDefinition x:Name="RestColumn" />
                         </Grid.ColumnDefinitions>
-                        <Border x:Name="FillBar" Grid.Column="0" CornerRadius="2"
+                        <Border x:Name="FillBar" Grid.Column="0" CornerRadius="{DynamicResource Radius.Tiny}"
                                 Background="#4CC2FF" />
                     </Grid>
                 </Grid>
