@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 
 namespace InputPlus.Core.Qbar.Search;
 
@@ -73,10 +75,17 @@ internal static class EverythingBundle
                 Directory.CreateDirectory(Folder);
                 /* 32 位进程也要释放 64 位 DLL 吗？不用 —— 只有同位数的那份能被加载。
                    但客户端 exe 只有一个（x64），32 位进程同样能启动它（跨位数只限制
-                   把 32 位模块加载进 64 位进程，启动新进程不受限）。 */
-                Extract("Everything64.dll", Dll64Name);
-                Extract("Everything32.dll", Dll32Name);
-                Extract("Everything.exe", ClientExeName);
+                   把 32 位模块加载进 64 位进程，启动新进程不受限）。
+                   v1.5.2：嵌进程序集的是 .gz（见 csproj 里那段说明），这里解压。
+                   三份要么全在、要么重解一遍 —— 用戳记文件判断"这版装好了没"，
+                   不再用"文件大小相等"（压缩后大小对不上原文件）。 */
+                if (!IsBundleUpToDate())
+                {
+                    Extract("Everything64.dll.gz", Dll64Name);
+                    Extract("Everything32.dll.gz", Dll32Name);
+                    Extract("Everything.exe.gz", ClientExeName);
+                    WriteStamp();
+                }
 
                 EnsureIni();
             }
@@ -88,6 +97,56 @@ internal static class EverythingBundle
             return _error.Length == 0;
         }
     }
+
+    /// <summary>戳记文件：记"哪个程序集版本 + 哪三份压缩资源"已经解出来了。</summary>
+    private const string StampName = ".bundle";
+
+    private static string StampPath => Path.Combine(Folder, StampName);
+
+    private static bool IsBundleUpToDate()
+    {
+        try
+        {
+            if (!File.Exists(StampPath)) return false;
+            if (File.ReadAllText(StampPath).Trim() != BundleStamp()) return false;
+            return File.Exists(Path.Combine(Folder, Dll64Name))
+                && File.Exists(Path.Combine(Folder, Dll32Name))
+                && File.Exists(ClientPath);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "内置 Everything：读戳记");
+            return false;
+        }
+    }
+
+    private static void WriteStamp()
+    {
+        try { File.WriteAllText(StampPath, BundleStamp()); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "内置 Everything：写戳记"); }
+    }
+
+    /// <summary>
+    /// 当前这版程序集对应的戳记：程序集版本 + 三份资源的长度。
+    /// 升级（换过程序集）或重新打包（资源长度变了）都会自动重解。
+    /// </summary>
+    private static string BundleStamp()
+    {
+        Assembly assembly = typeof(EverythingBundle).Assembly;
+        var sb = new StringBuilder(64);
+        sb.Append(assembly.GetName().Version).Append('|');
+        foreach (string name in PackedResourceNames)
+        {
+            using Stream? source = assembly.GetManifestResourceStream("InputPlus.Assets.Everything." + name);
+            sb.Append(source?.Length ?? -1).Append('|');
+        }
+        return sb.ToString();
+    }
+
+    private static readonly string[] PackedResourceNames =
+    {
+        "Everything64.dll.gz", "Everything32.dll.gz", "Everything.exe.gz",
+    };
 
     /// <summary>
     /// 维护内置客户端的便携配置。
@@ -134,29 +193,33 @@ internal static class EverythingBundle
         if (changed) File.WriteAllLines(ini, lines);
     }
 
+    /// <summary>
+    /// 解一份 gz 出来。资源名 = <c>InputPlus.Assets.Everything.&lt;文件名&gt;.gz</c>。
+    ///
+    /// 先写 .tmp 再改名：Everything 客户端正在运行时原文件被占用，
+    /// 这一步失败就保留旧的继续用（不影响本轮搜索），绝不把半截文件留在原位。
+    /// </summary>
     private static void Extract(string resourceName, string fileName)
     {
         string target = Path.Combine(Folder, fileName);
         Assembly assembly = typeof(EverythingBundle).Assembly;
-        using Stream? source = assembly.GetManifestResourceStream("InputPlus.Assets.Everything." + resourceName);
-        if (source == null)
+        using Stream? packed = assembly.GetManifestResourceStream("InputPlus.Assets.Everything." + resourceName);
+        if (packed == null)
         {
             /* 资源没打进程序集（例如自检用的精简构建）：安静跳过，
                让上层回落到"已安装的 Everything"那条路。 */
             return;
         }
 
-        long length = source.Length;
-        var info = new FileInfo(target);
-        if (info.Exists && info.Length == length) return;   // 同版本，别每次启动都拷 2 MB
-
         string temp = target + ".tmp";
-        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            source.CopyTo(file);
-        }
         try
         {
+            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var gz = new GZipStream(packed, CompressionMode.Decompress))
+            {
+                gz.CopyTo(file);
+            }
+
             /* 客户端正在运行的时候替换 exe 会失败（文件被占用）——
                那就保留旧文件继续用，不影响本轮搜索。 */
             if (File.Exists(target)) File.Delete(target);
@@ -169,6 +232,13 @@ internal static class EverythingBundle
         catch (UnauthorizedAccessException)
         {
             TryDelete(temp);
+        }
+        catch (InvalidDataException ex)
+        {
+            /* 包坏了（截断 / 不是 gzip）：别让整个 Ensure 崩掉，留一条能查的日志。 */
+            TryDelete(temp);
+            _error = "内置 " + fileName + " 解压失败：" + ex.Message;
+            CoreLog.Swallow(ex, "内置 Everything：解压 " + fileName);
         }
     }
 

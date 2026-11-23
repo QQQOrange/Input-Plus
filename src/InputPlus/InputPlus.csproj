@@ -25,12 +25,12 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.5.1</Version>
-    <FileVersion>1.5.1.0</FileVersion>
+    <Version>1.5.2</Version>
+    <FileVersion>1.5.2.0</FileVersion>
     <!-- AssemblyVersion 必须跟 <Version> 一致：UpdateService.CurrentVersion 读的是
-         Assembly.GetName().Version（三段式），漏改的话"1.5.1 的包自报 1.5.0"，
-         自己会弹一次「发现新版本 1.5.1」—— 2026-11-23 v1.5.1 就踩了这一下。 -->
-    <AssemblyVersion>1.5.1.0</AssemblyVersion>
+         Assembly.GetName().Version（三段式），漏改的话"1.5.2 的包自报 1.5.1"，
+         自己会弹一次「发现新版本 1.5.2」—— 2026-11-23 v1.5.1 就踩了这一下。 -->
+    <AssemblyVersion>1.5.2.0</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -117,13 +117,18 @@
     <!-- 内置 Everything：SDK 的 x86/x64 DLL + Everything 客户端 exe。
          为什么连客户端一起内置：Everything 的 SDK 只是 IPC 封装，用户机器上
          没有 Everything 进程时，搜索永远是 0 条（本机实测就是这个）。
-         详见 Core/Qbar/Search/EverythingBundle.cs 顶部的取舍说明。 -->
-    <EmbeddedResource Include="Assets\Everything\Everything.exe"
-                      LogicalName="InputPlus.Assets.Everything.Everything.exe" />
-    <EmbeddedResource Include="Assets\Everything\Everything64.dll"
-                      LogicalName="InputPlus.Assets.Everything.Everything64.dll" />
-    <EmbeddedResource Include="Assets\Everything\Everything32.dll"
-                      LogicalName="InputPlus.Assets.Everything.Everything32.dll" />
+         详见 Core/Qbar/Search/EverythingBundle.cs 顶部的取舍说明。
+
+         ⚠ 嵌入的是 **.gz**，不是原始 PE（v1.5.2）：三份原始二进制都是完整的 PE 头，
+         直接塞进 InputPlus.dll 会让程序集"夹带可执行体"，火绒 2026-11-23 就据此
+         判成 Trojan/Bladabindi.c 并把编译中间产物删掉。压缩后程序集里没有 MZ/PE 头，
+         运行期由 EverythingBundle 解压释放（tools/pack-everything.ps1 负责生成这些 .gz）。 -->
+    <EmbeddedResource Include="Assets\Everything\Everything.exe.gz"
+                      LogicalName="InputPlus.Assets.Everything.Everything.exe.gz" />
+    <EmbeddedResource Include="Assets\Everything\Everything64.dll.gz"
+                      LogicalName="InputPlus.Assets.Everything.Everything64.dll.gz" />
+    <EmbeddedResource Include="Assets\Everything\Everything32.dll.gz"
+                      LogicalName="InputPlus.Assets.Everything.Everything32.dll.gz" />
     <!-- 界面语言包已经挪到 InputPlus.Localization 工程（Assets\Lang），
          原因见该工程 csproj 顶部：XAML 里的 {loc:T} 一旦引用**本程序集**的类型，
          WPF 就必须先编一个临时程序集再跑第二趟标记编译，那趟临时编译会和正式产物
