@@ -1463,6 +1463,18 @@ public static partial class SelfTest
             Check("静默期：字段可设置", Core.Input.InputSender.QuietUntil > DateTime.Now, "");
             Core.Input.InputSender.QuietUntil = saved;
 
+            /* 注入熔断（v1.5.1）：从"一置真就永久"改成"限时熔断 + 成功即解除"。
+             * 现场事故：2026-11-23 开机后一次瞬时失败把标记永久置真，
+             * 之后整个会话里手势一条都不触发（日志全是"补发熔断中：按下原样放行"）。 */
+            {
+                bool wasBlocked = Core.Input.InputSender.InjectionBlocked;
+                Core.Input.InputSender.MarkInjectionBlocked("自检");
+                Check("注入熔断：置真后 InjectionBlocked 为真", Core.Input.InputSender.InjectionBlocked, "");
+                Core.Input.InputSender.ClearInjectionBlocked("自检");
+                Check("注入熔断：补发成功回到钩子后立刻解除", !Core.Input.InputSender.InjectionBlocked, "");
+                if (wasBlocked) Core.Input.InputSender.MarkInjectionBlocked("自检还原");
+            }
+
             var s = DefaultSettings.Create();
             foreach (var t in s.Triggers) t.Enabled = false;
             var e = new HotkeyEngine(new ActionQueue(), () => s, (_, _) => true);

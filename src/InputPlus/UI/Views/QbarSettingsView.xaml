@@ -302,7 +302,11 @@
                                             <TextBlock Text="{loc:T '菜单最上面那两条：把前台程序正在打开的那个文件收进固定项，或在资源管理器里定位它。前台是资源管理器、桌面、任务栏时这两条是灰的。'}"
                                                        Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
-                                        <ComboBox x:Name="RevealModeBox" Grid.Column="1" MinWidth="148" VerticalAlignment="Center"
+                                        <!-- 皮肤必须跟本页其它下拉一致（v1.5.1）：
+                                             这里以前漏了 Style，用的是 WPF 默认的灰白 3D 下拉，
+                                             跟整套主题完全不是一个东西（用户一眼就看出来了）。 -->
+                                        <ComboBox x:Name="RevealModeBox" Grid.Column="1" MinWidth="148"
+                                                  Style="{StaticResource ComboBox.Base}" VerticalAlignment="Center"
                                                   SelectionChanged="OnRevealModeChanged">
                                             <ComboBoxItem Content="{loc:T '打开并选中文件'}" Tag="selectFile" />
                                             <ComboBoxItem Content="{loc:T '只打开文件夹'}" Tag="openFolderOnly" />

@@ -97,25 +97,54 @@ public static class InputSender
     /// 为什么必须暴露：手势的"保住原生右键菜单"靠的是"吞掉点击 → 没成笔就补发一次点击"。
     /// 补发发不出去时，吞掉就等于把用户的点击吃掉 —— 用户看到的是"鼠标右键失效"。
     /// 一旦这个标记为真，<c>GestureService.OnButton</c> 会整下都不接管（fail-open）。
+    ///
+    /// v1.5.1 起它是**限时熔断**，不再是"一置真就永久"：
+    /// 2026-11-23 09:45 真机重启后，开机那阵子的一次注入失败把这个标记永久置真，
+    /// 之后整个会话里手势一条都不触发（诊断日志成串 "-> 补发不可用：按下原样放行"），
+    /// 用户只能重启软件。**一次瞬时失败不该判无期** —— 现在到点自动重试，
+    /// 补发一旦成功回到钩子就立刻解除（见 <see cref="ClearInjectionBlocked"/>）。
     /// </summary>
-    public static bool InjectionBlocked { get; private set; }
+    public static bool InjectionBlocked => Environment.TickCount64 < Interlocked.Read(ref _blockedUntilMs);
+
+    /* 熔断时长：15s → 30s → 60s → … 封顶 5 分钟。
+     * 为什么逐次加长：真是"这台机器注不了入"的环境，重试太勤会每 15 秒吃掉一次点击；
+     * 而开机的瞬时故障只需要一次 15 秒的等待。 */
+    private static long _blockedUntilMs;
+    private static int _blockStrikes;
+
+    private const int BlockBaseMs = 15_000;
+    private const int BlockMaxMs = 300_000;
 
     /// <summary>
     /// 由手势服务报告：补发出去的事件连续几次都没回到钩子 —— 这台机器上 SendInput
     /// 的结果不可信（安全软件 / 输入过滤驱动 / UIPI 会静默丢掉，但返回条数照旧）。
     ///
-    /// 一旦置真，手势那边会整下都不接管（fail-open）：宁可少一个手势，
-    /// 也不能让右键/左键点不动 —— 用户报的"任何地方点右键都没反应"就是这条链路。
+    /// 置真后一段时间里手势那边整下都不接管（fail-open）：宁可少一个手势，
+    /// 也不能让右键/左键点不动；到点自动重试，不会永久失效。
     /// </summary>
-    internal static void MarkInjectionBlocked(string reason)
+    internal static void MarkInjectionBlocked(string reason) => Block(reason);
+
+    /// <summary>
+    /// 补发**真的**回到了钩子：立刻解除熔断并把连击清零（v1.5.1）。
+    ///
+    /// 这是自愈的那一半：开机时的瞬时故障只该让手势停十几秒；
+    /// 只要有一次补发成功，就没有理由继续 fail-open。
+    /// </summary>
+    internal static void ClearInjectionBlocked(string reason)
     {
-        if (InjectionBlocked) return;
-        InjectionBlocked = true;
-        _injectionBlockedLogged = true;     // 别再让 Send 的失败分支重复刷一条
-        CoreLog.Warn("[注入] 补发不生效（" + reason + "）—— 手势不再接管鼠标按键，右键/左键恢复原生行为");
+        if (Interlocked.Exchange(ref _blockedUntilMs, 0) == 0) return;
+        Interlocked.Exchange(ref _blockStrikes, 0);
+        CoreLog.Info("[注入] 补发已恢复到钩子，解除熔断（" + reason + "）");
     }
 
-    private static bool _injectionBlockedLogged;
+    private static void Block(string reason)
+    {
+        int strike = Interlocked.Increment(ref _blockStrikes);
+        long ms = Math.Min(BlockMaxMs, (long)BlockBaseMs << Math.Min(strike - 1, 6));
+        Interlocked.Exchange(ref _blockedUntilMs, Environment.TickCount64 + ms);
+        CoreLog.Warn($"[注入] 补发不生效（{reason}）—— {ms / 1000}s 内手势不接管鼠标按键，之后自动重试（第 {strike} 次）");
+    }
+
 
     private static bool Send(params INPUT[] inputs)
     {
@@ -157,12 +186,7 @@ public static class InputSender
              * 标记之后 OnButton 会整下都不接管（fail-open），宁可少一个手势，也不能让键失效。 */
             if (sent == 0)
             {
-                InjectionBlocked = true;
-                if (!_injectionBlockedLogged)
-                {
-                    _injectionBlockedLogged = true;
-                    CoreLog.Warn($"[注入] SendInput 发不出去（错误 {LastInjectError}）—— 手势将不再接管鼠标按键");
-                }
+                Block($"SendInput 发不出去（错误 {LastInjectError}）");
             }
             return false;
         }

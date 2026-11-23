@@ -226,6 +226,16 @@ public sealed partial class GestureService : IDisposable
     private long _lastInjectedMouseSeenAt;
     private int _replayUnobserved;
 
+    /* ── 开机宽限（v1.5.1）──────────────────────────────────────────
+     *
+     * 开机后的头 20 秒里，前台/桌面还在抖动（UAC 安全桌面、启动静默期、
+     * 各种开机自启程序抢前台），补发没回来不代表"这台机器注不了入"。
+     * 以前这几秒的失败照样算连击，三次就把手势全局 fail-open 了 ——
+     * 用户重启电脑后"手势全没了"，查到最后就是这里（2026-11-23 现场）。
+     */
+    private const int BootGraceMs = 20_000;
+    private readonly long _hookStartedAt = Environment.TickCount64;
+
     /* 组合手势触发后，那颗"第二键"的抬起还要吞掉一次，
      * 否则系统会看到一次"无按下"的抬起。 */
     private int _chordSwallow;
@@ -594,9 +604,15 @@ public sealed partial class GestureService : IDisposable
     /// 补发自检：等一小会儿，看我们自己的钩子有没有看到这对注入事件。
     ///
     /// 连续几次都看不到 → 这台机器上 SendInput 被环境吞掉了（安全软件 / 输入过滤 /
-    /// UIPI）。继续"吞掉再补发"只会让鼠标键彻底失效，所以直接 fail-open：
+    /// UIPI）。继续"吞掉再补发"只会让鼠标键彻底失效，所以 fail-open：
     /// 置 <see cref="InputSender.InjectionBlocked"/>，之后 OnButton 整下都不接管。
     /// 宁可少一个手势，也不能让右键点不动。
+    ///
+    /// v1.5.1 起补了两条（2026-11-23 开机后手势全灭的根因）：
+    ///   ① **看到就解除熔断** —— 只要有一次补发真的回到了钩子，说明这台机器能注入，
+    ///      没理由继续 fail-open；以前只置不清，一次开机瞬间的失败能把整个会话废掉。
+    ///   ② **开机 20 秒内不计失败** —— 那时候桌面/前台还没稳定（UAC、安全桌面、
+    ///      启动静默期都在这一小段里），把这几秒的失败算进连击只会误判。
     /// </summary>
     private void VerifyReplayLanded(int vk, long issuedAt)
     {
@@ -606,10 +622,20 @@ public sealed partial class GestureService : IDisposable
             if (Interlocked.Read(ref _lastInjectedMouseSeenAt) >= issuedAt)
             {
                 Interlocked.Exchange(ref _replayUnobserved, 0);
+                bool wasBlocked = InputSender.InjectionBlocked;
+                InputSender.ClearInjectionBlocked("补发回到了钩子");
+                if (wasBlocked) AttachDiag("  ok 补发回到钩子：解除熔断，手势恢复接管");
+                return;
+            }
+
+            if (Environment.TickCount64 - _hookStartedAt < BootGraceMs)
+            {
+                AttachDiag($"  ~~ 开机 {BootGraceMs / 1000}s 内补发没回来（vk=0x{vk:X2}）：不计失败");
                 return;
             }
 
             int misses = Interlocked.Increment(ref _replayUnobserved);
+            AttachDiag($"  !! 补发没有回到钩子：vk=0x{vk:X2} 第 {misses}/3 次");
             CoreLog.Warn($"[手势] 补发没有回到钩子（vk=0x{vk:X2}，第 {misses} 次）—— 本次点击可能被系统吞掉");
             if (misses >= 3) InputSender.MarkInjectionBlocked("补发连续 3 次没有回到钩子");
         }
@@ -850,10 +876,12 @@ public sealed partial class GestureService : IDisposable
 
             /* 补发这条路根本走不通（SendInput 被环境吞掉 / 受限）：整下都不接管（fail-open）。
              * 绝不能吞了用户又还不出一次点击 —— 那正是"右键在任何地方都没反应"。
-             * v1.4.4：判定提前到**开笔之前**，不再先画一次覆盖层再退回（省一次闪窗）。 */
+             * v1.4.4：判定提前到**开笔之前**，不再先画一次覆盖层再退回（省一次闪窗）。
+             * v1.5.1：这是**限时**熔断（15s 起、逐次加长、成功即解除），不是永久失效 ——
+             * 以前一次开机瞬间的失败会把整个会话的手势废掉，日志里全是这一句。 */
             if (InputSender.InjectionBlocked)
             {
-                AttachDiag("  -> 补发不可用：按下原样放行");
+                AttachDiag("  -> 补发熔断中：按下原样放行（到点会自己恢复）");
                 return false;
             }
 
