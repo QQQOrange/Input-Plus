@@ -29,9 +29,9 @@ public static partial class SelfTest
         bool inScope = true,
         bool taskbar = false,
         bool fullscreen = false,
-        bool blank = true,
+        bool takeable = true,
         bool hasGesture = false)
-        => new(middleVk, down, injected, menuOpen, enabled, inScope, taskbar, fullscreen, blank, hasGesture);
+        => new(middleVk, down, injected, menuOpen, enabled, inScope, taskbar, fullscreen, takeable, hasGesture);
 
     private static void TestMiddleMenu()
     {
@@ -43,7 +43,7 @@ public static partial class SelfTest
 
         // ── ② 桌面图标上：不接管（不吞，原样放行）────────────────────
         CheckEqual("中键菜单：点在桌面图标上 → 不接管",
-            MiddleMenuPolicy.Decide(MiddleCase(down: true, blank: false)), MiddleMenuAction.Ignore);
+            MiddleMenuPolicy.Decide(MiddleCase(down: true, takeable: false)), MiddleMenuAction.Ignore);
 
         // ── ③ 浏览器等别的程序：不在范围内 → 不接管 ──────────────────
         CheckEqual("中键菜单：浏览器里 → 不接管（自动滚动照旧）",
@@ -52,10 +52,35 @@ public static partial class SelfTest
         // ── ④ 中键画一笔：手势优先 ──────────────────────────────────
         CheckEqual("中键菜单：配了中键手势 → 按下交给手势",
             MiddleMenuPolicy.Decide(MiddleCase(down: true, hasGesture: true)), MiddleMenuAction.StartGesture);
-        CheckEqual("中键菜单：手势没成笔 + 空白 → 弹菜单代替补发",
+        CheckEqual("中键菜单：手势没成笔 + 可弹 → 弹菜单代替补发",
             MiddleMenuPolicy.Decide(MiddleCase(down: false, hasGesture: true)), MiddleMenuAction.MenuInsteadOfTap);
-        CheckEqual("中键菜单：手势没成笔但不在空白 → 照旧补发中键",
-            MiddleMenuPolicy.Decide(MiddleCase(down: false, hasGesture: true, blank: false)), MiddleMenuAction.Ignore);
+        CheckEqual("中键菜单：手势没成笔但不可弹 → 照旧补发中键",
+            MiddleMenuPolicy.Decide(MiddleCase(down: false, hasGesture: true, takeable: false)), MiddleMenuAction.Ignore);
+
+        /* ── ④'' 手势**不受"范围"限制**（v1.5 修）──────────────────
+         *
+         * 这一组是"WPS / Edge / Electron 程序里中键手势全没了"的护栏（真机复现：
+         * 诊断日志里 `arm: vk=0x04 hasGesture=True` 之后紧跟"不在附加菜单的范围里：中键原样放行"）。
+         * 「范围」只决定**菜单**能不能弹，不决定这颗键归不归我们：
+         *   · 配了手势 → 按下在任何窗口都交给手势；
+         *   · 没配手势 → 范围外原样放行（浏览器自动滚动 / 编辑器粘贴）。 */
+        CheckEqual("中键手势：范围外（浏览器/WPS）+ 配了手势 → 按下照样交给手势",
+            MiddleMenuPolicy.Decide(MiddleCase(down: true, inScope: false, takeable: false, hasGesture: true)),
+            MiddleMenuAction.StartGesture);
+        CheckEqual("中键手势：范围外没成笔 → 不弹菜单（交给补发原生中键）",
+            MiddleMenuPolicy.Decide(MiddleCase(down: false, inScope: false, takeable: false, hasGesture: true)),
+            MiddleMenuAction.Ignore);
+        CheckEqual("中键菜单：范围外 + 没配手势 → 中键原样放行（不吞不补发）",
+            MiddleMenuPolicy.Decide(MiddleCase(down: true, inScope: false, takeable: false)),
+            MiddleMenuAction.Ignore);
+
+        /* ── ④' 资源管理器与文件对话框（v1.5.0）────────────────────────
+         * 这两处"点在文件上"也要弹，所以 InScope=true + Takeable=true；
+         * 决策表本身不区分落点，区分在 GestureService 那边算 Takeable 的时候。 */
+        CheckEqual("中键菜单：资源管理器文件列表 → 按下接管",
+            MiddleMenuPolicy.Decide(MiddleCase(down: true)), MiddleMenuAction.SwallowTap);
+        CheckEqual("中键菜单：文件对话框 → 按下接管",
+            MiddleMenuPolicy.Decide(MiddleCase(down: true)), MiddleMenuAction.SwallowTap);
 
         // ── ⑤ 注入的中键：一律不弹 ─────────────────────────────────
         CheckEqual("中键菜单：注入的中键 → 不接管",
@@ -91,6 +116,50 @@ public static partial class SelfTest
             !BlankHit.IsExplorerItemsClass("Chrome_WidgetWin_1", "Chrome_WidgetWin_1"));
         Check("类名：Win7 的 ExploreWClass 也算资源管理器",
             BlankHit.IsExplorerItemsClass("SysListView32", "ExploreWClass"));
+
+        /* ── 中键作用范围（v1.4.3 起是"只在桌面"，v1.5.0 扩成四处）──
+         *
+         * 这两条是"浏览器里中键又不弹新标签页了"那个 bug 的护栏：
+         * 按下那一刻要先问"指针在不在能接管的地方"，不在就直接放行（不吞、不补发）。
+         * 判据是白名单 —— 资源管理器文件夹里也有 SysListView32，
+         * 按"含 SysListView32 就算桌面"的宽判据会把那里的中键吞掉。 */
+        Check("中键范围：Progman 算桌面", BlankHit.IsDesktopShellClasses("Progman", "Progman", false));
+        Check("中键范围：桌面图标列表（root=WorkerW）算桌面",
+            BlankHit.IsDesktopShellClasses("SysListView32", "WorkerW", false));
+        Check("中键范围：GetShellWindow 兜底算桌面",
+            BlankHit.IsDesktopShellClasses("SysListView32", "", true));
+        Check("中键范围：浏览器窗口不算桌面",
+            !BlankHit.IsDesktopShellClasses("Chrome_WidgetWin_1", "Chrome_WidgetWin_1", false));
+        Check("中键范围：资源管理器文件夹里的列表**不算**桌面（它是 ExplorerItems）",
+            !BlankHit.IsDesktopShellClasses("SysListView32", "CabinetWClass", false));
+        Check("中键范围：文件对话框里的列表**不算**桌面",
+            !BlankHit.IsDesktopShellClasses("SysListView32", "#32770", false));
+
+        // ── 落点分类（v1.5.0）：四种界面 + 三条"永远不接管" ──────────
+        CheckEqual("落点：桌面背景 → Desktop",
+            MiddleMenuSurfaces.Classify("Progman", "Progman", false, true, false, out _), MiddleSurface.Desktop);
+        CheckEqual("落点：root 是 shell 窗口 → Desktop",
+            MiddleMenuSurfaces.Classify("SysListView32", "", true, true, false, out _), MiddleSurface.Desktop);
+        CheckEqual("落点：资源管理器文件列表 → ExplorerItems",
+            MiddleMenuSurfaces.Classify("DirectUIHWND", "CabinetWClass", false, true, false, out _),
+            MiddleSurface.ExplorerItems);
+        CheckEqual("落点：范围仅桌面时资源管理器 → None",
+            MiddleMenuSurfaces.Classify("DirectUIHWND", "CabinetWClass", false, false, false, out _),
+            MiddleSurface.None);
+        CheckEqual("落点：打开/保存对话框 → FileDialog",
+            MiddleMenuSurfaces.Classify("DirectUIHWND", "#32770", false, true, true, out _),
+            MiddleSurface.FileDialog);
+        CheckEqual("落点：不是文件对话框的 #32770（消息框）→ None",
+            MiddleMenuSurfaces.Classify("Button", "#32770", false, true, false, out _), MiddleSurface.None);
+        CheckEqual("落点：范围仅桌面时连文件对话框也不接管",
+            MiddleMenuSurfaces.Classify("DirectUIHWND", "#32770", false, false, true, out _), MiddleSurface.None);
+        CheckEqual("落点：浏览器的正文区 → None（自动滚动照旧）",
+            MiddleMenuSurfaces.Classify("Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_1", false, true, false, out _),
+            MiddleSurface.None);
+        CheckEqual("落点：资源管理器的地址栏编辑框 → None（中键是粘贴）",
+            MiddleMenuSurfaces.Classify("Edit", "CabinetWClass", false, true, false, out _), MiddleSurface.None);
+        CheckEqual("落点：对话框里的文件名编辑框 → None",
+            MiddleMenuSurfaces.Classify("Edit", "#32770", false, true, true, out _), MiddleSurface.None);
 
         // ── LVM_HITTEST 的返回值语义（-1 才是空白）──────────────────
         CheckEqual("命中测试：iItem=-1 判空白", BlankHit.VerdictOfItemIndex(-1), BlankVerdict.Blank);
@@ -214,6 +283,36 @@ public static partial class SelfTest
             def.Items.Count > 0 && def.Items[def.Items.Count - 1].Action == "openSettings",
             def.Items.Count == 0 ? "空" : def.Items[def.Items.Count - 1].Action);
         Check("菜单：一级条目标题都不为空", def.Items.All(i => !string.IsNullOrWhiteSpace(i.Title)));
+
+        /* ── 顶部「打开文件所在位置」的灰/亮（v1.5 修）──────────────────
+         *
+         * 判据只有一个：**有没有认出文件**。
+         * 以前判的是"前台不是桌面/资源管理器"，于是 Electron / 浏览器里这一条永远亮着，
+         * 点下去识别不到，就弹出一个"选择要定位的文件"（DeepSeekRuntime 里真发生的那一幕）。
+         * 这四条把"默认灰 → 认出才亮"钉死。 */
+        var unknown = MiddleMenuPolicy.Build(s, history, titles,
+            new ForegroundFileState(true, "deepseekruntime.exe", "", false));
+        var unknownItem = unknown.Items.FirstOrDefault(i => i.Action == "revealForegroundFile");
+        Check("中键菜单：没认出文件时「打开文件所在位置」是灰的",
+            unknownItem != null && !unknownItem.Enabled);
+        Check("中键菜单：没认出文件时第二行是「识别中…」",
+            unknownItem != null && unknownItem.Note == Loc.T("识别中…"));
+
+        var known = MiddleMenuPolicy.Build(s, history, titles,
+            new ForegroundFileState(true, "wps.exe", "季度总结.pptx", false));
+        var knownItem = known.Items.FirstOrDefault(i => i.Action == "revealForegroundFile");
+        Check("中键菜单：认出文件后「打开文件所在位置」才亮",
+            knownItem != null && knownItem.Enabled);
+        Check("中键菜单：认出文件后第二行写文件名",
+            knownItem != null && knownItem.Note == "季度总结.pptx");
+
+        var shell = MiddleMenuPolicy.Build(s, history, titles,
+            new ForegroundFileState(false, "explorer.exe", "", false));
+        var shellItem = shell.Items.FirstOrDefault(i => i.Action == "revealForegroundFile");
+        Check("中键菜单：桌面/资源管理器里那一条同样是灰的",
+            shellItem != null && !shellItem.Enabled);
+        Check("中键菜单：桌面/资源管理器里第二行写「前台没有打开文件」",
+            shellItem != null && shellItem.Note == Loc.T("前台没有打开文件"));
 
         // 固定项塞满 → 必须按 12 上限截断，且"打开设置"不能被挤掉
         for (int i = 0; i < 10; i++)

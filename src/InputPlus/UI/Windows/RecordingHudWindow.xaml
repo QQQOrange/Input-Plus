@@ -5,7 +5,7 @@
         Title="{loc:T '正在录制宏'}" SizeToContent="WidthAndHeight" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
         ShowActivated="False" Focusable="False" IsHitTestVisible="False"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
     <!--
         录制悬浮条：录制期间只有它在屏幕上一直可见。
 
@@ -22,7 +22,7 @@
             <Ellipse x:Name="Dot" Width="9" Height="9" Fill="{DynamicResource Brush.Danger}" VerticalAlignment="Center" />
             <TextBlock Text="{loc:T '录制中'}" Foreground="{DynamicResource Brush.OverlayText}" FontSize="12.5" FontWeight="SemiBold"
                        Margin="8,0,0,0" VerticalAlignment="Center" />
-            <TextBlock x:Name="Clock" Text="0:00.0" FontFamily="{StaticResource Font.Mono}"
+            <TextBlock x:Name="Clock" Text="0:00.0" FontFamily="{DynamicResource Font.Mono}"
                        Foreground="{DynamicResource Brush.OverlayTextSecondary}" FontSize="12" Margin="10,0,0,0"
                        VerticalAlignment="Center" />
             <TextBlock Text="·" Foreground="{DynamicResource Brush.OverlayTextTertiary}" Margin="8,0" VerticalAlignment="Center" />

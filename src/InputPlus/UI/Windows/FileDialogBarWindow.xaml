@@ -16,7 +16,7 @@
         Topmost="False"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
 
     <Window.Resources>
         <Style x:Key="BarItemStyle" TargetType="ListBoxItem">

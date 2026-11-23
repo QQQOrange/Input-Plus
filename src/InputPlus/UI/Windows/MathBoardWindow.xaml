@@ -4,7 +4,7 @@
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
         Title="{loc:T '计算器'}" Width="520" Height="640" MinWidth="420" MinHeight="520"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Brush.WindowGradient}"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="48" ResizeBorderThickness="6" GlassFrameThickness="0"
@@ -27,7 +27,7 @@
 
         <StackPanel Grid.Row="1" Margin="20,4,20,12">
             <TextBox x:Name="Expression" Style="{StaticResource TextBox.Base}" MinHeight="52" FontSize="20"
-                     FontFamily="{StaticResource Font.Mono}" VerticalContentAlignment="Center"
+                     FontFamily="{DynamicResource Font.Mono}" VerticalContentAlignment="Center"
                      TextChanged="OnExpressionChanged" PreviewKeyDown="OnExpressionKeyDown" />
             <Grid Margin="0,10,0,0">
                 <TextBlock x:Name="Result" Text="0" FontSize="30" FontWeight="SemiBold"

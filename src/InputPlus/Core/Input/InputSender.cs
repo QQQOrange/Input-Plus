@@ -91,6 +91,32 @@ public static class InputSender
     /// </summary>
     internal static InjectionBarrier LastInjectBarrier { get; private set; }
 
+    /// <summary>
+    /// `SendInput` 是否被环境拦掉了（受限环境 / 安全软件 / 会话隔离）。
+    ///
+    /// 为什么必须暴露：手势的"保住原生右键菜单"靠的是"吞掉点击 → 没成笔就补发一次点击"。
+    /// 补发发不出去时，吞掉就等于把用户的点击吃掉 —— 用户看到的是"鼠标右键失效"。
+    /// 一旦这个标记为真，<c>GestureService.OnButton</c> 会整下都不接管（fail-open）。
+    /// </summary>
+    public static bool InjectionBlocked { get; private set; }
+
+    /// <summary>
+    /// 由手势服务报告：补发出去的事件连续几次都没回到钩子 —— 这台机器上 SendInput
+    /// 的结果不可信（安全软件 / 输入过滤驱动 / UIPI 会静默丢掉，但返回条数照旧）。
+    ///
+    /// 一旦置真，手势那边会整下都不接管（fail-open）：宁可少一个手势，
+    /// 也不能让右键/左键点不动 —— 用户报的"任何地方点右键都没反应"就是这条链路。
+    /// </summary>
+    internal static void MarkInjectionBlocked(string reason)
+    {
+        if (InjectionBlocked) return;
+        InjectionBlocked = true;
+        _injectionBlockedLogged = true;     // 别再让 Send 的失败分支重复刷一条
+        CoreLog.Warn("[注入] 补发不生效（" + reason + "）—— 手势不再接管鼠标按键，右键/左键恢复原生行为");
+    }
+
+    private static bool _injectionBlockedLogged;
+
     private static bool Send(params INPUT[] inputs)
     {
         if (BeforeSendForTest is { } probe) probe();
@@ -124,6 +150,20 @@ public static class InputSender
         {
             LastInjectError = Marshal.GetLastWin32Error();
             ReportInjectFailure(inputs.Length, sent, LastInjectError);
+
+            /* SendInput 一个都没发出去 = 这个进程根本注不了入（受限环境 / 安全软件 / 会话隔离）。
+             * 这个事实必须让手势那边知道：它还依赖"吞掉点击再补发"来保住原生右键菜单，
+             * 而补发一旦发不出去，吞掉就等于把用户的点击吃掉了。
+             * 标记之后 OnButton 会整下都不接管（fail-open），宁可少一个手势，也不能让键失效。 */
+            if (sent == 0)
+            {
+                InjectionBlocked = true;
+                if (!_injectionBlockedLogged)
+                {
+                    _injectionBlockedLogged = true;
+                    CoreLog.Warn($"[注入] SendInput 发不出去（错误 {LastInjectError}）—— 手势将不再接管鼠标按键");
+                }
+            }
             return false;
         }
 
@@ -641,6 +681,102 @@ public static class InputSender
             return;
         }
         Send(KeyInput(vk, false), KeyInput(vk, true));
+    }
+
+    /// <summary>
+    /// 补发一次鼠标点击，按下与抬起之间留 <paramref name="holdMs"/> 毫秒。
+    ///
+    /// 为什么不能像键盘那样「按下 + 抬起」一拍发完：真实的 mouse click 从按下到抬起
+    /// 通常有 40~150ms，而在同一批 SendInput 里发完的点击，Explorer 桌面、Chromium
+    /// 这类目标会当成一次合成事件、跳过它的默认动作 —— 右键不弹菜单、中键不开新标签页，
+    /// 都是这么来的（用户看到的就是「鼠标键失效」）。
+    /// 补发走的是线程池线程，睡这几十毫秒不影响钩子回调。
+    /// </summary>
+    public static void TapMouseWithHold(int vk, int holdMs = 40)
+    {
+        if (!IsMouseVk(vk)) { Tap(vk); return; }
+        if (SenderForTest is { } spy) { spy(vk, false); spy(vk, true); return; }
+
+        SendMouseAtCursor(vk, down: true);
+        try
+        {
+            int wait = Math.Clamp(holdMs, 0, 200);
+            if (wait > 0) Thread.Sleep(wait);
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "补发鼠标点击：按住时间"); }
+        SendMouseAtCursor(vk, down: false);
+    }
+
+    /// <summary>
+    /// 补发用的鼠标键：**带上绝对坐标**（整个虚拟桌面）。
+    ///
+    /// 这是照 WGestures 2 的做法（它的补发就是这么发的）：目标程序拿到的
+    /// 是一条"指着某个屏幕坐标的按键事件"，而我们的老写法只发一个裸的
+    /// RIGHTDOWN —— 坐标靠系统取当前光标，Explorer 桌面 / Chromium 这类目标
+    /// 会当成合成事件、跳过默认动作（右键不弹菜单、中键不开新标签页）。
+    /// 顺带把 XBUTTON 的 mouseData 一起带上，侧键补发才不会变成"XBUTTON1"。
+    /// </summary>
+    private static void SendMouseAtCursor(int vk, bool down)
+    {
+        uint flag = down
+            ? vk switch
+            {
+                0x01 => MOUSEEVENTF_LEFTDOWN,
+                0x02 => MOUSEEVENTF_RIGHTDOWN,
+                0x04 => MOUSEEVENTF_MIDDLEDOWN,
+                0x05 or 0x06 => MOUSEEVENTF_XDOWN,
+                _ => 0u,
+            }
+            : vk switch
+            {
+                0x01 => MOUSEEVENTF_LEFTUP,
+                0x02 => MOUSEEVENTF_RIGHTUP,
+                0x04 => MOUSEEVENTF_MIDDLEUP,
+                0x05 or 0x06 => MOUSEEVENTF_XUP,
+                _ => 0u,
+            };
+        if (flag == 0) return;
+
+        int dx = 0, dy = 0;
+        uint position = 0;
+        try
+        {
+            if (NativeMethods.GetCursorPos(out NativeMethods.POINT pt))
+            {
+                /* 绝对坐标按"虚拟桌面"换算：多显示器时只用主屏尺寸会把右屏的点击
+                 * 落回左屏，补发的点击就点到了别的地方。 */
+                int vx = NativeMethods.GetSystemMetrics(76);   // SM_XVIRTUALSCREEN
+                int vy = NativeMethods.GetSystemMetrics(77);   // SM_YVIRTUALSCREEN
+                int vw = NativeMethods.GetSystemMetrics(78);   // SM_CXVIRTUALSCREEN
+                int vh = NativeMethods.GetSystemMetrics(79);   // SM_CYVIRTUALSCREEN
+                if (vw > 1 && vh > 1)
+                {
+                    dx = (int)Math.Round((pt.X - vx) * 65535.0 / (vw - 1));
+                    dy = (int)Math.Round((pt.Y - vy) * 65535.0 / (vh - 1));
+                    position = 0x0001u /*MOVE*/ | 0x8000u /*ABSOLUTE*/ | 0x4000u /*VIRTUALDESK*/;
+                }
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "补发鼠标：取绝对坐标"); }
+
+        var input = new INPUT
+        {
+            type = INPUT_MOUSE,
+            U = new InputUnion
+            {
+                mi = new MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    mouseData = vk switch { 0x05 => 1u, 0x06 => 2u, _ => 0u },
+                    dwFlags = flag | position,
+                    dwExtraInfo = InjectionTag,
+                },
+            },
+        };
+        /* 记账要早于 Send：低级钩子会在 SendInput 内部同步回调（见 MouseDown 那段）。 */
+        NoteInjected(vk);
+        Send(input);
     }
 
     /// <summary>敲击一个虚拟键 N 次（等同于 SendInput {Left 5}）。</summary>

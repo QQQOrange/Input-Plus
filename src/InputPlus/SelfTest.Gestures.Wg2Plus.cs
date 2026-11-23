@@ -261,6 +261,20 @@ public static partial class SelfTest
         Check("沿边：轨迹跑到屏幕中间就不算贴边", !GestureService.HugsEdge(away, 1, size));
         Check("沿边：边号 0 不算贴边", !GestureService.HugsEdge(alongTop, 0, size));
 
+        /* v1.4.4：只配了贴边手势的键也要能开笔 —— CanStart 以前只认 stroke/corner，
+         * 于是"只有贴边手势"的那颗键按下去根本不开笔，PickEdge 永远轮不到。 */
+        var edgeOnly = new MouseGesture { Kind = "edge", Edge = 1, Button = "right" };
+        Check("沿边：只配贴边手势的键也能开笔", GestureService.CanStart(edgeOnly, opts, 0));
+
+        /* 手抖容忍：手画的线不可能一帧都不出带。10 点里 1 个出带仍算贴边，3 个就不算。 */
+        var jitter = new List<GestureMath.Pt>();
+        for (int i = 0; i < 9; i++) jitter.Add(new GestureMath.Pt(left + 100 + i * 40, top + 1));
+        jitter.Add(new GestureMath.Pt(left + 500, top + 40));
+        Check("沿边：10 个点里 1 个出带仍算贴边", GestureService.HugsEdge(jitter, 1, size));
+        jitter.Add(new GestureMath.Pt(left + 520, top + 40));
+        jitter.Add(new GestureMath.Pt(left + 560, top + 40));
+        Check("沿边：3 个出带就不算贴边", !GestureService.HugsEdge(jitter, 1, size));
+
         CheckEqual("沿边：角落判定（左上）", GestureService.CornerAt(left + 1, top + 1, size), 1);
         CheckEqual("沿边：角落判定（屏幕中央为 0）",
             GestureService.CornerAt(left + width / 2.0, top + height / 2.0, size), 0);

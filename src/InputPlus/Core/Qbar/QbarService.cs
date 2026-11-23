@@ -361,9 +361,13 @@ public sealed class QbarService
                     {
                         string args = ExpandArguments(chip.Arguments, tail);
                         list.Add(new QbarResult(QbarKind.Run,
-                            tail.Length == 0 ? Loc.F("用 {0} 查询…", chip.Label) : tail,
+                            /* 结果行上**不出现关键字**（用户要求）：没备注就没有标题，
+                             * 这一行只剩左边的图标。关键字只活在输入框和胶囊里。 */
+                            tail.Length == 0
+                                ? (chip.Note.Length == 0 ? "" : Loc.F("用 {0} 查询…", chip.Note))
+                                : tail,
                             string.IsNullOrEmpty(args) ? chip.Value : $"{chip.Value} {args}",
-                            chip.Label, chip.Value.Trim('"'), chip.IconPath, chip.RunAsAdmin, args)
+                            "", chip.Value.Trim('"'), chip.IconPath, chip.RunAsAdmin, args)
                         {
                             Score = -100,
                             Chip = chip,
@@ -373,9 +377,12 @@ public sealed class QbarService
 
                     string url = chip.Value.Replace("{q}", Uri.EscapeDataString(tail));
                     list.Add(new QbarResult(QbarKind.Search,
-                        tail.Length == 0 ? Loc.F("在 {0} 中搜索…", chip.Label) : tail,
+                        /* 同上：提示语只用备注；没备注就空着（行里只有图标 + 网址）。 */
+                        tail.Length == 0
+                            ? (chip.Note.Length == 0 ? "" : Loc.F("在 {0} 中搜索…", chip.Note))
+                            : tail,
                         chip.Value.Replace("{q}", tail),
-                        chip.Label, url)
+                        "", url)
                     {
                         Score = -100,
                         IconPath = chip.IconPath,
@@ -611,10 +618,13 @@ public sealed class QbarService
             }
 
             string url = searchHit.Value.Replace("{q}", Uri.EscapeDataString(tail));
+            /* 关键字（bd / x / zh…）**不上结果行**（用户要求）：标题只放用户打进去的
+             * 搜索词，徽标留空，认引擎靠左侧图标（来自这一条的 EngineIcon / favicon）。 */
             results.Insert(0, new QbarResult(QbarKind.Search,
-                Loc.F("{0}：{1}", searchHit.Key, tail),
+                tail,
                 searchHit.Value.Replace("{q}", tail),
-                searchHit.Key, url) { Score = -20 });
+                "", url)
+            { Score = -20, Chip = QbarChip.FromEntry(ChipKind.Search, searchHit) });
             return results.Take(limit).ToList();
         }
 
@@ -887,9 +897,12 @@ public sealed class QbarService
             if (QbarTextMatch.Matches(s.Key, text) ||
                 QbarTextMatch.Matches(s.Comment, text))
             {
+                /* 标题只用**备注**，绝不退回关键字：没备注就空着，界面上这一行
+                 * 只剩左边的图标（用户要求）。图标同样按条目取，不能是通用问号。 */
                 yield return new QbarResult(QbarKind.Search,
-                    string.IsNullOrEmpty(s.Comment) ? Loc.F("{0} 搜索", s.Key) : $"{s.Key}  ·  {s.Comment}",
-                    s.Value, Loc.T("搜索"), s.Value) { Score = 30 };
+                    (s.Comment ?? "").Trim(),
+                    s.Value, Loc.T("搜索"), s.Value)
+                { Score = 30, Chip = QbarChip.FromEntry(ChipKind.Search, s) };
             }
         }
         foreach (var cmd in Commands)

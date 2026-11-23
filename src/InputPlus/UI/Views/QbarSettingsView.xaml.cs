@@ -573,6 +573,32 @@ public partial class QbarSettingsView : UserControl
         _suppress = false;
         if (keep != null && items.Contains(keep)) EntryGrid.SelectedItem = keep;
         else if (items.Count > 0) EntryGrid.SelectedIndex = 0;
+
+        TrySelectPendingPinned(items);
+    }
+
+    /// <summary>
+    /// 「收藏当前文件」之后把光标定位到那一条（v1.5.1）。
+    ///
+    /// 只在**固定项**那一页消费这个待办：别的标签（搜索 / 程序 / 网址）也会走
+    /// <see cref="BindEntryView"/>，在那里取走等于把请求丢了。
+    /// 用户也可能把设置页关着 —— 待办留在宿主里，下次进这一页依然有效。
+    /// </summary>
+    private void TrySelectPendingPinned(IReadOnlyList<EntryVm> items)
+    {
+        if (_host == null || items.Count == 0) return;
+        if (Tabs.SelectedItem is not TabItem { Tag: string tag } || !string.Equals(tag, "pinned", StringComparison.Ordinal))
+            return;
+
+        string? key = _host.TakePendingPinnedKey();
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        EntryVm? hit = items.FirstOrDefault(x =>
+            string.Equals(x.Entry.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (hit == null) return;
+
+        EntryGrid.SelectedItem = hit;
+        EntryGrid.ScrollIntoView(hit);
     }
 
     /// <summary>四列的排序箭头一起清掉：排序是我们手写的，DataGrid 不会替我们清别的列。</summary>
@@ -912,6 +938,18 @@ public partial class QbarSettingsView : UserControl
             /* 全屏开关和手势页共用一个字段：这里改，手势页那边立刻是同一个值。 */
             AttachFullscreenBox.IsChecked = s.GestureOptions.DisableInFullscreen;
 
+            /* 「打开文件所在位置」的行为（v1.5.1）：存字符串，按 Tag 找回对应项。
+             * 脏值（手改配置写进来的怪词）由 FileLocationMode.Normalize 收敛成默认。 */
+            string mode = FileLocationMode.Normalize(s.OpenFileLocationMode);
+            foreach (object item in RevealModeBox.Items)
+            {
+                if (item is ComboBoxItem { Tag: string tag } && tag == mode)
+                {
+                    RevealModeBox.SelectedItem = item;
+                    break;
+                }
+            }
+
 
             RefreshExceptionList();
             UpdateMiddleMenuAvailability();
@@ -928,6 +966,7 @@ public partial class QbarSettingsView : UserControl
         MouseX2Box.IsEnabled = on;
         MiddleHotkeyBox.IsEnabled = on;
         AttachFullscreenBox.IsEnabled = on;
+        RevealModeBox.IsEnabled = on;
         ExceptionList.IsEnabled = on;
     }
 
@@ -973,6 +1012,18 @@ public partial class QbarSettingsView : UserControl
         _host.SaveSettings();
         MiddleHotkeyBox.Text = Loc.T("未设置");
         if (TryFindResource("Brush.TextTertiary") is Brush brush) MiddleHotkeyBox.Foreground = brush;
+    }
+
+    /// <summary>
+    /// 「打开文件所在位置」要干什么（v1.5.1）：选中文件 / 只开文件夹。
+    /// 即时生效 —— 下一次点那两颗按钮就按新设置走，不需要重启。
+    /// </summary>
+    private void OnRevealModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppress || _host == null) return;
+        string mode = (RevealModeBox.SelectedItem as ComboBoxItem)?.Tag as string ?? FileLocationMode.SelectFile;
+        _host.Settings.OpenFileLocationMode = FileLocationMode.Normalize(mode);
+        _host.SaveSettings();
     }
 
     /// <summary>全屏不接管：直接写手势那一份设置，两处永远同一个值。</summary>

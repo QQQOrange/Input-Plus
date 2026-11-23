@@ -7,7 +7,7 @@
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         Background="{DynamicResource Brush.Background}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}"
+        FontFamily="{DynamicResource Font.Ui}"
         SnapsToDevicePixels="True" UseLayoutRounding="True">
     <!--
         手势菜单管理器（v1.5.0）。

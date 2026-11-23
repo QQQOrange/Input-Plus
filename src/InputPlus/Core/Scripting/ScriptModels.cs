@@ -103,6 +103,15 @@ public sealed class GestureMenuItem
     public string Arg { get; set; } = "";
 
     /// <summary>
+    /// 这一条现在能不能点（v1.5.1）。
+    ///
+    /// 只给**程序现拼的**菜单用：附加菜单顶部那两条「收藏当前文件 / 打开文件所在位置」
+    /// 在前台是资源管理器、桌面、任务栏时要置灰 —— 那不是"某个程序打开了文件"。
+    /// 用户自己配的菜单条目一律是 true（老菜单从设置里读进来也是 true，行为不变）。
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// 非空 = 这一条是**二级菜单的父项**：鼠标悬停自动展开，自己不带动作。
     /// （中键菜单目前只有「历史记录」和「命令」两组走二级。）
     /// </summary>
@@ -116,6 +125,7 @@ public sealed class GestureMenuItem
         IconPath = IconPath,
         Action = Action,
         Arg = Arg,
+        Enabled = Enabled,
         Children = Children.Select(c => c.Clone()).ToList()
     };
 }

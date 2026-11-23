@@ -371,6 +371,9 @@ public sealed partial class AppHost
         Settings = SettingsStore.Load();
         ResetIncompleteCustomKeys();
         ThemeManager.Apply(ThemeManager.Parse(Settings.Global.Theme));
+        /* 字体跟主题一样是"改一项、全软件跟着变"的全局外观，重新载入配置时
+         * 必须一起刷回应用级资源，否则「重新加载配置」会把用户选的字体丢掉。 */
+        FontManager.Apply(Settings.Global.UiFont, Settings.Global.UiFontMono);
         // 主题一变就作废 Qbar 的样式缓存，否则已打开的面板还留着旧配色
         _qbar?.InvalidateStyle();
         Context.Clipboard.ClipboardFeatureOn = Settings.Global.AllowClipboard;

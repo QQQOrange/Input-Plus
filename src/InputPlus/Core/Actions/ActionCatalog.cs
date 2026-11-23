@@ -168,6 +168,17 @@ public sealed class ActionCatalog
         c.Add("delete", "基础", "删除", "发送 Delete", _ => Send(VK_Delete), hidden: true);
         c.Add("attachMenu", "基础", "附加菜单", "在鼠标位置弹出附加菜单（和键盘唤出同一套内容）", _ => { ctx.RequestAttachMenu(); return true; }, shortTitle: "附加菜单");
         c.Add("openSettings", "基础", "打开设置", "打开 Input Plus 设置窗口", _ => { ctx.RequestOpenSettings(); return true; }, shortTitle: "设置");
+
+        /* v1.5.1：附加菜单顶部那两个入口。做成动作而不是"菜单私有逻辑"，
+         * 一来按键也能直接绑（把「收藏当前文件」绑到一颗键上完全合理），
+         * 二来菜单条目本来就只是"动作 id + 参数"，不必开第二套执行路径。 */
+        c.Add("favoriteForegroundFile", "基础", "收藏当前文件",
+            "把前台程序当前打开的文件收进 Qbar 固定项",
+            _ => { ctx.RequestFavoriteForegroundFile(); return true; }, shortTitle: "收藏文件");
+        c.Add("revealForegroundFile", "基础", "打开文件所在位置",
+            "在资源管理器里打开前台程序当前打开的那个文件所在的文件夹",
+            _ => { ctx.RequestRevealForegroundFile(); return true; }, shortTitle: "所在位置");
+
         c.Add("toggleEnabled", "基础", "启用/暂停", "临时暂停或恢复所有Input Plus热键", _ => { ctx.RequestToggleEnabled(); return true; }, shortTitle: "启暂停");
 
         // ---------------- 键盘按键 ----------------

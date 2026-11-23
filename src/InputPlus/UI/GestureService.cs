@@ -38,6 +38,9 @@ public sealed partial class GestureService : IDisposable
 
     private GestureOverlayWindow? _overlay;
     private DispatcherTimer? _poll;
+
+    /// <summary>覆盖层看门狗（见 <see cref="OnOverlayGuard"/>）：100ms 兜一次底。</summary>
+    private DispatcherTimer? _overlayGuard;
     private DispatcherTimer? _linger;
     /* 名称框淡出的第二段定时器：停留结束 → 开始淡出 → 淡完才清窗口。 */
     private DispatcherTimer? _fade;
@@ -116,6 +119,19 @@ public sealed partial class GestureService : IDisposable
      * 0 = 没有待收尾的立即执行；否则是那个鼠标键的 vk。 */
     private int _swallowUpVk;
 
+    /* ── 「按下被吞、却什么都没补发」的那几条路（v1.4.4 修） ──────────────
+     *
+     * 起始超时（按住不动 ≥ StartTimeoutMs）、分段过多、看门狗判定抬起丢了 ——
+     * 这三条以前都是「吞掉按下 + 吞掉抬起 + 什么都不补发」。用户看到的就是：
+     * **按住右键稍微久一点（默认 500ms）就再也弹不出右键菜单**，
+     * 按得越快越正常，看起来像"右键时灵时不灵"。
+     *
+     * WGestures 2 在同一批路径上照样补发一次点击（B/d.cs 的回放分支不看超时标志），
+     * 所以它的右键从来不会因为"按得慢"而失效。
+     *
+     * 0 = 没有待补发；否则是那个鼠标键的 vk。抬起事件到达时吞掉它并补发一次点击。 */
+    private int _replayClickOnUpVk;
+
     /* 热角（悬停到屏幕角）监视器。WGestures 用鼠标路径跟踪器顺带判角，
      * 我们已经有独立的鼠标钩子，但"没按键、只是把指针停在角上"不会产生
      * 任何鼠标消息，所以必须自己轮询指针位置。 */
@@ -167,7 +183,12 @@ public sealed partial class GestureService : IDisposable
             _suspended = value;
             if (value)
             {
-                ResetActive();
+                /* 挂起时如果正画着一笔，抬起不会再回到钩子（录制窗自己截鼠标）——
+                 * 这一下的按下已经吞了，必须补发，否则"打开录制窗那一下右键"就丢了。 */
+                int tracking = 0;
+                lock (_gate) if (_active) tracking = _vk;
+                if (tracking != 0) AbortTrackingAndReplay(tracking);
+                else ResetActive();
                 _hotArmed = false;   // 关掉录制窗后先离开角/边，避免立刻触发
             }
             else
@@ -192,6 +213,18 @@ public sealed partial class GestureService : IDisposable
     /* 补发单击之后的一小段静默期：这段里同一个键再来（包括被别的鼠标
      * 工具复制出来的无标记副本）都直接放行，不再开新手势。 */
     private readonly Dictionary<int, long> _replayUntil = new();
+
+    /* ── 补发到底有没有生效（v1.4.4） ────────────────────────────────
+     *
+     * 补发用的是 SendInput。SendInput 返回成功**不等于**事件真的进了系统：
+     * 安全软件 / 输入过滤驱动 / UIPI（前台窗口权限更高）都会让它静默消失，
+     * 而 SendInput 照样返回条数。这时我们"吞掉按下 + 补发"就等于把点击吃了，
+     * 表现正是"右键在任何地方都没反应"，而手势本身看起来还是好的。
+     *
+     * 唯一可靠的自证：我们自己的钩子也能看到注入事件。补发之后等一下，
+     * 钩子一次都没看到 → 这台机器上补发不可信 → 直接 fail-open（不再接管鼠标）。 */
+    private long _lastInjectedMouseSeenAt;
+    private int _replayUnobserved;
 
     /* 组合手势触发后，那颗"第二键"的抬起还要吞掉一次，
      * 否则系统会看到一次"无按下"的抬起。 */
@@ -287,6 +320,10 @@ public sealed partial class GestureService : IDisposable
          * 见 GestureOverlayWindow 与 GestureService.EnsureOverlay 的注释。 */
         try { Ui(() => EnsureOverlay().WarmUp()); }
         catch (Exception ex) { CoreLog.Swallow(ex, "预热手势覆盖层"); }
+
+        /* 看门狗从起手那一刻就该在跑：它要能兜住"抬起丢了"和"收尾漏了一次"这两种情况。 */
+        try { Ui(() => StartOverlayGuard()); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "启动覆盖层看门狗"); }
     }
 
     /// <summary>只在"没导过 + 自己还没手势 + 找得到 WGestures 配置"时导入一次。</summary>
@@ -458,8 +495,138 @@ public sealed partial class GestureService : IDisposable
         return IsTrueFullscreen(facts, wr, mi.rcMonitor);
     }
 
+    /// <summary>
+    /// 10 秒窗口内的"真起笔"次数（窗口外的旧记录顺手扔掉）。
+    /// 口径见 <see cref="OnButton"/>：只有 extent ≥ MinMove 的笔画才会被 <see cref="Finish"/> 记进来。
+    /// </summary>
+    private int BurstCount(long now)
+    {
+        lock (_gate)
+        {
+            while (_gestureBurst.Count > 0 && now - _gestureBurst.Peek() > GestureBurstWindowMs)
+                _gestureBurst.Dequeue();
+            return _gestureBurst.Count;
+        }
+    }
+
+    /// <summary>
+    /// 指针此刻是不是压在本程序自己的窗口上。
+    ///
+    /// 这类窗口不参与手势：界面本身要用右键菜单、文本选择、拖动选区，
+    /// 被"可能是手势"吞掉再补发，用户看到的就是"软件里右键没反应"。
+    /// </summary>
+    private static bool CursorOverOwnWindow()
+    {
+        try
+        {
+            var (px, py) = CursorPos();
+            IntPtr hwnd = NativeMethods.WindowFromPoint(
+                new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)));
+            return hwnd != IntPtr.Zero && WindowSummonAnimator.IsOwnProcess(hwnd);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "手势：判断指针是否在本程序窗口上");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 这一笔已经在跟踪中（按下被我们吞了），但抬起时不能再算手势了 ——
+    /// 收干净，并**补发一次完整点击**。
+    ///
+    /// 为什么必须补发：按下被吞掉之后，如果抬起原样漏给系统，前台程序收到的就是一个
+    /// "没有按下的 MouseUp" —— 右键菜单永远不会弹，浏览器也不会有任何反应。
+    /// 用户看到的就是"鼠标右键失效"。补发一次点击，等效于"这一下从来没被接管过"。
+    ///
+    /// 返回 true 表示这一下（抬起）由我们处理，调用方直接 return。
+    /// </summary>
+    private bool AbortTrackingAndReplay(int vk)
+    {
+        bool mine;
+        lock (_gate) mine = _active && _vk == vk;
+        if (!mine) return false;
+
+        ResetActive();
+        AttachDiag($"  -> 中止手势并补发点击：vk=0x{vk:X2}");
+        QueueReplayTap(vk, countAsTap: false);
+        return true;
+    }
+
+    /// <summary>
+    /// 补发一次被我们吞掉的点击 —— **唯一入口**（v1.4.4）。
+    ///
+    /// 所有"按下已经吞掉、最后没成手势"的分支都必须走这里：起始超时、分段过多、
+    /// 抬手丢了、全屏/按住拖拽中止、认不出形状。少一条，那个条件下右键菜单就
+    /// 永远打不开 —— 用户报的"任何地方点右键都没反应"正是这么来的。
+    /// </summary>
+    private void QueueReplayTap(int vk, bool countAsTap = true)
+    {
+        if (vk == 0) return;
+        var (px, py) = CursorPos();
+        lock (_gate)
+        {
+            /* 静默期里同一个键再来（包括被别的鼠标工具复制出来的无标记副本）都放行，
+             * 不再当成新手势开头 —— 否则菜单刚弹出来又被第二下关掉。 */
+            _replayUntil[vk] = Environment.TickCount64 + 300;
+            if (countAsTap)
+            {
+                /* 记下"这一下其实只是点了一下"：贴边连点两下要能认出角落手势。
+                 * 中止掉的真笔画（按住了很久 / 画了一半）不算点击，别去喂这条判定。 */
+                _lastTapAt = Environment.TickCount64;
+                _lastTapPt = new GestureMath.Pt(px, py);
+            }
+        }
+
+        /* 补发不能在钩子回调里做：SendInput 会同步把事件送回同一个钩子线程，
+         * 回调里再发就自锁（实测要等系统超时 1 秒），表现是"按一下鼠标整台电脑卡一下"。
+         * 丢到线程池发。 */
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            long issuedAt = Environment.TickCount64;
+            try { InputSender.TapMouseWithHold(vk); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "手势补发单击"); }
+            VerifyReplayLanded(vk, issuedAt);
+        });
+    }
+
+    /// <summary>
+    /// 补发自检：等一小会儿，看我们自己的钩子有没有看到这对注入事件。
+    ///
+    /// 连续几次都看不到 → 这台机器上 SendInput 被环境吞掉了（安全软件 / 输入过滤 /
+    /// UIPI）。继续"吞掉再补发"只会让鼠标键彻底失效，所以直接 fail-open：
+    /// 置 <see cref="InputSender.InjectionBlocked"/>，之后 OnButton 整下都不接管。
+    /// 宁可少一个手势，也不能让右键点不动。
+    /// </summary>
+    private void VerifyReplayLanded(int vk, long issuedAt)
+    {
+        try
+        {
+            Thread.Sleep(160);
+            if (Interlocked.Read(ref _lastInjectedMouseSeenAt) >= issuedAt)
+            {
+                Interlocked.Exchange(ref _replayUnobserved, 0);
+                return;
+            }
+
+            int misses = Interlocked.Increment(ref _replayUnobserved);
+            CoreLog.Warn($"[手势] 补发没有回到钩子（vk=0x{vk:X2}，第 {misses} 次）—— 本次点击可能被系统吞掉");
+            if (misses >= 3) InputSender.MarkInjectionBlocked("补发连续 3 次没有回到钩子");
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "手势补发自检"); }
+    }
+
     private bool OnButton(int vk, bool down, bool injected)
     {
+        /* 自证：我们自己注入的鼠标事件回到钩子了 —— SendInput 在这台机器上是通的。
+         * 补发之后靠这个时间戳判断"补发到底有没有生效"（见 VerifyReplayLanded）。 */
+        if (injected) Interlocked.Exchange(ref _lastInjectedMouseSeenAt, Environment.TickCount64);
+
+        /* 新的按下 = 上一次那笔无论如何都结束了：残留的"抬起要补发"必须作废。
+         * 否则某次抬起丢了之后，下一次由**别的**分支吞掉的抬起会凭空多补一次点击
+         * （用户看到的是动作被执行两遍）。 */
+        if (down && !injected) Interlocked.Exchange(ref _replayClickOnUpVk, 0);
+
         /* 立即执行发生在鼠标键还按着的时候。那一下抬起不能放给系统，
          * 否则前台窗口会收到一个没有配对的 MouseUp。 */
         if (!down && !injected && Interlocked.CompareExchange(ref _swallowUpVk, 0, vk) == vk)
@@ -468,6 +635,15 @@ public sealed partial class GestureService : IDisposable
              * 顺手判"用户其实在划还是只点了一下" —— 这里是唯一收得到这次抬起的地方，
              * 下面 689 行那段要求 _active，路径 A 压根没开过 _active。 */
             MiddleMenuOnSwallowedUp(vk);
+
+            /* 这一下是「按下被吞了、抬起也被吞了」的配对收尾。
+             * 如果它是被起始超时 / 分段过多 / 抬手丢了收掉的那一笔，必须补发一次点击 ——
+             * 否则用户按得慢一点（≥ StartTimeoutMs，默认 500ms）右键菜单就永远弹不出来。 */
+            if (Interlocked.CompareExchange(ref _replayClickOnUpVk, 0, vk) == vk)
+            {
+                AttachDiag($"  -> 超时/中止的那一笔：抬起配对补发 vk=0x{vk:X2}");
+                QueueReplayTap(vk);
+            }
             return true;
         }
 
@@ -484,6 +660,7 @@ public sealed partial class GestureService : IDisposable
          * 这里完全不接管：不吞、不画、不改系统事件，右键菜单照常。 */
         if (HoldDragHoldsTrigger())
         {
+            if (!down && AbortTrackingAndReplay(vk)) return true;
             if (IsTracking) ResetActive();
             return false;
         }
@@ -492,6 +669,9 @@ public sealed partial class GestureService : IDisposable
          * 画一笔就把桌面动作甩出来太容易误触。 */
         if (FullscreenBlocksGestures())
         {
+            /* 按下已经被吞了：这一下的抬起不能只是"放行" —— 前台程序收到一个
+             * 没有按下的 MouseUp 什么都不会做。补发整次点击，全屏里右键照常。 */
+            if (!down && AbortTrackingAndReplay(vk)) return true;
             if (IsTracking) ResetActive();
             return false;
         }
@@ -500,6 +680,15 @@ public sealed partial class GestureService : IDisposable
          * 再注入一次右键，Explorer 往往不认（尤其是托盘图标的弹出菜单），
          * 表现为“任务栏闪一下、菜单没出来”。这里干脆不接管任务栏上的右键。 */
         if (down && !injected && IsShellTaskbarAtCursor()) { AttachDiag("  -> 任务栏"); return false; }
+
+        /* 指针压在本程序自己的窗口上：绝不接管（v1.4.3）。
+         * 我们的界面（设置页、Qbar、各种对话框）自己要用右键菜单、文本选择、拖动选区；
+         * 一旦被当成"可能是手势"吞掉再补发，用户看到的就是"软件里右键没反应"。 */
+        if (down && !injected && CursorOverOwnWindow())
+        {
+            AttachDiag("  -> 指针在本程序窗口上：放行");
+            return false;
+        }
 
         lock (_gate)
         {
@@ -535,6 +724,20 @@ public sealed partial class GestureService : IDisposable
         bool recording;
         lock (_gate) recording = IsRecording;
         if (recording) return HandleRecordButton(vk, down);
+        /* -- 中键（以及被配成菜单键的侧键）在哪儿归我们管（v1.5 修） ----------
+         *
+         * 「附加菜单的作用范围」只决定**菜单能在哪儿弹**（桌面空白 / 资源管理器 /
+         * 文件对话框），不决定这颗键归不归我们。这里以前有一句
+         *   `if (down && IsMenuButton(vk) && !MiddleMenuInScope()) return false;`
+         * 把两者当成一回事：于是 WPS / Edge / Electron 程序里，**配了中键手势**的按下
+         * 在进手势引擎之前就被原样放行了 —— 用户看到的就是"中键手势在这些软件里全没了"。
+         *
+         * 现在把判断交给下面两条既有出口，分工明确：
+         *   · 这颗键在这里配了手势 → 走手势（Candidates 非空那条路，吞下按下开始跟踪）；
+         *   · 没配手势 → MiddleMenuTryPlainDown 里问一次"这儿能弹菜单吗"，
+         *     不能弹就原样放行（浏览器自动滚动、编辑器/终端的中键粘贴照旧）。
+         * 两条路的"单击 vs 滑动"都由 MinMove 分开：
+         *   滑动 = 成笔 → 执行手势；单击 = 没成笔 → 范围内弹菜单，范围外补发原生中键。 */
 
         if (opts is not { Enabled: true })
         {
@@ -645,26 +848,38 @@ public sealed partial class GestureService : IDisposable
                 return false;
             }
 
-            /* 防止乱画：同一时间窗里连续起笔太多次就提示并暂停一会儿。
-             * 只统计真正会开一笔的按下，不会影响普通右键菜单。 */
+            /* 补发这条路根本走不通（SendInput 被环境吞掉 / 受限）：整下都不接管（fail-open）。
+             * 绝不能吞了用户又还不出一次点击 —— 那正是"右键在任何地方都没反应"。
+             * v1.4.4：判定提前到**开笔之前**，不再先画一次覆盖层再退回（省一次闪窗）。 */
+            if (InputSender.InjectionBlocked)
+            {
+                AttachDiag("  -> 补发不可用：按下原样放行");
+                return false;
+            }
+
+            /* 防止乱画：同一时间窗里连续**真起笔**太多次，就暂停识别一会儿。
+             *
+             * ⚠ 这里只「暂停识别手势」，**绝不吞这一下**（v1.4.3 修）。以前两个分支都是
+             * `_swallowUpVk = vk; return true` —— 按下和抬起一起吞掉、还不补发，
+             * 用户看到的就是"鼠标右键（左键也一样）整个没反应、菜单也不弹"，
+             * 而且越点越没反应：每次点击都进这个分支，3 秒冷却里全被吃掉。
+             *
+             * 统计口径也一起改了：只有**真画了一笔**（extent ≥ MinMove，见 Finish）
+             * 才计数。普通点击不再往窗口里堆 —— 否则连点二十下右键就把自己送进冷却。
+             */
             long burstNow = Environment.TickCount64;
             if (burstNow < _gestureBurstBlockedUntil)
             {
-                Interlocked.Exchange(ref _swallowUpVk, vk);
                 ShowToast("手势太频繁，已达到限制", px, py);
-                return true;
+                return false;   // 放行：这一下交给系统，右键菜单照常弹
             }
-            while (_gestureBurst.Count > 0 && burstNow - _gestureBurst.Peek() > GestureBurstWindowMs)
-                _gestureBurst.Dequeue();
-            if (_gestureBurst.Count >= GestureBurstLimit)
+            if (BurstCount(burstNow) >= GestureBurstLimit)
             {
-                _gestureBurst.Clear();
+                lock (_gate) _gestureBurst.Clear();
                 _gestureBurstBlockedUntil = burstNow + GestureBurstCooldownMs;
-                Interlocked.Exchange(ref _swallowUpVk, vk);
                 ShowToast("手势太频繁，已达到限制", px, py);
-                return true;
+                return false;   // 同样放行
             }
-            _gestureBurst.Enqueue(burstNow);
 
             /* 路径 B：中键真要开始一笔手势了。趁按下这一刻把"空白命中"算好记下来 ——
              * 松手时才知道这一笔算不算"没成笔"，而那时不能再等跨进程查询（用户要求点了就出来）。
@@ -716,6 +931,24 @@ public sealed partial class GestureService : IDisposable
                 overlay.AddPoint(px, py);
                 StartPoll(o);
             });
+
+            /* 按下必须**吞掉**（WGestures 也是这么做的：按下先接管，松手再决定这一下算什么）。
+             *
+             * 关键在于两头必须**配对**：按下吞了，抬起也吞；确认只是点了一下，就补发一次
+             * 完整的点击（down + up，见 Finish 里的 TapMouseWithHold）。这样系统的按键状态
+             * 始终自洽 —— 而"只吞一头"是致命的：放进按下、吞掉抬起，
+             *   · 系统一直以为右键还按着（`GetAsyncKeyState` 永远是 down）；
+             *   · 目标程序卡在拖拽态；
+             *   · 我们自己的轮询也以为这一笔没结束，于是每 8ms 往轨迹里加点、
+             *     每 200ms 把覆盖层重新顶到最前 —— 用户看到的就是
+             *     "滑完之后轨迹留在屏幕上，还一直跟着鼠标动，非再按一下右键不可"。
+             * 这一版现场抓到的正是这种"吞了一头"的残局。
+             *
+             * 例外：补发如果根本发不出去（受限环境 / 安全软件拦 SendInput，
+             * 见 InputSender.InjectionBlocked），那就整下都不接管 —— 绝不能吞了用户又还不出一次点击。 */
+            /* 例外：补发如果根本发不出去（受限环境 / 安全软件拦 SendInput，
+             * 见 InputSender.InjectionBlocked），那就整下都不接管 —— 绝不能吞了用户又还不出一次点击。
+             * 那个判断已经提前到开笔之前（v1.4.4），这里只管吞。 */
             return true;
         }
 
@@ -1210,6 +1443,7 @@ public sealed partial class GestureService : IDisposable
     private void ResetActive()
     {
         Interlocked.Exchange(ref _swallowUpVk, 0);
+        Interlocked.Exchange(ref _replayClickOnUpVk, 0);
         lock (_gate)
         {
             _active = false;
@@ -1236,6 +1470,64 @@ public sealed partial class GestureService : IDisposable
         HideOverlay(0);
     }
 
+    /// <summary>
+    /// 覆盖层看门狗：**不在跟踪状态**却还有可见的轨迹/名称框 —— 直接收掉；
+    /// 还在跟踪、但物理键早就松开了 —— 说明抬起丢了，把这一笔收干净。
+    ///
+    /// 为什么必须有它：收尾路径有四五条（命中淡出 / 未命中 / 起始超时 / 立即执行 / 抬起丢失），
+    /// 每条都靠 `epoch + IsTracking` 那对条件判断该不该收。只要有一条漏了、或者某个
+    /// 定时器被别处 Stop 掉，轨迹就会赖在屏幕上跟着鼠标走，直到下一次起手才被清掉
+    /// （用户 2026-11-22 报的就是这个：滑完一直跟着鼠标，非再按一下右键不可）。
+    /// 这条看门狗**不依赖任何状态机**，100ms 一次，代价可以忽略。
+    ///
+    /// 顺带：按下已经不再被我们吞掉（见 OnButton），所以这里可以直接问系统
+    /// "这颗键还按着吗" —— 以前查不准正是因为它被吞了。
+    /// </summary>
+    private void OnOverlayGuard(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (IsTracking)
+            {
+                /* 按下重新被吞掉之后，`GetAsyncKeyState` 查不出真实状态（系统队列里根本没有这次按下），
+                 * 所以这里只按"多久没动"兜底：一笔手势停 8 秒还没松开，必然是一次丢失的抬起。 */
+                long last;
+                int vk;
+                lock (_gate) { last = _lastMoveAt; vk = _vk; }
+                if (vk != 0 && Environment.TickCount64 - last > 8000)
+                {
+                    AttachDiag($"guard: 抬手丢了，收掉这一笔 vk=0x{vk:X2}");
+                    /* 按下早被我们吞了。抬起既然没回来，这一下就必须还回去 ——
+                     * 以前这里只 ResetActive，右键/左键的这一次点击就彻底消失了。
+                     * 物理键还按着就先记着，等它真抬起来再补（不要凭空多一次按下）。 */
+                    bool stillDown = InputSender.IsPhysicallyDown(vk);
+                    ResetActive();
+                    if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, vk);
+                    else if (!IsMenuButton(vk)) QueueReplayTap(vk, countAsTap: false);
+                }
+                return;
+            }
+
+            var overlay = _overlay;
+            if (overlay == null || !overlay.IsVisible) return;
+            AttachDiag("guard: 收掉残留的轨迹/名称框");
+            overlay.Clear();
+            overlay.Hide();
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "覆盖层看门狗"); }
+    }
+
+    private void StartOverlayGuard()
+    {
+        if (_overlayGuard != null) return;
+        _overlayGuard = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(100),
+        };
+        _overlayGuard.Tick += OnOverlayGuard;
+        _overlayGuard.Start();
+    }
+
     private void StartPoll(GestureOptions opts)
     {
         _poll ??= new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(8) };
@@ -1259,7 +1551,22 @@ public sealed partial class GestureService : IDisposable
         }
         if (stale)
         {
+            /* 8 秒还没收笔 = 抬起丢了，或者用户真的按着不放。
+             * 按下已经吞掉了：这一下必须还回去（物理键还按着就等它抬起来再补），
+             * 否则这一次点击就这么凭空消失。 */
+            int lostVk;
+            lock (_gate) lostVk = _vk;
+            bool stillDown = lostVk != 0 && InputSender.IsPhysicallyDown(lostVk);
+            /* 中键的命中结论要在 ResetActive 之前取走 —— 它会把 _middleTap 一起清掉。 */
+            bool menuTook = lostVk != 0 && !stillDown && MiddleMenuOnSilentCancel(lostVk, 0, 0);
             ResetActive();
+            if (lostVk != 0)
+            {
+                if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, lostVk);
+                /* 抬起真的丢了（键已经松了）：中键不能只是"没反应" —— 菜单没接手就补发一次，
+                 * 和右键走同一条兜底（v1.5）。 */
+                else if (!menuTook) QueueReplayTap(lostVk, countAsTap: false);
+            }
             return;
         }
 
@@ -1314,6 +1621,11 @@ public sealed partial class GestureService : IDisposable
         {
             ResetActive();
             Interlocked.Exchange(ref _swallowUpVk, vk);
+            /* 按下吞了、抬起也吞了 —— 这一下必须补发，否则"划太多"的代价是这颗键彻底没反应。
+             * 唯一的例外：中键（菜单键）手里还握着一份"可弹"的记录，那松手时由
+             * MiddleMenuOnSwallowedUp 弹菜单，不能再补一次原生中键（否则菜单 + 自动滚动一起出现）。 */
+            if (!(IsMenuButton(vk) && MiddleMenuTapPending()))
+                Interlocked.Exchange(ref _replayClickOnUpVk, vk);
             ShowToast("手势划动太多，已达到限制", px, py);
             return;
         }
@@ -1323,9 +1635,16 @@ public sealed partial class GestureService : IDisposable
             /* 中键菜单：按下后半天不动，这一笔同样"没成笔"。慢按一次中键也要算一次点击 ——
              * 少了这一句，慢按的观感是"菜单不弹、原生中键还被吞了"，最难解释。
              * 必须在 ResetActive 之前问：它会把 _middleTap 一起清掉。 */
-            MiddleMenuOnSilentCancel(vk, px, py);
+            bool menuTook = MiddleMenuOnSilentCancel(vk, px, py);
             ResetActive();
             Interlocked.Exchange(ref _swallowUpVk, vk);
+            /* ★ 右键失效的主因就在这里（v1.4.4 修）：
+             * 起始超时把这一笔收掉了，但按下已经被我们吞掉。以前抬起照样吞掉、
+             * **什么都不补发** —— 于是「按住右键超过 500ms 再松开」等于右键从来没按过，
+             * 任何程序都不会有反应。现在标记成"抬起时补发一次点击"。
+             * v1.5：中键也要补 —— 只有菜单真的接手了（menuTook）才不补，
+             * 否则"在浏览器/WPS 里按住中键稍久一点"就又变成什么都没发生。 */
+            if (!menuTook) Interlocked.Exchange(ref _replayClickOnUpVk, vk);
             ShowTimeoutDot(px, py);
             CoreLog.Info("手势起始超时");
             return;
@@ -1508,6 +1827,9 @@ public sealed partial class GestureService : IDisposable
         double extent = GestureMath.Extent(points);
         var (px, py) = CursorPos();
 
+        /* 只有真正画了一笔（不是点击）才计入"手势太频繁"的窗口 —— 口径见 OnButton 那段。 */
+        if (extent >= opts.MinMove) lock (_gate) _gestureBurst.Enqueue(Environment.TickCount64);
+
         /* 笔画平滑（可在「鼠标手势 → 手势设置」关掉）：只改这一笔的「样子」，
          * 也就是接下来比对形状、存进手势、回放和缩略图用的那份点。
          * 放在 extent 之后是故意的 —— 最小识别距离、起始超时在记点时已经判过，
@@ -1562,23 +1884,18 @@ public sealed partial class GestureService : IDisposable
                  * （这就是任务书里那句"不然用户会同时看到一次原生中键加一个菜单"）。 */
                 if (MiddleMenuInterceptsTap(vk, px, py, wasInjected, middleTap)) return;
 
-                /* 没画出形状 → 用户只是想点一下。补发一次被吞掉的按键。
-                 * 带注入标记，所以不会再被自己的钩子接住。 */
-                /* 补发不能在钩子回调里做：SendInput 会同步把事件送回同一个
-                 * 钩子线程，回调里再发就自锁，要等系统超时（实测 1 秒）才返回，
-                 * 表现就是"按一下鼠标，整台电脑卡一下"。丢到线程池发。 */
-                lock (_gate)
-                {
-                    _replayUntil[vk] = Environment.TickCount64 + 300;
-                    /* 记下这次"其实只是点了一下"：贴边连点两下要能认出角落手势。 */
-                    _lastTapAt = Environment.TickCount64;
-                    _lastTapPt = new GestureMath.Pt(px, py);
-                }
-                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-                {
-                    try { InputSender.Tap(vk); }
-                    catch (Exception ex) { CoreLog.Swallow(ex, "手势补发单击"); }
-                });
+                AttachDiag($"  -> 没成笔：补发一次 vk=0x{vk:X2}（extent={extent:0.0}，MinMove={opts.MinMove}）");
+
+                /* 没画出形状 → 用户只是想点一下。走统一入口补发（见 QueueReplayTap）：
+                 * 静默期、贴边连点记账、线程池发送、补发自检都在那里面 ——
+                 * 以前这里和各处各写一份，"少补发一条路"就是右键失效。 */
+                QueueReplayTap(vk);
+            }
+            else if (hit == null)
+            {
+                /* 画了、但没认出任何手势，而且已经超过点击门槛 → 既不执行也不补发。
+                 * 记一行：用户报"右键点了没反应"时，先看是不是走了这条（多半是手抖超过 MinMove）。 */
+                AttachDiag($"  -> 笔画没认出来，未补发：vk=0x{vk:X2} extent={extent:0.0} MinMove={opts.MinMove}");
             }
         }
         else
@@ -1818,6 +2135,11 @@ public sealed partial class GestureService : IDisposable
     {
         "corner" => cornerAt != 0 && (g.Corner == 0 || g.Corner == cornerAt),
         "stroke" => true,
+        /* 「沿边移动」（Kind=edge）也要开一笔才能识别：它和笔画一样是"按住键画一段"，
+         * 区别只在最后按"整条是不是贴着同一条屏幕边"来判定（见 PickEdge）。
+         * 以前这里把它漏掉了 —— 某颗键**只配了贴边手势**时，按下根本不开笔，
+         * 那条手势永远轮不到 PickEdge，等于配了不生效。 */
+        "edge" => true,
         _ => false
     };
 
@@ -2133,22 +2455,40 @@ public sealed partial class GestureService : IDisposable
     {
         if (points == null || points.Count < 2) return (null, 1);
 
+        /* 带宽：用户配的 EdgeSize（出厂 3）只该当"多敏感"，不该当"必须像素级贴边"。
+         * 3px 的带子在真实鼠标下几乎不可能整笔待在里面，所以这里给一个 8px 的地板。 */
+        int band = Math.Max(8, opts.EdgeSize);
+
+        /* 从**终点**认边（用户最后停在哪条边就是哪条），认不到再看起点 —— 单向滑到边上的手势，
+         * 起点还在屏幕中间，只看终点会漏；反过来只看起点会漏"从中间滑到边上"的那种。 */
+        var first = points[0];
         var last = points[^1];
-        int edge = EdgeAt(last.X, last.Y, opts.EdgeSize);
-        if (edge == 0 || !HugsEdge(points, edge, opts.EdgeSize)) return (null, 1);
+        int edge = EdgeAt(last.X, last.Y, band);
+        if (edge == 0) edge = EdgeAt(first.X, first.Y, band);
+        if (edge == 0 || !HugsEdge(points, edge, band)) return (null, 1);
 
         var hit = Candidates(settings, vk, app, includeWheel: false)
             .FirstOrDefault(g => g.Kind == "edge" && (g.Edge == 0 || g.Edge == edge));
         return hit == null ? (null, 1) : (hit, 0);
     }
 
-    /// <summary>整条轨迹是不是都在这条边的带宽里。</summary>
+    /// <summary>
+    /// 整条轨迹是不是都在这条边的带宽里。
+    ///
+    /// 允许少量采样点出带（手画的线不可能一帧都不抖）：出带比例超过 15% 才判不贴边。
+    /// 以前要求**全部**点都在带内，等于只有拿尺子画才认得出贴边手势。
+    /// </summary>
     internal static bool HugsEdge(IReadOnlyList<GestureMath.Pt> points, int edge, int size)
     {
         if (points == null || points.Count == 0 || edge == 0) return false;
+
+        int inside = 0;
         foreach (var p in points)
-            if (EdgeAt(p.X, p.Y, size) != edge) return false;
-        return true;
+            if (EdgeAt(p.X, p.Y, size) == edge) inside++;
+
+        /* 太短的轨迹（少于 3 个采样点）没有统计意义，按"全部在带内"处理。 */
+        if (points.Count < 3) return inside == points.Count;
+        return inside >= 3 && inside >= (int)Math.Ceiling(points.Count * 0.85);
     }
 
     /// <summary>贴边连点两下：WG2 用它把"点在边附近"当成角落手势（A/K.cs:505）。</summary>

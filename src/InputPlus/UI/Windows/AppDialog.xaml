@@ -10,7 +10,7 @@
         ShowInTaskbar="False"
         Background="{DynamicResource Brush.Surface}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="Microsoft YaHei UI, Segoe UI">
+        FontFamily="{DynamicResource Font.Ui}">
 
     <!--
         统一的确认 / 提示对话框，用来替掉零散的 MessageBox。

@@ -81,6 +81,10 @@ public static partial class SelfTest
 
         Section("中键菜单");
         TestMiddleMenu();
+        TestFavorites();
+
+        Section("收藏当前文件");
+        TestFavoriteFile();
 
         Section("笔画平滑");
         TestSmoothing();
@@ -225,6 +229,9 @@ public static partial class SelfTest
 
         Section("主题");
         TestTheme();
+
+        Section("界面字体");
+        TestFonts();
 
         Section("界面文案");
         TestUiText();

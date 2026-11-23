@@ -456,9 +456,40 @@ public static partial class SelfTest
             $"{leftover.Count} 条：" + string.Join(" | ", leftover.Take(4).Select(r => r.Badge + ":" + r.Title)));
 
         var engineOnly = qbar.Query("bd chrome", 12);
+        /* v1.4.3：关键字（bd / x / zh…）**不上结果行**。用户原话是"关键字在任何情况下
+         * 都不显示"，所以标题只留他打进去的搜索词、徽标留空，认引擎靠左侧图标。
+         * 这几条同时钉住"只出一条"和"关键字没漏出来"。 */
         Check("引擎关键字后面带内容时只出一条网页搜索",
-            engineOnly.Count == 1 && engineOnly[0].Badge == "bd",
+            engineOnly.Count == 1,
             string.Join(" | ", engineOnly.Select(r => r.Badge + ":" + r.Title)));
+        Check("搜索行标题就是用户打的搜索词",
+            engineOnly.Count == 1 && engineOnly[0].Title == "chrome",
+            engineOnly.Count == 1 ? engineOnly[0].Title : "行数不对");
+        Check("搜索行徽标不显示关键字",
+            engineOnly.Count == 1 && engineOnly[0].Badge.Length == 0,
+            engineOnly.Count == 1 ? engineOnly[0].Badge : "行数不对");
+        Check("搜索行带着引擎图标（不靠文字认引擎）",
+            engineOnly.Count == 1 && engineOnly[0].Chip != null &&
+            engineOnly[0].Chip!.Kind == ChipKind.Search,
+            engineOnly.Count == 1 ? (engineOnly[0].Chip?.Key ?? "(没有标签)") : "行数不对");
+
+        /* 模糊命中（不按空格、直接打引擎名）时：标题只用**备注**，
+         * 没备注就是空串 —— 这一行在界面上只剩图标，绝不能退回关键字。 */
+        var withComment = new QEntry { Key = "bdc", Value = "https://example.com/?q={q}", Comment = "示例引擎" };
+        settings.Search.Add(withComment);
+        var fuzzy = qbar.Query("示例引擎", 12).Where(r => r.Kind == QbarKind.Search &&
+                                                          r.Payload.Contains("example.com", StringComparison.OrdinalIgnoreCase)).ToList();
+        Check("模糊命中：标题用备注",
+            fuzzy.Count > 0 && fuzzy[0].Title == "示例引擎",
+            string.Join(" | ", fuzzy.Take(3).Select(r => r.Title)));
+
+        var noCommentEntry = new QEntry { Key = "bdd", Value = "https://example.org/?q={q}" };
+        settings.Search.Add(noCommentEntry);
+        var fuzzyNoComment = qbar.Query("bdd", 12).Where(r => r.Kind == QbarKind.Search &&
+                                                              r.Payload.Contains("example.org", StringComparison.OrdinalIgnoreCase)).ToList();
+        Check("模糊命中：没备注时标题为空（只留图标）",
+            fuzzyNoComment.Count > 0 && fuzzyNoComment[0].Title.Length == 0,
+            string.Join(" | ", fuzzyNoComment.Take(3).Select(r => "[" + r.Title + "]")));
 
         // 没有图标的条目应当给出首字与颜色
         var noIcon = new QEntry { Key = "xx", Value = "https://example.com/?q={q}", Comment = "示例" };

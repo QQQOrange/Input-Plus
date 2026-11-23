@@ -46,14 +46,44 @@ public partial class GestureMenuWindow : Window
     /// <summary>第一次排版完成之前收到的 Deactivated 一律忽略（见 <see cref="OnDeactivated"/>）。</summary>
     private bool _ready;
 
+    /// <summary>
+    /// 已经在关窗流程里了。
+    ///
+    /// 为什么必须有：<c>Close()</c> 内部会走一次激活切换 —— WPF 在关闭过程中又收到
+    /// <c>WmActivate(WA_INACTIVE)</c>，于是 <see cref="OnDeactivated"/> 再调一次 <c>Close()</c>，
+    /// 直接抛 <c>InvalidOperationException: 在窗口关闭期间…</c>，异常冒到界面线程
+    /// （日志里的"界面线程异常"）。后果不只是多一条日志：窗口可能在"已关/未关"之间
+    /// 卡住，<c>Closed</c> 不再触发，调用方的 <c>_middleMenu</c> 就永远是旧值 ——
+    /// **附加菜单此后再也弹不出来**（用户 2026-11-22 报的"中键菜单消失了"）。
+    /// </summary>
+    private bool _closing;
+
+    /// <summary>菜单真正上屏的时刻（tick）。刚弹出那 400ms 内不认 Deactivated，见 <see cref="OnDeactivated"/>。</summary>
+    private long _shownAt;
+
+    /// <summary>这次弹菜单时抓到的"用户在看什么"；null = 不显示收藏星标（手势菜单）。</summary>
+    private readonly Core.Qbar.FavoriteTarget? _favorite;
+
     /// <param name="menu">要弹出的菜单。</param>
     /// <param name="actionTitleOf">动作 id → 中文标题；条目自己没写 Title 时用它兜底。</param>
-    public GestureMenuWindow(GestureMenuDef menu, Func<string, string?> actionTitleOf)
+    /// <param name="favorite">
+    /// 可选中键菜单的上下文快照。非 null 时右上角出现收藏星标，
+    /// 点它就把"当前网页 / 当前文件夹 / 当前程序"变成一条 Qbar 固定项。
+    /// </param>
+    public GestureMenuWindow(GestureMenuDef menu, Func<string, string?> actionTitleOf,
+        Core.Qbar.FavoriteTarget? favorite = null)
     {
         ArgumentNullException.ThrowIfNull(menu);
         ArgumentNullException.ThrowIfNull(actionTitleOf);
 
         InitializeComponent();
+
+        _favorite = favorite;
+        if (favorite != null)
+        {
+            FavoriteButton.Visibility = Visibility.Visible;
+            FavoriteButton.ToolTip = Loc.T("收藏当前位置到 Qbar");
+        }
 
         /* 附加菜单弹出时**什么标题都不写**（用户要求）：整块标题行连同下面那条分隔线一起收掉。 */
         MenuTitleText.Text = menu.DisplayName;
@@ -94,14 +124,60 @@ public partial class GestureMenuWindow : Window
     public GestureMenuItem? Selected { get; private set; }
 
     /// <summary>
+    /// 用户点的是右上角的收藏星标（此时 <see cref="Selected"/> 为 null）。
+    ///
+    /// 为什么不在这里直接弹收藏对话框：那个对话框要读地址栏/目录，属于"收藏"这条链路的
+    /// 事；菜单窗只管"用户点了什么"，执行留给 <see cref="GestureService"/> —— 和条目
+    /// 选中后交给 <c>InvokeAction</c> 是同一个分工。
+    /// </summary>
+    public bool FavoriteRequested { get; private set; }
+
+    /// <summary>弹菜单时抓到的上下文快照（没有星标时为 null）。</summary>
+    public Core.Qbar.FavoriteTarget? Favorite => _favorite;
+
+    /// <summary>
+    /// 预热（或点击后的识别）回来了：把"当前文件叫什么 / 是不是已经在收藏里 /
+    /// 到底有没有文件"补到顶部两颗入口上。菜单已经显示着，所以走 INotifyPropertyChanged
+    /// 原地改，不重建 ItemsSource（重建会让当前选中项跳回第一行）。
+    ///
+    /// <paramref name="hasFile"/> 是这一版（v1.5）新增的**唯一**依据：
+    /// 没有文件时两个入口一起置灰 —— 以前只判"前台不是桌面/资源管理器"，
+    /// 于是 Electron / 浏览器（DeepSeekRuntime、Edge…）里永远是亮的，
+    /// 点下去识别不到，就弹出一个"选择要定位的文件"，把用户送到一个
+    /// 和他刚才在做的事毫无关系的地方。
+    /// </summary>
+    public void MarkForegroundFile(string fileName, bool favorited, bool hasFile)
+    {
+        foreach (GestureMenuEntry entry in _entries)
+        {
+            string action = entry.Item.Action ?? "";
+            if (string.Equals(action, "favoriteForegroundFile", StringComparison.OrdinalIgnoreCase))
+            {
+                entry.UpdateFavoriteGlyph(favorited);
+                entry.SetEnabled(hasFile);
+                entry.UpdateNote(hasFile
+                    ? (favorited ? Loc.T("已在收藏中") : fileName)
+                    : Loc.T("前台没有打开文件"));
+            }
+            else if (string.Equals(action, "revealForegroundFile", StringComparison.OrdinalIgnoreCase))
+            {
+                entry.SetEnabled(hasFile);
+                entry.UpdateNote(hasFile ? fileName : Loc.T("前台没有打开文件"));
+            }
+        }
+    }
+
+    /// <summary>
     /// 在鼠标位置弹出菜单，返回用户点中的条目（关掉没选就是 null）。
     /// </summary>
     /// <param name="menu">要弹出的菜单。</param>
     /// <param name="actionTitleOf">动作 id → 中文标题，给没写 Title 的条目兜底。</param>
     /// <param name="owner">可选宿主窗口，有就跟着它走（模态）。</param>
-    public static GestureMenuItem? Pick(GestureMenuDef menu, Func<string, string?> actionTitleOf, Window? owner = null)
+    /// <param name="favorite">可选：中键菜单的上下文快照（有它才显示收藏星标）。</param>
+    public static GestureMenuItem? Pick(GestureMenuDef menu, Func<string, string?> actionTitleOf,
+        Window? owner = null, Core.Qbar.FavoriteTarget? favorite = null)
     {
-        var window = new GestureMenuWindow(menu, actionTitleOf);
+        var window = new GestureMenuWindow(menu, actionTitleOf, favorite);
         if (owner != null) window.Owner = owner;
         window.ShowDialog();
         return window.Selected;
@@ -196,6 +272,7 @@ public partial class GestureMenuWindow : Window
         // 这时 ActualWidth/Height 才是真尺寸：混 DPI 下按真实尺寸夹一次才准
         PlaceAtCursor();
         _ready = true;
+        _shownAt = Environment.TickCount64;
 
         // 第一条默认选中：回车就能执行，用户不动鼠标也走得通
         if (_entries.Count > 0)
@@ -213,8 +290,29 @@ public partial class GestureMenuWindow : Window
         // 点别处就收（和系统菜单一致）。
         // 刚弹出来的那一瞬间可能先收到一次 Deactivated（激活还没走完），
         // 那时关掉就成了"菜单一闪就没"，所以等排版完才认。
-        if (!_ready || _committed) return;
-        Close();
+        if (!_ready || _committed || _closing) return;
+
+        /* 再给 400ms 的宽限：Show() 之后那一次激活切换（无论 ForceForeground 成没成）
+         * 都可能先送来一条 WA_INACTIVE；用户真去点别处不可能这么快。
+         * 少了这一条，前台抢不到时菜单会"闪一下就没了"，和没弹一样。 */
+        if (Environment.TickCount64 - _shownAt < 400) return;
+        SafeClose();
+    }
+
+    /// <summary>
+    /// 关窗，但**绝不重入、绝不把异常漏到界面线程**。
+    ///
+    /// WPF 的 <c>Close()</c> 会在内部触发激活切换，Deactivated 里再调一次就是
+    /// "在窗口关闭期间 Close()" 的 <see cref="InvalidOperationException"/>。
+    /// 三条关窗路径（失去激活 / Esc / 选中条目）全部走这里。
+    /// </summary>
+    private void SafeClose()
+    {
+        if (_closing) return;
+        _closing = true;
+        try { Close(); }
+        catch (InvalidOperationException) { /* 已经在关闭流程里：WPF 自己收尾 */ }
+        catch (Exception ex) { InputPlus.Core.CoreLog.Swallow(ex, "附加菜单：关闭窗口"); }
     }
 
     private void OnEntryClick(object sender, MouseButtonEventArgs e)
@@ -243,6 +341,25 @@ public partial class GestureMenuWindow : Window
             e.Handled = true;
             Accept(entry);
         }
+    }
+
+    /// <summary>
+    /// 点右上角的星标：关掉菜单，把"这次要收藏什么"交回给调用方。
+    ///
+    /// 和 <see cref="Accept"/> 共用 <see cref="_committed"/>：点过星标之后，
+    /// 之后任何一次"失去激活 / 回车"都不该再改结论。
+    /// </summary>
+    private void OnFavoriteClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (_committed || _favorite == null) return;
+
+        _committed = true;
+        Selected = null;
+        FavoriteRequested = true;
+
+        try { DialogResult = true; }
+        catch (InvalidOperationException) { SafeClose(); }
     }
 
     // ── 二级菜单 ────────────────────────────────────────────────────
@@ -301,7 +418,7 @@ public partial class GestureMenuWindow : Window
                 /* 二级菜单开着时，Esc 先收二级、再按一次才关菜单：
                  * 和系统菜单的层级一致，不会一按就把整层都收掉。 */
                 if (SubPopup.IsOpen) { CloseSubMenu(); return; }
-                Close();
+                SafeClose();
                 return;
 
             case Key.Enter:
@@ -373,6 +490,11 @@ public partial class GestureMenuWindow : Window
          * 免得键盘回车把"历史记录"这种父项当成空动作执行掉。 */
         if (entry.HasChildren && string.IsNullOrWhiteSpace(entry.Item.Action)) return;
 
+        /* 置灰的条目不能执行：键盘回车与 1..9 快选都能把它选中，
+         * 而这两颗入口在前台没有文件时按下去什么也做不了 ——
+         * 执行等于给用户一个"按了没反应"。 */
+        if (!entry.Item.Enabled) return;
+
         _committed = true;
         Selected = entry.Item;
 
@@ -384,7 +506,7 @@ public partial class GestureMenuWindow : Window
         }
         catch (InvalidOperationException)
         {
-            Close();
+            SafeClose();
         }
     }
 
@@ -420,7 +542,7 @@ public partial class GestureMenuWindow : Window
 /// 而 <see cref="GestureMenuItem"/> 上没有"序号""兜底后的标题""解析好的图标"
 /// 这些纯显示用的东西。
 /// </summary>
-public sealed class GestureMenuEntry
+public sealed class GestureMenuEntry : System.ComponentModel.INotifyPropertyChanged
 {
     public GestureMenuEntry(GestureMenuItem item, int index, string title)
     {
@@ -438,6 +560,8 @@ public sealed class GestureMenuEntry
         GlyphVisibility = Icon == null && Glyph.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         IndexVisibility = Icon == null && Glyph.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         NoteVisibility = Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        /* 初始的灰/亮照搬条目自己的 Enabled（构造时就已经定好了：见 MiddleMenuPolicy.Build）。 */
+        _isEnabled = item.Enabled;
 
         /* 子项递归：二级菜单里不再有三级（菜单是拿来快速点的，三层点起来比打字还慢）。 */
         Children = (item.Children ?? new List<GestureMenuItem>())
@@ -457,24 +581,91 @@ public sealed class GestureMenuEntry
     /// <summary>行首显示的文字：Title，或兜底的动作标题。</summary>
     public string Title { get; }
 
+    private string _glyph = "";
+    private string _note = "";
+    private Visibility _glyphVisibility;
+    private Visibility _noteVisibility;
+    private bool _isEnabled;
+
+    /// <summary>
+    /// 这一行现在能不能点。
+    ///
+    /// **必须**是带通知的属性（外面模板的 0.4 透明度绑在它上面）：
+    /// 附加菜单顶部「打开文件所在位置」在弹菜单那一刻还不知道有没有文件，
+    /// 预热（识别）回来后要把灰/亮**原地**刷出来 —— 绑 <see cref="GestureMenuItem.Enabled"/>
+    /// 那种普通属性是刷不动的（菜单已经上屏，不重建 ItemsSource 就永远显示初始状态）。
+    /// </summary>
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        private set { _isEnabled = value; Raise(nameof(IsEnabled)); }
+    }
+
+    /// <summary>
+    /// 灰/亮一起改两处：这里（管外观）与 <see cref="GestureMenuItem.Enabled"/>（管点击，
+    /// <c>Accept</c> 里会再判一次）。两处必须同步，否则会出现"看着是灰的、点下去却执行了"。
+    /// </summary>
+    internal void SetEnabled(bool on)
+    {
+        Item.Enabled = on;
+        if (_isEnabled != on) IsEnabled = on;
+    }
+
     /// <summary>行首的图标字形，空串表示没设图标。</summary>
-    public string Glyph { get; }
+    public string Glyph
+    {
+        get => _glyph;
+        private set { _glyph = value; Raise(nameof(Glyph)); }
+    }
 
     /// <summary>第二行小字（网址标题 / 路径），空串表示不显示。</summary>
-    public string Note { get; }
+    public string Note
+    {
+        get => _note;
+        private set { _note = value; Raise(nameof(Note)); }
+    }
 
     /// <summary>解析好的真实图标（文件 / 文件夹 / 程序 / 网址 favicon）；没有就是 null。</summary>
     public ImageSource? Icon { get; }
 
     public Visibility IconVisibility { get; }
 
-    public Visibility GlyphVisibility { get; }
+    public Visibility GlyphVisibility
+    {
+        get => _glyphVisibility;
+        private set { _glyphVisibility = value; Raise(nameof(GlyphVisibility)); }
+    }
 
     public Visibility IndexVisibility { get; }
 
-    public Visibility NoteVisibility { get; }
+    public Visibility NoteVisibility
+    {
+        get => _noteVisibility;
+        private set { _noteVisibility = value; Raise(nameof(NoteVisibility)); }
+    }
 
     public Visibility ArrowVisibility { get; }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    private void Raise(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+    /// <summary>
+    /// 预热回来之后补上第二行（菜单已经上屏了，所以必须走 INotifyPropertyChanged）。
+    /// 空串会把整行折叠起来，行高不变。
+    /// </summary>
+    internal void UpdateNote(string note)
+    {
+        Note = (note ?? "").Trim();
+        NoteVisibility = Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>把星标换成实心（已经在固定项里了）。</summary>
+    internal void UpdateFavoriteGlyph(bool favorited)
+    {
+        Glyph = favorited ? "\uE735" : "\uE734";
+        GlyphVisibility = Glyph.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     /// <summary>有没有二级菜单。</summary>
     public bool HasChildren => Children.Count > 0;

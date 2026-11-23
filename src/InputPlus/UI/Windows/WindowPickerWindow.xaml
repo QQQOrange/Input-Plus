@@ -4,7 +4,7 @@
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
         Title="{loc:T '选择窗口'}" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
-        Cursor="Cross" FontFamily="{StaticResource Font.Ui}">
+        Cursor="Cross" FontFamily="{DynamicResource Font.Ui}">
 
     <!-- 遮罩：整块半透明，鼠标完全穿透（代码里设 WS_EX_TRANSPARENT），
          所以点击会直达下面的真实窗口。事件靠全局鼠标钩子来抓，

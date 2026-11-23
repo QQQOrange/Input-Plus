@@ -7,7 +7,7 @@
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
         WindowStartupLocation="Manual" ShowActivated="True"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <Grid Margin="18">
         <!-- 不画投影底衬。
@@ -118,7 +118,7 @@
                                  Foreground="{DynamicResource Brush.OverlayText}" CaretBrush="{DynamicResource Brush.OverlayText}"
                                  VerticalContentAlignment="Center"
                                  Padding="0,4" MinHeight="42" MinWidth="120" TextChanged="OnInputChanged"
-                                 PreviewKeyDown="OnInputKeyDown" FontFamily="{StaticResource Font.Ui}" />
+                                 PreviewKeyDown="OnInputKeyDown" FontFamily="{DynamicResource Font.Ui}" />
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">

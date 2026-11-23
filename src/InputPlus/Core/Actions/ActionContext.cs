@@ -71,6 +71,17 @@ public sealed partial class ActionContext
 
     /// <summary>附加菜单请求的订阅点，由 AppHost 接。</summary>
     public event Action? AttachMenuRequested;
+
+    /// <summary>请求「收藏当前文件」：把前台程序当前打开的文件收进固定项（v1.5.1）。</summary>
+    public void RequestFavoriteForegroundFile() => FavoriteForegroundFileRequested?.Invoke();
+
+    /// <summary>请求「打开文件所在位置」：在资源管理器里定位前台程序当前打开的文件（v1.5.1）。</summary>
+    public void RequestRevealForegroundFile() => RevealForegroundFileRequested?.Invoke();
+
+    /* 这两个请求都由 AppHost 接：识别要读别的进程、收藏要写设置，
+     * 都属于"宿主才知道怎么办"的事，ActionContext 只负责把"用户点了"这件事传出去。 */
+    public event Action? FavoriteForegroundFileRequested;
+    public event Action? RevealForegroundFileRequested;
     public void RequestHelp() => HelpRequested?.Invoke();
     public void RequestOpenMacros() => MacrosRequested?.Invoke();
     public void RequestOpenLuaScripts() => LuaScriptsRequested?.Invoke();

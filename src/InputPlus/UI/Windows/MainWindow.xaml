@@ -7,7 +7,7 @@
         MinHeight="620" MinWidth="980"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource Brush.WindowGradient}"
-        FontFamily="{StaticResource Font.Ui}"
+        FontFamily="{DynamicResource Font.Ui}"
         Foreground="{DynamicResource Brush.TextPrimary}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"

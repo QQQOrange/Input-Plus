@@ -80,7 +80,7 @@ public sealed class TrayIcon : IDisposable
         var context = new ContextMenuStrip
         {
             ShowImageMargin = false,
-            Font = new Font("Microsoft YaHei UI", 9f),
+            Font = new Font(FontManager.WinFormsFamilyName, 9f),
         };
         _menu = context;
         context.Items.AddRange(new ToolStripItem[]
@@ -109,6 +109,9 @@ public sealed class TrayIcon : IDisposable
          * 和主界面像是两个程序。现在从主题资源里取色，主题变了就重刷。 */
         ApplyMenuTheme(CurrentIsDark);
         Theme.ThemeManager.ThemeChanged += OnThemeChanged;
+        /* 界面字体（v1.4.3）：ContextMenuStrip 不认 WPF 的 Font.Ui 资源，
+         * 字体变了要自己重建一次 Font，否则托盘菜单永远是换字体之前那套字。 */
+        FontManager.Changed += OnFontChanged;
 
         _icon = new NotifyIcon
         {
@@ -462,6 +465,7 @@ public sealed class TrayIcon : IDisposable
         try
         {
             Theme.ThemeManager.ThemeChanged -= OnThemeChanged;
+            FontManager.Changed -= OnFontChanged;
             _icon.Visible = false;
             _icon.Dispose();
             _customIcon?.Dispose();
@@ -476,6 +480,28 @@ public sealed class TrayIcon : IDisposable
         Theme.ThemeManager.Current == Theme.ThemeManager.Mode.Dark
         || (Theme.ThemeManager.Current == Theme.ThemeManager.Mode.System && Theme.ThemeManager.IsDarkSystem);
 
+    /// <summary>
+    /// 托盘菜单的字体：跟着「设置 → 外观 → 界面字体」走（v1.4.3）。
+    ///
+    /// 这里是一个 WinForms <c>ContextMenuStrip</c>，不在 WPF 的可视树里，
+    /// 换 <c>Font.Ui</c> 资源对它没有任何影响 —— 只能自己新建一个 <c>Font</c>。
+    /// 族名必须是**单个已安装**的族（见 <see cref="FontManager.WinFormsFamilyName"/>）：
+    /// WinForms 不认识 "微软雅黑, Segoe UI" 这种逗号串，传进去会静默退回 Microsoft Sans Serif，
+    /// 中文菜单项就变成方块了。
+    /// </summary>
+    private void ApplyMenuFont()
+    {
+        try
+        {
+            _menu.Font = new Font(FontManager.WinFormsFamilyName, 9f);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "托盘菜单字体");
+        }
+    }
+
+    private void OnFontChanged() => ApplyMenuFont();
     private void OnThemeChanged(bool dark)
     {
         try

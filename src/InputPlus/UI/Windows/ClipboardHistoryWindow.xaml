@@ -4,7 +4,7 @@
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
         Title="{loc:T '剪贴板历史'}" Width="620" Height="560" MinWidth="420" MinHeight="360"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Brush.WindowGradient}"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0"

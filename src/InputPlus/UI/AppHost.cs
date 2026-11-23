@@ -344,6 +344,11 @@ public sealed partial class AppHost : IDisposable
         /* 动作「附加菜单」（基础分类）：和键盘唤出同一条路径，位置在鼠标处。 */
         Context.AttachMenuRequested += () => _dispatcher.BeginInvoke(() => Gestures.OpenAttachMenuFromAction());
         Context.GestureMenuRequested += id => _dispatcher.BeginInvoke(() => ShowGestureMenu(id));
+
+        /* v1.5.1：附加菜单顶部的两个入口。识别要读别的进程、收藏要写设置，
+         * 都属于"宿主才知道怎么办"的事；ActionContext 只把"用户点了"传出来。 */
+        Context.FavoriteForegroundFileRequested += () => BeginFavoriteForegroundFile();
+        Context.RevealForegroundFileRequested += () => BeginRevealForegroundFile();
     }
 
     /// <summary>宏录制器（长驻 AppHost，页面重建也不会丢）。</summary>

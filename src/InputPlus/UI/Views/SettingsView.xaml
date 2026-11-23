@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
              xmlns:controls="clr-namespace:InputPlus.UI.Controls"
-             FontFamily="{StaticResource Font.Ui}">
+             FontFamily="{DynamicResource Font.Ui}">
     <ScrollViewer x:Name="RootScroll" VerticalScrollBarVisibility="Auto" Padding="24,4,20,20">
         <!-- 不再单独限宽 880：其它页面（快速上手 / 同步与备份 / 按键映射）都是铺满的，
              只有设置页缩在左边，1240 宽时右边空出 130 多、最大化时能空出 700 多，
@@ -508,6 +508,80 @@
                             <ComboBoxItem Content="{loc:T '深色'}" Tag="dark" />
                             <ComboBoxItem Content="{loc:T '跟随系统'}" Tag="system" />
                         </ComboBox>
+                    </Grid>
+
+                    <!-- 界面字体（v1.4.3）：整个软件的文字都跟着这一项走 ——
+                         菜单、按钮、各页面、附加功能窗口、浮层与提示条都在内。
+                         下拉里每一项用它**自己的字体**渲染（一眼看出是哪种字），
+                         选中的那套字立刻套到界面上，不用重启。
+                         条目在 Refresh() 里按需建一次，见 BuildFontList。 -->
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="180" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{loc:T '界面字体'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T '系统里已安装的字体都能选：菜单、按钮和各附加功能窗口一起换，改完立即生效。'}"
+                                       Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                <TextBlock x:Name="FontPreviewText"
+                                           Text="{loc:T '预览：输入增强 Aa 0123'}"
+                                           Style="{StaticResource Text.Secondary}"
+                                           VerticalAlignment="Center" />
+                                <Button Content="{loc:T '恢复默认'}" Style="{StaticResource Button.Ghost}" Padding="8,3"
+                                        Margin="12,0,0,0" VerticalAlignment="Center" Click="OnResetFont"
+                                        ToolTip="{loc:T '改回出厂字体（微软雅黑 + 西文兜底）。'}" />
+                                <Button Content="{loc:T '重新扫描'}" Style="{StaticResource Button.Ghost}" Padding="8,3"
+                                        Margin="6,0,0,0" VerticalAlignment="Center" Click="OnRescanFonts"
+                                        ToolTip="{loc:T '刚装了新字体、下拉里还看不到时点这里。'}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Top">
+                            <!-- 系统字体两三百个，靠翻找不到：上面这行是过滤器，
+                                 显示名与注册表名都匹配（「kai」能找到「楷体」），
+                                 输入即过滤，↓ / Enter 直接进下拉。 -->
+                            <Grid>
+                                <TextBox x:Name="FontSearchBox" Style="{StaticResource TextBox.Base}"
+                                         MinHeight="30" Padding="8,3" FontSize="12"
+                                         TextChanged="OnFontSearchChanged"
+                                         PreviewKeyDown="OnFontSearchKeyDown"
+                                         ToolTip="{loc:T '输入字体名过滤（中文或英文都行），按 ↓ 进入列表'}" />
+                                <TextBlock Text="{loc:T '搜索字体…'}" IsHitTestVisible="False"
+                                           Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12"
+                                           Foreground="{DynamicResource Brush.TextTertiary}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=FontSearchBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <ComboBox x:Name="FontBox" Margin="0,6,0,0" Style="{StaticResource ComboBox.Base}"
+                                      MaxDropDownHeight="420" SelectionChanged="OnFontChanged" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 等宽区域：脚本、公式、计时这几处本来是刻意用等宽的。
+                         默认也跟随（用户要的是"整个软件一起换"），留这一行是给
+                         "要等宽观感"的人一条退路。 -->
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{loc:T '等宽区域也跟随'}" Style="{StaticResource Text.Body}" />
+                            <TextBlock Text="{loc:T 'Lua 脚本、公式输入、录制计时这几处。关掉就保持等宽字体（Cascadia Mono / Consolas）。'}"
+                                       Style="{StaticResource Text.Tertiary}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" x:Name="FontMonoBox" Style="{StaticResource ToggleSwitch}"
+                                  VerticalAlignment="Center" Click="OnFontMonoChanged" />
                     </Grid>
 
                         <!-- 触发键的星标大小：以前写死在代码里（1.5 倍），用户没法调。 -->

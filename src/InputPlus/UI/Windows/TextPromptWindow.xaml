@@ -10,7 +10,7 @@
         ShowInTaskbar="False"
         Background="{DynamicResource Brush.Surface}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
 
     <StackPanel Margin="24">
         <TextBlock x:Name="HeaderText" FontSize="15" FontWeight="SemiBold" Text="{loc:T '输入名称'}" />

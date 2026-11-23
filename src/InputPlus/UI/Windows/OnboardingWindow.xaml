@@ -5,7 +5,7 @@
         Title="{loc:T '欢迎使用 Input Plus'}" Width="820" Height="560"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize" ShowInTaskbar="False"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <Grid Margin="24">
         <Border CornerRadius="14" Background="{DynamicResource Brush.Surface}" BorderThickness="1"

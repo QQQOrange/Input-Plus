@@ -167,8 +167,18 @@ public static class RenderTools
             {
                 try
                 {
-                    var attachDef = InputPlus.Core.Gestures.MiddleMenuPolicy.Build(host.Settings);
-                    var attach = new GestureMenuWindow(attachDef, InputPlus.Core.Actions.ActionCatalog.TitleOf)
+                    /* v1.5.1：顶部那两条「收藏当前文件 / 打开文件所在位置」也要出现在图里 ——
+                       它们是这一版唯一可见的新东西，不出图就等于没验过版式。
+                       这里给一份"已经收藏过"的状态：星标是实心的、第二行写「已在收藏中」。
+                       第二张图（attach-menu-disabled.png）给不可点状态，验置灰样式。 */
+                    var attachDef = InputPlus.Core.Gestures.MiddleMenuPolicy.Build(host.Settings,
+                        foreground: new InputPlus.Core.Gestures.ForegroundFileState(
+                            Actionable: true, ProcessName: "wpspdf.exe",
+                            FileName: "季度总结.pptx", AlreadyFavorited: true));
+                    /* 带收藏星标（v1.5.0）：右上角那颗星是这一版新增的可见元素，
+                       出图时不带上它，改坏了（挤掉标题、顶出圆角）就没人看得见。 */
+                    var attach = new GestureMenuWindow(attachDef, InputPlus.Core.Actions.ActionCatalog.TitleOf,
+                        InputPlus.Core.Qbar.FavoriteTarget.Empty)
                     {
                         ShowInTaskbar = false,
                         WindowStartupLocation = WindowStartupLocation.Manual,
@@ -178,6 +188,28 @@ public static class RenderTools
                     attach.Show();
                     Pump(300);
                     Save(attach, Path.Combine(outDir, "attach-menu.png"));
+                    attach.Close();
+                    Pump(120);
+
+                    /* 不可点状态（前台是资源管理器 / 桌面 / 任务栏）：
+                       两条入口整体降透明度，行高与宽度不变。 */
+                    var disabledDef = InputPlus.Core.Gestures.MiddleMenuPolicy.Build(host.Settings,
+                        foreground: new InputPlus.Core.Gestures.ForegroundFileState(
+                            Actionable: false, ProcessName: "explorer.exe",
+                            FileName: "", AlreadyFavorited: false));
+                    var disabled = new GestureMenuWindow(disabledDef, InputPlus.Core.Actions.ActionCatalog.TitleOf,
+                        InputPlus.Core.Qbar.FavoriteTarget.Empty)
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -32000,
+                        Top = -32000,
+                    };
+                    disabled.Show();
+                    Pump(260);
+                    Save(disabled, Path.Combine(outDir, "attach-menu-disabled.png"));
+                    disabled.Close();
+                    Pump(120);
 
                     /* 反例专用：四个汉字 + 二级菜单箭头（"历史记录 ▸"）。
                        这正是用户说"连历史记录四个字都显示不全"的那一行，
@@ -218,6 +250,27 @@ public static class RenderTools
                     wide.Close();
 
                     attach.Close();
+                    Pump(120);
+
+                    /* 「收藏到 Qbar」（v1.5.0）：星标点下去就是这个窗。
+                       用空上下文出图 —— 它走的是"读不到就手填"那条路，正好把
+                       状态行、四个字段、勾选框一起拍下来。 */
+                    var fav = new FavoriteCaptureWindow(InputPlus.Core.Qbar.FavoriteTarget.Empty,
+                        Array.Empty<string>())
+                    {
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.Manual,
+                        Left = -32000,
+                        Top = -32000,
+                    };
+                    fav.Show();
+                    Pump(420);
+                    /* v1.5.1：星标里多出来的那条「它正在打开：…」也要出图 ——
+                       它只在识别到文件时出现，平时截图永远看不到。 */
+                    fav.ProvideOpenFile(@"D:\work\季度总结.pptx", "wps.exe");
+                    Pump(220);
+                    Save(fav, Path.Combine(outDir, "favorite-capture.png"));
+                    fav.Close();
                     Pump(120);
                 }
                 catch (Exception ex) { CoreLog.Warn("渲染附加菜单失败：" + ex.Message); }

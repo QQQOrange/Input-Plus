@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
              xmlns:controls="clr-namespace:InputPlus.UI.Controls"
-             FontFamily="{StaticResource Font.Ui}">
+             FontFamily="{DynamicResource Font.Ui}">
     <Grid Margin="24,4,20,20">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
@@ -58,7 +58,7 @@
                                 SelectionChanged="OnTabChanged">
                         <TabControl.Resources>
                         <Style TargetType="TabItem">
-                            <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+                            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
                             <Setter Property="FontSize" Value="13" />
                             <Setter Property="Cursor" Value="Hand" />
                             <!-- 这排标签压在 Brush.Surface 卡片上，未选中态必须自己给前景色：
@@ -145,7 +145,7 @@
                               AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                               CanUserResizeRows="False" CanUserSortColumns="True"
                               SelectionMode="Single" SelectionUnit="FullRow"
-                              FontFamily="{StaticResource Font.Ui}" FontSize="12"
+                              FontFamily="{DynamicResource Font.Ui}" FontSize="12"
                               RowHeight="30" ColumnHeaderHeight="28"
                               HorizontalScrollBarVisibility="Disabled"
                               RowStyle="{StaticResource Grid.Row}"
@@ -263,7 +263,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,16,0">
                                             <TextBlock Text="{loc:T '启用附加菜单'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '在桌面空白处按下面勾选的鼠标键即可唤出；键盘组合键在任何程序里都能唤出。'}"
+                                            <TextBlock Text="{loc:T '桌面空白处、资源管理器（文件/文件夹上或空白处）、打开保存与选文件夹对话框里，按下面勾选的鼠标键即可唤出；键盘组合键在任何程序里都能唤出。'}"
                                                        Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
                                         <CheckBox Grid.Column="1" x:Name="MiddleMenuEnabledBox" Style="{StaticResource ToggleSwitch}"
@@ -275,7 +275,9 @@
                                     <!-- 鼠标唤出 -->
                                     <StackPanel Margin="0,8,0,0">
                                         <TextBlock Text="{loc:T '鼠标唤出'}" Style="{StaticResource Text.Body}" />
-                                        <TextBlock Text="{loc:T '只在系统桌面空白处生效；别的窗口里这几颗键各有用途，不接管。'}"
+                                        <TextBlock Text="{loc:T '桌面空白处、资源管理器、打开保存与选文件夹对话框里生效；浏览器正文、编辑器、终端这些地方不接管。'}"
+                                                   Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        <TextBlock Text="{loc:T '菜单右上角的星标可以把当前网页、文件夹或程序一键收藏进 Qbar 固定项。'}"
                                                    Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         <WrapPanel Margin="0,6,0,0">
                                             <CheckBox x:Name="MouseMiddleBox" Content="{loc:T '中键'}" Margin="0,0,16,0"
@@ -289,6 +291,25 @@
 
                                     <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
 
+                                    <!-- 当前文件（v1.5.1）：菜单最上面那两条 -->
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                            <TextBlock Text="{loc:T '收藏当前文件 / 打开文件所在位置'}" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{loc:T '菜单最上面那两条：把前台程序正在打开的那个文件收进固定项，或在资源管理器里定位它。前台是资源管理器、桌面、任务栏时这两条是灰的。'}"
+                                                       Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <ComboBox x:Name="RevealModeBox" Grid.Column="1" MinWidth="148" VerticalAlignment="Center"
+                                                  SelectionChanged="OnRevealModeChanged">
+                                            <ComboBoxItem Content="{loc:T '打开并选中文件'}" Tag="selectFile" />
+                                            <ComboBoxItem Content="{loc:T '只打开文件夹'}" Tag="openFolderOnly" />
+                                        </ComboBox>
+                                    </Grid>
+
+                                    <Border Style="{StaticResource Divider}" Margin="0,10,0,0" />
                                     <!-- 键盘唤出 -->
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
@@ -320,7 +341,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,16,0">
                                             <TextBlock Text="{loc:T '例外程序'}" Style="{StaticResource Text.Body}" />
-                                            <TextBlock Text="{loc:T '这些程序里连键盘唤出也不弹（鼠标那一路本来只在桌面）。'}"
+                                            <TextBlock Text="{loc:T '这些程序里连键盘唤出也不弹（鼠标那一路只在桌面、资源管理器与文件对话框里生效）。'}"
                                                        Style="{StaticResource Text.Tertiary}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Top">

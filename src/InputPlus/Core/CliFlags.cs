@@ -28,6 +28,7 @@ public static class CliFlags
         "--drag-e2e", "--drag-target", "--qbar-query", "--qbar-bench",
         "--everything-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
         "--shell-probe", "--dialogprobe", "--filedialog-e2e", "--suggestions-probe", "--scroll-probe",
+        "--foreground-file", "--reveal-file", "--office-recent",
         "--gesture-overlay-diag",
     };
 
@@ -66,6 +67,8 @@ public static class CliFlags
         "  --dialogprobe                  打印当前所有文件对话框的子控件清单与判型结果（写数据目录 logs\\dialog-probe.txt）\n" +
         "  --filedialog-e2e               起一个真对话框，实测一次回填能不能被它接受（写数据目录 logs\\filedialog-e2e.txt）\n" +
         "  --suggestions-probe            真机跑一遍「搜索前建议」采集：各来源条数、首屏耗时、前 20 条（写数据目录 logs\\suggestions-probe.txt）\n" +
+        "  --office-recent <文件名>         只在 WPS/Office 的「最近文件」里按名字找真实路径（写 %TEMP%\\clp-office-recent.txt）\n" +
+        "  --foreground-file [pid]         认一次「这个程序当前打开的文件」，打印命中/耗时/为什么没命中（写 %TEMP%\\clp-foreground-file.txt）\n" +
         "  --scroll-probe                 实测滚轮钩子→平滑滚动的链路：钩子收到几次、接管几次、为什么放行（写数据目录 logs\\scroll-probe.txt）\n" +
         "  --webdav-test <地址> [用户名] [密码]   实测一次 WebDAV 往返\n" +
         "  --svg2png <源目录> <目标目录>     把 SVG 图标批量转成 PNG（维护图标表时用）\n" +
@@ -82,7 +85,8 @@ public static class CliFlags
         "  --qbar-command \"ol hello\"        只解析命令（关键字/路径/占位符展开），不执行（写 %TEMP%\\clp-qbar-command.txt）\n" +
         "  --everything-status              检查 Everything SDK 是否可用、版本、索引与查询实测（写 %TEMP%\\clp-everything-status.txt）\n" +
         "  --dict <词>                      只跑查词链路（欧路/网页词典接口 + 解析），打印释义与耗时（写 %TEMP%\\clp-qbar-dict.txt）\n" +
-        "  --reveal <路径>                  用资源管理器打开并选中该路径\n" +
+        "  --reveal <路径>                  按文件关联打开该文件/网址，并检查它是否到了前台\n" +
+        "  --reveal-file <路径>             走一次「打开文件所在位置」：父目录 + 选中该文件（写 %TEMP%\\clp-reveal-file.txt）\n" +
         "  --tray                          启动但不显示主窗口（只驻留托盘）\n" +
         "  --trace                         启动并记录每个按键（写进 logs/app.log）\n" +
         "  --updated                       上一次是自动更新拉起的（用于提示「已更新到 x.y.z」）\n" +

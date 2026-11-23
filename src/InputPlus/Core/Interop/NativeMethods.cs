@@ -900,4 +900,150 @@ public static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWow64Process(IntPtr hProcess, [MarshalAs(UnmanagedType.Bool)] out bool wow64Process);
 
+    // ── 「收藏当前文件 / 打开文件所在位置」（v1.5.1）─────────────────────
+    //
+    // 这一组里只有一件事是硬的：**从目标进程的句柄表里认出"它正在看的那个文件"**。
+    //
+    // 为什么不用 NtQuerySystemInformation(SystemHandleInformation)：Win11 24H2 起
+    // 非管理员调用直接返回 STATUS_ACCESS_DENIED(0xC0000022)，Process Explorer 现在
+    // 要求提权就是这条。**单进程快照**（下面这个 ProcessHandleInformation）没有这个限制，
+    // 代价是要自己对每个进程开一次句柄。
+    //
+    // 为什么 Filter 用 ObjectTypeIndex 而不是"试着查名字"：对管道 / 事件 / 同步对象
+    // 调 NtQueryObject(ObjectNameInformation) 有概率**挂在里面不返回**（同步对象尤其明显），
+    // 靠类型过滤绕开比加超时可靠 —— 见 ForegroundFileProbe 里先探 File 的 index。
+
+    public const int PROCESS_QUERY_INFORMATION = 0x0400;
+    public const int PROCESS_DUP_HANDLE = 0x0040;
+    public const uint DUPLICATE_SAME_ACCESS = 0x0002;
+    public const uint FILE_TYPE_DISK = 0x0001;
+    public const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+
+    /// <summary>NtQueryInformationProcess 的 ProcessHandleInformation（51）。</summary>
+    public const int ProcessHandleInformation = 51;
+
+    /// <summary>NtQueryObject 的 ObjectNameInformation（1）。</summary>
+    public const int ObjectNameInformation = 1;
+
+    /// <summary>NtQueryInformationProcess / NtQueryObject 的"缓冲区太小"返回码。</summary>
+    public const uint STATUS_INFO_LENGTH_MISMATCH = 0xC0000004;
+
+    /// <summary>
+    /// 句柄表里的一项。三处 <c>ULONG_PTR</c> 用 <see cref="IntPtr"/> 表达 ——
+    /// x64 下 8 字节、x86 下 4 字节，结构体大小自动是 40 / 28，
+    /// 手写定长字段在两条线之间必然有一边错位。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_HANDLE_TABLE_ENTRY_INFO
+    {
+        public IntPtr HandleValue;
+        public IntPtr HandleCount;
+        public IntPtr PointerCount;
+        public uint GrantedAccess;
+        public uint ObjectTypeIndex;
+        public uint HandleAttributes;
+        public uint Reserved;
+    }
+
+    /// <summary>UNICODE_STRING。Buffer 的偏移按位宽自动算（x64 = 8、x86 = 4）。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct UNICODE_STRING
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    /// <summary>
+    /// 进程句柄快照。<c>NumberOfHandles</c> 之后紧跟一个
+    /// <see cref="PROCESS_HANDLE_TABLE_ENTRY_INFO"/> 数组 —— 数组起点是
+    /// <c>2 * IntPtr.Size</c>，不要按可见字段硬编码偏移。
+    /// </summary>
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryInformationProcess(IntPtr process, int infoClass, IntPtr buffer, int length, out int returnLength);
+
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryObject(IntPtr handle, int objectInformationClass, IntPtr buffer, int length, out int returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle, IntPtr targetProcess,
+        out IntPtr targetHandle, uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint options);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint GetFileType(IntPtr handle);
+
+    /// <summary>查询 <c>C:</c> 这类设备名对应的 NT 路径（<c>\Device\HarddiskVolume3</c>）。</summary>
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern int QueryDosDevice(string deviceName, StringBuilder targetPath, int maxLength);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetLogicalDrives();
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern uint GetFileAttributes(string fileName);
+
+    /// <summary>枚举子窗口：UWP 的 ApplicationFrameHost 底下才是真正在显示内容的那个窗口。</summary>
+    public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr lParam);
+
+    /// <summary>把路径解析成 PIDL（资源管理器定位的入口）。返回 S_OK(0) 才算拿到。</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHParseDisplayName(string name, IntPtr bindContext, out IntPtr pidl, uint attributesIn, out uint attributesOut);
+
+    /// <summary>
+    /// 打开父文件夹并选中指定项。用它的三个理由：能**复用已打开的同名文件夹窗口**
+    /// （不闪新窗）、自带选中、对库文件夹与网络路径的处理是 shell 自己的。
+    /// 比 <c>explorer.exe /select,</c> 稳，后者只是路径被删/驱动器未就绪时的退路。
+    /// </summary>
+    [DllImport("shell32.dll")]
+    public static extern int SHOpenFolderAndSelectItems(IntPtr pidlFolder, uint itemCount, IntPtr[]? items, uint flags);
+
+    /// <summary>释放 SHParseDisplayName 给出的 PIDL。</summary>
+    [DllImport("shell32.dll")]
+    public static extern void ILFree(IntPtr pidl);
+
+    // ── 进程树（v1.5.1 补）：WPS / 浏览器把文档与渲染放在子进程里，
+    //     只盯前台窗口那个 PID 会一无所获（实测 WPS：窗口进程 wps.exe 里没有文档句柄，
+    //     真正的 xlsx 句柄在子进程 et.exe 里）。
+
+    public const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+    public const uint COINIT_APARTMENTTHREADED = 0x2;
+
+    [DllImport("ole32.dll")]
+    public static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+    [DllImport("ole32.dll")]
+    public static extern void CoUninitialize();
+
 }

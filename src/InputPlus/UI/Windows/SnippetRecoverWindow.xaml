@@ -9,7 +9,7 @@
         ShowInTaskbar="False"
         Background="{DynamicResource Brush.Surface}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="Microsoft YaHei UI, Segoe UI">
+        FontFamily="{DynamicResource Font.Ui}">
     <Border Style="{StaticResource Card}" Padding="22,20,22,18" Margin="0">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top">

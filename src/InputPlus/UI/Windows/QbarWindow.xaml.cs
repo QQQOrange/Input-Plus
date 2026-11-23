@@ -1469,7 +1469,15 @@ public partial class QbarWindow : Window
     private void SetChip(QbarChip chip)
     {
         _chip = chip;
-        ChipLabel.Text = chip.Label;
+        /* v1.4.3：胶囊上也**不出现关键字**（用户要求"关键字在任何情况下都不显示"）。
+         * 有备注用备注；没备注就只留图标 —— 和结果行同一套规则。
+         * 唯一的退路是"既没备注又没有图标"的老条目：那时才退回关键字，
+         * 否则输入框里会挂着一个什么都认不出的空胶囊。 */
+        string chipText = chip.Note.Length > 0
+            ? chip.Note
+            : (chip.HasIcon ? "" : chip.Label);
+        ChipLabel.Text = chipText;
+        ChipLabel.Visibility = chipText.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
 
         /* 网址标签没有“后面的搜索词”这回事：bili + 空格 之后
          * 输入框里再打字也不会参与网址拼接，只会让人误以为还能搜。
@@ -3202,29 +3210,30 @@ public partial class QbarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 「打开所在文件夹」。v1.5.1 起统一交给
+    /// <see cref="Core.Windows.WindowService.RevealInForeground"/>：
+    /// 优先 <c>SHOpenFolderAndSelectItems</c>（复用已开窗口 + 选中）、
+    /// 文件被删了逐级上溯、提权时借 shell 之手 —— 不再自己拼 explorer 命令行。
+    ///
+    /// 放后台：in-proc 那条最多等 3 秒，而这里是 Qbar 的右键菜单回调。
+    /// </summary>
     private void OpenContainingFolder(string path)
     {
-        try
+        _ = Task.Run(() =>
         {
-            if (Directory.Exists(path))
+            Core.Windows.WindowService.RevealOutcome outcome =
+                Core.Windows.WindowService.RevealInForeground(path, openFolderOnly: false);
+
+            if (outcome.Launched)
             {
-                string? parent = Directory.GetParent(path)?.FullName;
-                Process.Start(new ProcessStartInfo("explorer.exe", parent is null ? $"\"{path}\"" : $"\"{parent}\"")
-                {
-                    UseShellExecute = true,
-                });
+                if (outcome.WentUp) _host.Notify(Loc.T("文件已不在了，已打开上级目录"));
                 return;
             }
 
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
-            {
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            _host.Notify(Loc.T("打开文件夹失败：") + ex.Message);
-        }
+            _host.Notify(Loc.T(outcome.Reachable ? "打开文件夹失败：" : "所在位置无法访问")
+                         + (outcome.Why.Length > 0 ? outcome.Why : ""));
+        });
     }
 
     private void SetFileClipboard(string path, bool cut)

@@ -7,7 +7,7 @@
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         Background="{DynamicResource Brush.Background}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}"
+        FontFamily="{DynamicResource Font.Ui}"
         UseLayoutRounding="True">
 
     <!--
@@ -222,7 +222,7 @@
                             <TextBlock Grid.Row="0" Text="{loc:T '运行结果'}" Style="{StaticResource Text.H3}" />
                             <TextBox x:Name="ResultText" Grid.Row="1" Margin="0,6,0,0"
                                      IsReadOnly="True" IsTabStop="False" AcceptsReturn="True" TextWrapping="Wrap"
-                                     FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                                     FontFamily="{DynamicResource Font.Mono}" FontSize="12"
                                      Background="Transparent" BorderThickness="0" Padding="0"
                                      Foreground="{DynamicResource Brush.TextSecondary}"
                                      VerticalContentAlignment="Top"
@@ -247,7 +247,7 @@
                             <ScrollViewer MaxHeight="160"
                                           VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Auto">
-                                <TextBlock x:Name="ApiText" FontFamily="{StaticResource Font.Mono}" FontSize="11.5"
+                                <TextBlock x:Name="ApiText" FontFamily="{DynamicResource Font.Mono}" FontSize="11.5"
                                            TextWrapping="NoWrap"
                                            Foreground="{DynamicResource Brush.TextSecondary}" />
                             </ScrollViewer>

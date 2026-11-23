@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using InputPlus.Core;
 using InputPlus.Core.Actions;
@@ -93,6 +94,7 @@ public partial class SettingsView : UserControl
             "system" => 2,
             _ => 0,
         };
+        RefreshFontBox(g.UiFont, g.UiFontMono);
         BindLanguageBox(g.Language);
         DataPathText.Text = Loc.F("设置文件：{0}", AppPaths.SettingsFile)
                           + "\n" + Loc.F("日志：{0}", CoreLog.LogPath);
@@ -1266,6 +1268,175 @@ public partial class SettingsView : UserControl
         }
     }
 
+    // ---------------- 界面字体 ----------------
+
+    /// <summary>
+    /// 把配置里的界面字体灌回下拉，并同步等宽开关。
+    ///
+    /// 下拉条目按当前过滤器建一次（和键盘设备那条同一个道理）：系统字体通常两三百个，
+    /// 每建一项都要解析一次字体名，而 Refresh() 会在**每次保存**时被调用（打字时逐字符）。
+    /// </summary>
+    private void RefreshFontBox(string? family, bool followMono)
+    {
+        if (FontBox == null) return;
+        if (FontMonoBox != null) FontMonoBox.IsChecked = followMono;
+        /* 只在"还没建过"时建：过滤器由 OnFontSearchChanged 自己重建，
+         * 这里如果无条件重建，用户打一个字、保存一次，光标和下拉状态都会被冲掉。 */
+        if (FontBox.Items.Count == 0) BuildFontList(FontSearchBox?.Text);
+        SelectFontItem(family);
+    }
+
+    /// <summary>
+    /// 重建字体下拉。第一项固定是"默认"，其余按**显示名**（中文系统上就是本机的
+    /// 中文字体名）排序，并按 <paramref name="filter"/> 过滤。
+    ///
+    /// 过滤同时看**显示名和注册表名**：输入 kai 能找到「楷体」（KaiTi），
+    /// 输入「楷」也能找到 —— 两类用户（认中文名 / 认英文名）都不用翻三百项。
+    /// </summary>
+    private void BuildFontList(string? filter)
+    {
+        if (FontBox == null) return;
+        string needle = (filter ?? "").Trim();
+        FontBox.Items.Clear();
+        FontBox.Items.Add(MakeFontItem("", Loc.T("默认（微软雅黑）")));
+
+        var rows = new List<(string Source, string Text)>();
+        foreach (string name in FontManager.Installed())
+        {
+            string text = FontManager.DisplayName(name);
+            if (needle.Length == 0 ||
+                text.Contains(needle, StringComparison.CurrentCultureIgnoreCase) ||
+                name.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                rows.Add((name, text));
+            }
+        }
+        rows.Sort((a, b) => string.Compare(a.Text, b.Text, StringComparison.CurrentCulture));
+
+        foreach (var row in rows)
+            FontBox.Items.Add(MakeFontItem(row.Source, row.Text));
+    }
+
+    /// <summary>
+    /// 让下拉选中配置里的那一项。
+    ///
+    /// 配置里记着一个这台机器**没有**的字体（换机、或者字体被卸了）：
+    /// 补一项如实显示出来，能认出（含中文名 / 本地化名）就不加标记。
+    /// 悄悄显示成"默认"是骗人的 —— 界面其实已经退回出厂字体，用户得知道为什么。
+    /// </summary>
+    private void SelectFontItem(string? family)
+    {
+        if (FontBox == null) return;
+        string want = FontManager.Normalize(family);
+
+        ComboBoxItem? hit = null;
+        foreach (object item in FontBox.Items)
+        {
+            if (item is ComboBoxItem { Tag: string tag } &&
+                string.Equals(tag, want, StringComparison.OrdinalIgnoreCase))
+            {
+                hit = (ComboBoxItem)item;
+                break;
+            }
+        }
+        if (hit == null && want.Length > 0)
+        {
+            bool known = FontManager.IsKnownFamily(want);
+            hit = MakeFontItem(want, known
+                ? FontManager.DisplayName(want)
+                : Loc.F("{0}（本机没有）", want));
+            FontBox.Items.Insert(1, hit);
+        }
+
+        FontBox.SelectedItem = hit ?? (FontBox.Items.Count > 0 ? FontBox.Items[0] : null);
+    }
+
+    /// <summary>
+    /// 一项字体条目：内容就是字体名，**用这个字体自己渲染**（下拉里一眼看出是什么字）。
+    /// 后面挂出厂链做缺字兜底，否则只有拉丁字母的字体在这里会显成豆腐块。
+    /// </summary>
+    private static ComboBoxItem MakeFontItem(string tag, string text) => new()
+    {
+        Content = text,
+        Tag = tag,
+        FontFamily = FontManager.PreviewFamily(tag),
+    };
+
+    /// <summary>过滤器输入框：输入即过滤，选中的字体不会被过滤掉（见 SelectFontItem）。</summary>
+    private void OnFontSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_host == null) return;
+        var g = _host.Settings.Global;
+        _suppress = true;
+        BuildFontList(FontSearchBox.Text);
+        SelectFontItem(g.UiFont);
+        _suppress = false;
+    }
+
+    /// <summary>在过滤器里按 ↓ / Enter 直接进下拉，少一次点击。</summary>
+    private void OnFontSearchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Down or Key.Enter)) return;
+        FontBox.Focus();
+        FontBox.IsDropDownOpen = true;
+        e.Handled = true;
+    }
+
+    private void OnFontChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        if (FontBox.SelectedItem is not ComboBoxItem { Tag: string tag }) return;
+        var g = _host.Settings.Global;
+        g.UiFont = FontManager.Normalize(tag);
+        FontManager.Apply(g.UiFont, g.UiFontMono);
+        Save();
+        _host.Notify(Loc.F("界面字体已改为 {0}", FontDescription(g.UiFont)));
+    }
+
+    /// <summary>「恢复默认」：改回出厂字体（微软雅黑 + 西文兜底），顺手清掉过滤器。</summary>
+    private void OnResetFont(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        var g = _host.Settings.Global;
+        g.UiFont = "";
+        FontManager.Apply("", g.UiFontMono);
+        _suppress = true;
+        if (FontSearchBox != null) FontSearchBox.Text = "";
+        BuildFontList("");
+        SelectFontItem("");
+        _suppress = false;
+        Save();
+        _host.Notify(Loc.T("已恢复默认字体"));
+    }
+
+    /// <summary>「重新扫描」：软件开着的时候装了新字体，点它重读一次系统字体表。</summary>
+    private void OnRescanFonts(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+        FontManager.InvalidateInstalled();
+        var g = _host.Settings.Global;
+        _suppress = true;
+        BuildFontList(FontSearchBox?.Text);
+        SelectFontItem(g.UiFont);
+        _suppress = false;
+        _host.Notify(Loc.F("字体列表已刷新：{0} 种", FontManager.Installed().Count));
+    }
+
+    private void OnFontMonoChanged(object sender, RoutedEventArgs e)
+    {
+        if (_host == null || _suppress) return;
+        var g = _host.Settings.Global;
+        g.UiFontMono = FontMonoBox.IsChecked == true;
+        FontManager.Apply(g.UiFont, g.UiFontMono);
+        Save();
+    }
+
+    /// <summary>提示文案里的字体名：空 = 出厂字体。</summary>
+    private static string FontDescription(string? family)
+    {
+        string name = FontManager.Normalize(family);
+        return name.Length == 0 ? Loc.T("默认（微软雅黑）") : name;
+    }
     private void OnThemeChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_host == null || _suppress) return;
@@ -1285,18 +1456,19 @@ public partial class SettingsView : UserControl
     /// <summary>
     /// 出图用：滚到「外观」区。
     ///
-    /// 界面语言这一行在页面下部、默认窗口高度下正好落在折叠线以下 ——
-    /// 不滚过去，截图回归就永远看不到"语言下拉里到底显示了什么"
-    /// （这个下拉曾经显示成 <c>LocLanguage { … }</c>，就是因为没人看见过它）。
+    /// 定位点从「界面语言」那一行改成了「主题」那一行（v1.4.3）：外观卡里多了
+    /// 「界面字体」「等宽区域也跟随」两行，按页面下部那个下拉往上量 130 像素
+    /// 会把卡顶（外观标题 / 主题 / 界面字体）整块切掉 —— 那张图正是用来看
+    /// "字体下拉里到底显示了什么"的，切掉就等于白截。
     /// </summary>
     internal void ScrollToAppearanceForRender()
     {
-        // 按"语言行在内容里的绝对纵坐标"直接定位，比 BringIntoView 可靠：
+        // 按"主题行在内容里的绝对纵坐标"直接定位，比 BringIntoView 可靠：
         // BringIntoView 只保证"露出一部分"，可能把卡片标题顶出可视区。
         if (RootScroll.Content is not System.Windows.FrameworkElement content) return;
         RootScroll.UpdateLayout();
-        double y = LanguageBox.TransformToAncestor(content).Transform(default).Y;
-        RootScroll.ScrollToVerticalOffset(Math.Max(0, y - 130));
+        double y = ThemeBox.TransformToAncestor(content).Transform(default).Y;
+        RootScroll.ScrollToVerticalOffset(Math.Max(0, y - 96));
         RootScroll.UpdateLayout();
     }
 

@@ -8,7 +8,7 @@
         SizeToContent="WidthAndHeight" ResizeMode="NoResize"
         WindowStartupLocation="Manual" ShowActivated="True"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}"
+        FontFamily="{DynamicResource Font.Ui}"
         SnapsToDevicePixels="True" UseLayoutRounding="True"
         Loaded="OnLoaded" PreviewKeyDown="OnPreviewKeyDown">
     <!--
@@ -103,6 +103,21 @@
             </Setter>
             <EventSetter Event="MouseEnter" Handler="OnRowMouseEnter" />
             <EventSetter Event="MouseLeave" Handler="OnRowMouseLeave" />
+            <Style.Triggers>
+                <!-- 禁用态（v1.5.1 / v1.5 改绑 IsEnabled）：附加菜单顶部「打开文件所在位置」
+                     在没有认出文件时置灰 —— 不是"前台是桌面/资源管理器"才灰，
+                     而是**只要没拿到文件就灰**（Electron / 浏览器这类程序永远拿不到，
+                     以前它们会亮着，点下去弹出一个莫名其妙的"选择要定位的文件"）。
+                     绑的是条目的 IsEnabled 而不是 Item.Enabled：后者是普通属性、不发通知，
+                     预热回来后改成灰的也刷不出来（菜单已经上屏了）。
+                     只降透明度、不改行高与内边距 —— 菜单宽度是钉死的，多一个视觉状态不能让它跳。
+                     IsHitTestVisible 一起关掉：鼠标落在灰条上不该触发悬停选中，
+                     键盘那一路由 Accept 里的判断兜住。 -->
+                <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                    <Setter Property="Opacity" Value="0.4" />
+                    <Setter Property="IsHitTestVisible" Value="False" />
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
     </Window.Resources>
 
@@ -120,14 +135,35 @@
         </Border.Effect>
 
         <StackPanel>
-            <!-- 标题行：只有菜单名。v1.3.17 起不再显示任何说明/介绍文字
-                 （用户要求"中键菜单上不能显示中键菜单的相关介绍"），Hint 为空时整块折叠。 -->
-            <StackPanel x:Name="TitleRow" Margin="10,5,10,0">
-                <TextBlock x:Name="MenuTitleText" Style="{StaticResource Text.Body}" FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="MenuHintText" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0"
-                           TextWrapping="Wrap" Visibility="Collapsed" />
-            </StackPanel>
+            <!-- 标题行 + 右上角收藏星标（v1.5.0）。
+                 星标只给"附加菜单"这一路用（构造时传了 FavoriteTarget 才显示）：
+                 手势菜单是用户自己配的一份动作清单，"收藏当前位置"在那里没有意义。
+                 标题行在附加菜单里是收起的（用户要求不显示菜单名），但星标照旧在右上角。 -->
+            <Grid x:Name="HeaderRow" Margin="4,4,4,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 标题行：只有菜单名。v1.3.17 起不再显示任何说明/介绍文字
+                     （用户要求"中键菜单上不能显示中键菜单的相关介绍"），Hint 为空时整块折叠。 -->
+                <StackPanel x:Name="TitleRow" Grid.Column="0" Margin="6,1,0,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="MenuTitleText" Style="{StaticResource Text.Body}" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="MenuHintText" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0"
+                               TextWrapping="Wrap" Visibility="Collapsed" />
+                </StackPanel>
+
+                <!-- 收藏：把当前网页 / 当前文件夹 / 当前程序 变成一条 Qbar 固定项。
+                     点它 = 关掉菜单 + 弹「收藏到 Qbar」，所以在菜单里不需要第二个按钮。 -->
+                <Button x:Name="FavoriteButton" Grid.Column="1"
+                        Style="{StaticResource Button.Icon}"
+                        Width="24" Height="24" FontSize="12" Padding="0"
+                        Content="&#xE734;"
+                        ToolTip="{loc:T '收藏当前位置到 Qbar'}"
+                        Visibility="Collapsed"
+                        Click="OnFavoriteClick" />
+            </Grid>
 
             <Border x:Name="TitleDivider" Style="{StaticResource Divider}" Margin="10,8,10,4" />
 

@@ -56,6 +56,29 @@ internal static class QuickSwitchFolderProbe
         }
     }
 
+    /// <summary>
+    /// 指定资源管理器窗口正在浏览的目录（v1.5.0，附加菜单的收藏用）。
+    ///
+    /// 与 <see cref="ExplorerFolder"/> 的区别：那个是"最前台或者第一个"，
+    /// 而收藏必须认准**用户点的那个窗口** —— 桌面上开着三个资源管理器时，
+    /// 取错一个就会收藏到别的目录去。先走 Shell.Application 的 Document.Folder.Self.Path
+    /// （面包屑/库/网络位置都能给出真实路径），拿不到再退回地址栏 UIA。
+    /// </summary>
+    public static string? ExplorerFolderOf(nint hwnd)
+    {
+        if (hwnd == 0) return null;
+        try
+        {
+            if (TryExplorerCom(hwnd, out string comPath)) return comPath;
+            return FolderOf(hwnd);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Warn("[收藏] 取资源管理器目录失败：" + ex.Message);
+            return null;
+        }
+    }
+
     private static bool TryExplorerCom(nint preferred, out string path)
     {
         path = "";

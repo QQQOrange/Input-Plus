@@ -5,7 +5,7 @@
         Title="{loc:T '自定义按键'}" Width="470" Height="416" SizeToContent="Manual"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterScreen" ShowInTaskbar="False" Topmost="True"
-        ResizeMode="NoResize" FontFamily="{StaticResource Font.Ui}">
+        ResizeMode="NoResize" FontFamily="{DynamicResource Font.Ui}">
 
     <Grid Margin="14">
         <!-- 三层递减底衬模拟柔和投影（理由同 QbarWindow：不用 DropShadowEffect，也不留硬边） -->

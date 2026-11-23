@@ -10,7 +10,7 @@
         ShowInTaskbar="False"
         Background="{DynamicResource Brush.Surface}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
 
     <StackPanel Margin="24">
         <TextBlock Text="{loc:T '按一个键'}" FontSize="15" FontWeight="SemiBold" />

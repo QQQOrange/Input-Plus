@@ -128,6 +128,37 @@ internal static class HookHostLauncher
         return false;
     }
 
+    /// <summary>
+    /// 只要"普通权限"、但参数是**已经拼好的一行**（v1.5.1，「打开文件所在位置」用）。
+    ///
+    /// 为什么不复用上面那个 string[] 版本：它会把每个参数再用
+    /// <see cref="BuildArgumentLine"/> 包一层引号并转义，而 explorer 要的是
+    /// `/select,"D:\a b\x.pdf"` 这种**整体一对引号**的写法 —— 二次包装之后参数会变成
+    /// `"/select,\"D:\a b\x.pdf\""`，explorer 认不出来，于是"点了没反应"。
+    /// </summary>
+    internal static bool TryStartMediumRaw(string exe, string argumentLine, out string detail)
+    {
+        LastDetail = "";
+
+        if (TryShellExecuteRaw(exe, argumentLine))
+        {
+            LastMode = HostLaunchMode.ShellExecute;
+            LastDetail = "经 Shell.Application 启动（预期普通权限）";
+            detail = LastDetail;
+            return true;
+        }
+
+        if (TryExplorerRaw(argumentLine))
+        {
+            LastMode = HostLaunchMode.Explorer;
+            LastDetail = "经 explorer.exe 转发启动（预期普通权限）";
+            detail = LastDetail;
+            return true;
+        }
+
+        detail = LastDetail.Length > 0 ? LastDetail : "借 explorer 之手失败";
+        return false;
+    }
     /// <summary>把参数拼成一行（含空格的加引号）。</summary>
     internal static string BuildArgumentLine(string[] args)
     {
@@ -148,7 +179,10 @@ internal static class HookHostLauncher
     /// 由它 CreateProcess，子进程就是 medium IL。用反射调用是为了不引入
     /// COM 互操作程序集（也不需要 dynamic / Microsoft.CSharp）。
     /// </summary>
-    private static bool TryShellExecute(string exe, string[] args)
+    private static bool TryShellExecute(string exe, string[] args) => TryShellExecuteRaw(exe, BuildArgumentLine(args));
+
+    /// <summary>同上，但参数行已经拼好、不再二次加引号。</summary>
+    private static bool TryShellExecuteRaw(string exe, string argumentLine)
     {
         object? shell = null;
         try
@@ -164,7 +198,7 @@ internal static class HookHostLauncher
                 BindingFlags.InvokeMethod,
                 null,
                 shell,
-                new object[] { exe, BuildArgumentLine(args), AppContext.BaseDirectory, "open", 0 });
+                new object[] { exe, argumentLine, AppContext.BaseDirectory, "open", 0 });
 
             return true;
         }
@@ -185,11 +219,13 @@ internal static class HookHostLauncher
     }
 
     /// <summary>explorer.exe "程序" 参数… —— explorer 把请求转给已在运行的 shell（普通权限）。</summary>
-    private static bool TryExplorer(string exe, string[] args)
+    private static bool TryExplorer(string exe, string[] args) => TryExplorerRaw("\"" + exe + "\" " + BuildArgumentLine(args));
+
+    /// <summary>同上，但参数行已经拼好。</summary>
+    private static bool TryExplorerRaw(string line)
     {
         try
         {
-            string line = "\"" + exe + "\" " + BuildArgumentLine(args);
             var psi = new ProcessStartInfo("explorer.exe", line) { UseShellExecute = true };
             using var p = Process.Start(psi);
             return true;

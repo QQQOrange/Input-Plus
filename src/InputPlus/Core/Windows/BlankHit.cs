@@ -172,6 +172,56 @@ internal static class BlankHit
     }
 
     /// <summary>
+    /// 指针此刻是不是在**系统桌面**上（Progman / WorkerW / shell 宿主，含桌面图标列表）。
+    ///
+    /// 和 <see cref="AtPoint"/> 的区别：这里只做类名与 shell 窗口判断，
+    /// **不问**图标列表（不发 LVM_HITTEST）、**不碰** UIA，全程只是几次窗口查询。
+    /// 它是钩子回调里用的"快速门"：中键只在桌面上才归本程序管（见 GestureService.OnButton），
+    /// 别处的每一次中键都要在 1ms 级别放行，不能为了判个命中把浏览器卡一下。
+    ///
+    /// 严格排除资源管理器文件夹窗口：那里的 SysListView32 也叫这个类名，
+    /// 用 <see cref="IsDesktopClass"/> 会把"文件夹里的空白"当成桌面，
+    /// 于是中键在资源管理器里被吞掉 —— 正是用户说的"其他页面别动我的中键"。
+    /// </summary>
+    internal static bool DesktopShellAtPoint(NativeMethods.POINT pt)
+    {
+        try
+        {
+            IntPtr hwnd = NativeMethods.WindowFromPoint(pt);
+            if (hwnd == IntPtr.Zero) return false;
+
+            string cls = WindowService.ClassNameOf(hwnd) ?? "";
+            IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+            string rootCls = root == IntPtr.Zero ? "" : (WindowService.ClassNameOf(root) ?? "");
+
+            /* 桌面的三种形态：宿主窗口本身就是 Progman/WorkerW；
+             * 指针落在 SHELLDLL_DefView 或它的 SysListView32 上（root 才是 Progman）；
+             * 以及 GetShellWindow() 兜底（换宿主、多显示器拼接时类名会变）。 */
+            return IsDesktopShellClasses(cls, rootCls, root != IntPtr.Zero && root == NativeMethods.GetShellWindow());
+        }
+        catch (Exception ex)
+        {
+            /* 判不出来就当"不在桌面"：宁可这次中键走原生行为，也不要乱吞。 */
+            CoreLog.Swallow(ex, "中键菜单：桌面快速判定");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="DesktopShellAtPoint"/> 的判定本体（纯函数，自检可以直接喂类名）。
+    ///
+    /// 注意这里是**白名单**，不是 <see cref="IsDesktopClass"/> 那种"含 SysListView32"的宽判据：
+    /// 资源管理器文件夹窗口里也有 SysListView32，按宽判据会把"文件夹里的空白"当桌面，
+    /// 于是中键在资源管理器里被吞掉。
+    /// </summary>
+    internal static bool IsDesktopShellClasses(string cls, string rootCls, bool rootIsShell)
+    {
+        if (rootIsShell) return true;
+        if (cls is "Progman" or "WorkerW" or DefViewClass) return true;
+        return rootCls is "Progman" or "WorkerW";
+    }
+
+    /// <summary>
     /// 是不是"桌面"这一族窗口。抽成纯函数是为了自检能直接喂类名，不用真开桌面。
     /// </summary>
     internal static bool IsDesktopClass(string cls, string rootCls)

@@ -874,6 +874,39 @@ public static class SettingsStore
             }
         }
 
+        /* 9：Twitter 改名 X（v1.4.3）。
+         *
+         * 站方早就把名字改成 X 了，搜索指令里还写着「Twitter」、链接还是
+         * twitter.com/search —— 用户按「x 网站」去找是找不到的。关键字一起
+         * 缩成 x（更短、和站名一致），备注写「X 网站」。
+         *
+         * 只动"还是老 twitter 搜索链接"的那条：用户自己把链接改到别处的，
+         * 说明他在拿这个关键字干别的，保留原样。 */
+        if (s.BuiltinEnginesVersion < 9)
+        {
+            var oldTwitter = s.Search.FirstOrDefault(e =>
+                e.Key.Equals("tw2", StringComparison.OrdinalIgnoreCase));
+            if (oldTwitter != null &&
+                (oldTwitter.Value ?? "").Contains("twitter.com/search", StringComparison.OrdinalIgnoreCase))
+            {
+                var existingX = s.Search.FirstOrDefault(e =>
+                    e.Key.Equals("x", StringComparison.OrdinalIgnoreCase));
+                if (existingX == null)
+                {
+                    oldTwitter.Key = "x";
+                    oldTwitter.Value = "https://x.com/search?q={q}";
+                    oldTwitter.Comment = "X 网站";
+                    oldTwitter.EngineIcon = "twitter";   // 内置图标表里 X 用的还是这一颗
+                    CoreLog.Info("搜索引擎 tw2 已改名为 x（Twitter → X 网站）");
+                }
+                else
+                {
+                    s.Search.Remove(oldTwitter);
+                    CoreLog.Info("搜索引擎 tw2 与 x 重复，移除旧 tw2");
+                }
+            }
+        }
+
         if (s.BuiltinEnginesVersion >= DefaultSettings.BuiltinEnginesVersion) return false;
 
         // 旧版用过、现在已改名的关键字：直接删掉，免得用户看到 g 和 go 两个 Google。
@@ -2009,7 +2042,7 @@ public static class DefaultSettings
     ///   8 = 合并同一站点的重复条目（老关键字撞名留下的豆瓣 / Reddit / 搜狗 …），
     ///       并把图标改回与站点相符的那个
     /// </summary>
-    public const int BuiltinEnginesVersion = 8;
+    public const int BuiltinEnginesVersion = 9;
 
     /// <summary>
     /// 3 = 内置网址条目补 EngineIcon（图标随程序走，不再依赖站点 favicon 缓存）
@@ -2419,7 +2452,7 @@ new() { Key = "notepad", Value = "notepad.exe", Comment = "记事本" },
             new() { Key = "ti", Value = "https://www.tiktok.com/search?q={q}", Comment = "TikTok", EngineIcon = "tiktok" },
             new() { Key = "tu", Value = "https://www.tumblr.com/search/{q}", Comment = "Tumblr", EngineIcon = "tumblr" },
             new() { Key = "tw", Value = "https://www.twitch.tv/search?term={q}", Comment = "Twitch", EngineIcon = "twitch" },
-            new() { Key = "tw2", Value = "https://twitter.com/search?q={q}", Comment = "Twitter", EngineIcon = "twitter" },
+            new() { Key = "x", Value = "https://x.com/search?q={q}", Comment = "X 网站", EngineIcon = "twitter" },
             new() { Key = "ud", Value = "https://www.udemy.com/courses/search/?q={q}", Comment = "Udemy", EngineIcon = "udemy" },
             new() { Key = "un", Value = "https://unsplash.com/s/photos/{q}", Comment = "Unsplash", EngineIcon = "unsplash" },
             new() { Key = "vi", Value = "https://vimeo.com/search?q={q}", Comment = "Vimeo", EngineIcon = "vimeo" },

@@ -559,6 +559,160 @@ public static class WindowService
         Task.Run(() => WaitAndActivateFolder(before, leaf));
     }
 
+    // ================= 打开文件所在位置（v1.5.1） =================
+
+    /// <summary>「打开文件所在位置」干了什么 —— 调用方据此决定提示哪一句。</summary>
+    /// <param name="Launched">至少一条通道成功把请求交给 shell 了。</param>
+    /// <param name="Reachable">目标位置可访问（false 时后面几个字段都没意义）。</param>
+    /// <param name="WentUp">原文件已经不在了，打开的是上溯出来的上级目录。</param>
+    /// <param name="Folder">实际打开的目录。</param>
+    /// <param name="Channel">走通的那条通道名（日志与排查用）。</param>
+    /// <param name="Why">失败原因。</param>
+    public readonly record struct RevealOutcome(
+        bool Launched, bool Reachable, bool WentUp, string Folder, string Channel, string Why);
+
+    /// <summary>
+    /// 在资源管理器里定位一个文件（或只打开它的父目录），并把它带到最前面。
+    ///
+    /// 与 <see cref="OpenFolderInForeground"/> 的分工：那个是"打开一个文件夹"，
+    /// 这个是"打开这个文件所在的位置，并（默认）选中它"。两者共用同一套
+    /// <c>AllowSetForegroundWindow</c> + <see cref="WaitAndActivateFolder"/>，
+    /// 不另起一套启动逻辑。
+    ///
+    /// **绝不**把文件路径交给 <c>Process.Start(路径)</c> / ShellExecute：
+    /// 那会**执行**这个文件（双击效果），而不是打开文件夹。
+    /// 提权之后这条禁令更重 —— 那等于"用管理员身份打开这个文档"。
+    ///
+    /// 通道顺序按身份走（见 <see cref="RevealStrategy"/>）：未提权先 in-proc 选中，
+    /// 提权先借 shell 之手（medium IL），逐条失败才退到下一条。
+    ///
+    /// 这个方法是**同步**的（in-proc 那条最多等 3 秒），调用方负责放到后台线程，
+    /// 并在 5 秒没返回时给"网络位置无响应"的提示。
+    /// </summary>
+    public static RevealOutcome RevealInForeground(string path, bool openFolderOnly)
+    {
+        RevealTarget target;
+        try { target = RevealPath.Plan(path, openFolderOnly); }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "打开位置：解析路径");
+            return new RevealOutcome(false, false, false, "", "", ex.Message);
+        }
+
+        if (!target.Reachable)
+            return new RevealOutcome(false, false, true, "", "", "文件与它的上级目录都不可达");
+
+        var before = SnapshotExplorerWindows();
+        string argumentLine = RevealPath.ExplorerArguments(target);
+        string inProcPath = target.Select ? target.Path : target.Folder;
+
+        AllowSetForegroundWindow(ASFW_ANY);
+
+        bool elevated = InputPlus.Core.App.ElevationState.Elevated;
+        string lastWhy = "";
+        foreach (RevealChannel channel in RevealStrategy.Plan(elevated))
+        {
+            bool ok;
+            switch (channel)
+            {
+                case RevealChannel.InProcSelect:
+                    ok = TryInProcReveal(inProcPath, out string whyInProc);
+                    if (!ok) lastWhy = "in-proc 选中失败：" + whyInProc;
+                    break;
+
+                case RevealChannel.ShellLaunch:
+                    ok = InputPlus.Core.App.HookHostLauncher.TryStartMediumRaw("explorer.exe", argumentLine, out string whyShell);
+                    if (!ok) lastWhy = "借 shell 之手失败：" + whyShell;
+                    break;
+
+                default:
+                    ok = TryStartExplorerDirect(argumentLine, out string whyDirect);
+                    if (!ok) lastWhy = "直接启动 explorer 失败：" + whyDirect;
+                    break;
+            }
+
+            if (!ok) continue;
+
+            /* 置前仍然交给原来那套异步等待：explorer 冷启动要几百毫秒，
+             * 在这里同步等会把调用方（动作队列 / 后台线程）堵住。 */
+            string leaf = RevealPath.LeafOf(target.Select ? target.Path : target.Folder);
+            Task.Run(() => WaitAndActivateFolder(before, leaf));
+
+            CoreLog.Info($"[打开位置] 通道 {RevealStrategy.Name(channel)}（提权={(elevated ? "是" : "否")}）" +
+                         $"目录={target.Folder} 选中={(target.Select ? target.Path : "否")}" +
+                         (target.WentUp ? "（文件已不在，已上溯）" : ""));
+            return new RevealOutcome(true, true, target.WentUp, target.Folder, RevealStrategy.Name(channel), "");
+        }
+
+        CoreLog.Warn($"[打开位置] 三条通道全部失败：{lastWhy}");
+        return new RevealOutcome(false, true, target.WentUp, target.Folder, "", lastWhy);
+    }
+
+    /// <summary>
+    /// in-proc 调 <c>SHOpenFolderAndSelectItems</c>：复用已打开的同名文件夹窗口 + 自带选中。
+    ///
+    /// 为什么要一条**专用 STA 线程**：这个 API 走 shell 的 COM 对象，调用线程必须是 STA；
+    /// 而调用我们的线程通常是线程池线程（MTA）。在线程池线程上
+    /// <c>CoInitializeEx(APARTMENTTHREADED)</c> 一旦撞上"已经初始化成 MTA"就再也改不回来
+    /// （RPC_E_CHANGED_MODE），而且那是共享线程，改它的 apartment 属于污染全局状态。
+    /// 自己起一条线程、调完就退，最干净。3 秒还不返回就判失败，交给下一条通道。
+    /// </summary>
+    private static bool TryInProcReveal(string path, out string why)
+    {
+        why = "";
+        if (string.IsNullOrWhiteSpace(path)) { why = "路径为空"; return false; }
+
+        int hr = -1;
+        string detail = "";
+        var thread = new Thread(() =>
+        {
+            int init = CoInitializeEx(IntPtr.Zero, COINIT_APARTMENTTHREADED);
+            bool owned = init >= 0;
+            IntPtr pidl = IntPtr.Zero;
+            try
+            {
+                if (init < 0 && init != unchecked((int)0x80010106)) { detail = $"CoInitializeEx 0x{init:X8}"; return; }
+
+                hr = SHParseDisplayName(path, IntPtr.Zero, out pidl, 0, out _);
+                if (hr != 0 || pidl == IntPtr.Zero) { detail = $"SHParseDisplayName 0x{hr:X8}"; hr = hr == 0 ? -1 : hr; return; }
+
+                hr = SHOpenFolderAndSelectItems(pidl, 0, null, 0);
+                if (hr != 0) detail = $"SHOpenFolderAndSelectItems 0x{hr:X8}";
+            }
+            catch (Exception ex) { detail = ex.Message; hr = -1; }
+            finally
+            {
+                if (pidl != IntPtr.Zero) { try { ILFree(pidl); } catch { } }
+                if (owned) { try { CoUninitialize(); } catch { } }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "InputPlus-Reveal",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+
+        try { thread.Start(); }
+        catch (Exception ex) { why = ex.Message; return false; }
+
+        if (!thread.Join(3000)) { why = "3 秒内没返回（shell 忙碌或网络位置无响应）"; return false; }
+        if (hr != 0) { why = detail.Length > 0 ? detail : $"0x{hr:X8}"; return false; }
+        return true;
+    }
+
+    /// <summary>最后一条通道：自己启动 explorer.exe。提权时会继承提升令牌（见 RevealStrategy）。</summary>
+    private static bool TryStartExplorerDirect(string argumentLine, out string why)
+    {
+        why = "";
+        if (argumentLine.Length == 0) { why = "参数为空"; return false; }
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", argumentLine) { UseShellExecute = true });
+            return true;
+        }
+        catch (Exception ex) { why = ex.Message; return false; }
+    }
+
     /// <summary>文件夹名（用于在"复用已有窗口"时按标题认人）。</summary>
     internal static string LeafNameOf(string path)
     {

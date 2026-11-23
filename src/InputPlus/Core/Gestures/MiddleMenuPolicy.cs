@@ -27,6 +27,9 @@ internal enum MiddleMenuAction
 /// <summary>
 /// <see cref="MiddleMenuPolicy.Decide"/> 的输入。全是很便宜的布尔值，
 /// 自检可以直接拼出来喂，不需要真的动鼠标。
+///
+/// <c>Takeable</c>（v1.5.0 之前叫 Blank）不再是"桌面空白"的同义词：
+/// 桌面要求空白（压在图标上交给 shell），资源管理器与文件对话框**无条件**为 true。
 /// </summary>
 internal readonly record struct MiddleMenuInput(
     bool MiddleVk,
@@ -37,7 +40,7 @@ internal readonly record struct MiddleMenuInput(
     bool InScope,
     bool Taskbar,
     bool Fullscreen,
-    bool Blank,
+    bool Takeable,
     bool HasMiddleGesture);
 
 /// <summary>
@@ -46,6 +49,26 @@ internal readonly record struct MiddleMenuInput(
 /// （那个服务要读磁盘、要后台采集，自检里根本不该被拖进来）。
 /// </summary>
 internal readonly record struct MiddleMenuSuggestion(string Title, string Target, bool IsUrl);
+
+/// <summary>
+/// 附加菜单顶部"当前文件"两个入口的状态（v1.5.1）。
+///
+/// 由 GestureService 在**弹菜单之前**抓：那一刻前台还是用户正在用的程序，
+/// 菜单一 Show 前台就变成我们自己了（所以这里不能自己去 GetForegroundWindow）。
+/// </summary>
+/// <param name="Actionable">前台是资源管理器 / 桌面 / 任务栏时为 false —— 两个入口一起置灰。</param>
+/// <param name="ProcessName">前台程序名（排查用，也显示在第二行小字里）。</param>
+/// <param name="FileName">已经识别到的文件名（预热命中时才有）。</param>
+/// <param name="AlreadyFavorited">这个文件已经在固定项里了 → 星标显示实心。</param>
+internal readonly record struct ForegroundFileState(
+    bool Actionable,
+    string ProcessName,
+    string FileName,
+    bool AlreadyFavorited)
+{
+    /// <summary>"还没识别到"的空状态：两条入口照常出现，但第二行没有文件名。</summary>
+    internal static ForegroundFileState ForProcess(string processName) => new(true, processName, "", false);
+}
 
 /// <summary>
 /// 中键菜单的**纯策略**：决策表 + 菜单内容构造。
@@ -72,9 +95,10 @@ internal static class MiddleMenuPolicy
     /// 4. 开关关 → 全部恢复原样
     /// 5. 任务栏/托盘 → 让给 Explorer
     /// 6. 全屏程序 → 不弹（**独立于**手势的那个"全屏不接管"开关，见 DECISIONS）
-    /// 7. 不在范围内 → 不管
-    /// 8. 配了中键手势 → 按下交给手势；抬起时"没成笔"才弹菜单
-    /// 9. 没配手势 → 按下先吞，抬起再看（路径 A）
+    /// 7. 配了中键手势 → 按下交给手势（**不看范围**，手势在任何程序里都该能用）；
+    ///    抬起时"没成笔"才回头问菜单：范围里且可弹 → 弹，否则交给补发
+    /// 8. 没配手势 + 不在范围内 → 不管（浏览器正文、编辑器、终端…的原生中键）
+    /// 9. 没配手势 + 在范围内 → 按下先吞，抬起再看（路径 A）
     /// </summary>
     internal static MiddleMenuAction Decide(in MiddleMenuInput i)
     {
@@ -84,18 +108,29 @@ internal static class MiddleMenuPolicy
         if (!i.Enabled) return MiddleMenuAction.Ignore;
         if (i.Taskbar) return MiddleMenuAction.Ignore;
         if (i.Fullscreen) return MiddleMenuAction.Ignore;
-        if (!i.InScope) return MiddleMenuAction.Ignore;
 
+        /* ── 手势优先于"弹菜单的作用范围"（v1.5 修） ─────────────────────
+         *
+         * 「范围」（桌面 / 资源管理器 / 文件对话框）回答的是**菜单能不能在这里弹**，
+         * 它从来不是"这颗键归不归我们"的回答。v1.5.0 把两件事合成了一条 if，
+         * 代价是：WPS / 浏览器 / Electron 程序里，配了中键手势的按下**连手势都不再开始**
+         * （OnButton 里那句"不在附加菜单的范围里：中键原样放行"把整下放行了）。
+         * 现场日志 `arm: vk=0x04 hasGesture=True` 后面紧跟这一句，就是这条。
+         *
+         * 分工改回来：
+         *   · 这颗键在这里配了手势 → 按下照样接管，手势在任何程序里都能用；
+         *     松手时"没成笔"才回头问菜单（能弹就弹，不能弹就补发一次原生点击）。
+         *   · 没配手势 → 只有落在范围内才接管（浏览器自动滚动、编辑器粘贴照旧）。 */
         if (i.HasMiddleGesture)
         {
-            /* 手势优先：按下时把这一整下让给手势跟踪。真正决定"要不要弹菜单"的是松手时
-             * Finish() 里的 extent < MinMove —— 那时才知道用户是点了一下还是划了一笔。 */
             if (i.Down) return MiddleMenuAction.StartGesture;
-            return i.Blank ? MiddleMenuAction.MenuInsteadOfTap : MiddleMenuAction.Ignore;
+            return i.InScope && i.Takeable ? MiddleMenuAction.MenuInsteadOfTap : MiddleMenuAction.Ignore;
         }
 
+        if (!i.InScope) return MiddleMenuAction.Ignore;
+
         if (!i.Down) return MiddleMenuAction.Ignore;
-        return i.Blank ? MiddleMenuAction.SwallowTap : MiddleMenuAction.Ignore;
+        return i.Takeable ? MiddleMenuAction.SwallowTap : MiddleMenuAction.Ignore;
     }
 
     /// <summary>
@@ -115,7 +150,8 @@ internal static class MiddleMenuPolicy
     internal static GestureMenuDef Build(
         AppSettings settings,
         IReadOnlyList<MiddleMenuSuggestion>? history = null,
-        IReadOnlyDictionary<string, string>? urlTitles = null)
+        IReadOnlyDictionary<string, string>? urlTitles = null,
+        ForegroundFileState? foreground = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -147,10 +183,43 @@ internal static class MiddleMenuPolicy
             def.Items.Add(item);
         }
 
+        /* ⓪ 当前文件的两个入口（v1.5.1）。
+         *
+         * 放最前是因为它俩的语义是"用户刚才在用的东西"，比任何固定项都更贴近当下；
+         * 编号快选 1/2 也就落在它们身上。
+         * foreground 为 null（手势菜单、自检的老用例）时整段不出现 ——
+         * 结构与 v1.5.0 完全一致，老断言不用改。 */
+        if (foreground is { } fg)
+        {
+            string note = fg.FileName.Length > 0
+                ? fg.FileName
+                : (fg.Actionable ? Loc.T("识别中…") : Loc.T("前台没有打开文件"));
+
+            /* v1.5.2：**只留「打开文件所在位置」**。
+             * 「收藏当前文件」已经并进右上角那颗星（星标弹出的收藏对话框里多了一条
+             * 「它正在打开：xxx」+「收藏这个文件」），功能重复摆两处只会让人犹豫点哪个。
+             *
+             * v1.5：**只有"已经认出文件"才点亮**。
+             * 以前 Enabled = fg.Actionable，而 Actionable 只回答"前台不是桌面/资源管理器"，
+             * 于是 DeepSeekRuntime / Edge 这类程序（Electron / 浏览器，句柄里根本没有用户文件）
+             * 里这一条永远是亮的；点下去识别不到，就弹出"选择要定位的文件" ——
+             * 用户看到的是"我点了一下，它让我自己找个文件"，完全不知道发生了什么。
+             * 现在默认灰，预热（识别）回来的那一拍才根据 hasFile 决定亮不亮
+             * （见 GestureMenuWindow.MarkForegroundFile）。 */
+            AddTop(new GestureMenuItem
+            {
+                Title = Loc.T("打开文件所在位置"),
+                Glyph = "\uE838",                                    // MDL2：FolderOpen
+                Note = note,
+                Action = "revealForegroundFile",
+                Enabled = fg.Actionable && fg.FileName.Length > 0,
+            });
+        }
         // ① 固定项（每个条目自己在 Qbar 设置里勾）
         /* 给「历史记录 / 命令 / 打开设置」各留一格：固定项再多也不能把它们挤掉 ——
          * 菜单最后一条总是"打开设置"，没了就等于用户被关在菜单里。 */
-        int pinnedCeiling = Math.Max(1, MaxTopLevel - 3);
+        /* 顶部多两条入口时，给固定项留的格子也要少两条（新入口和"打开设置"都不能被挤掉）。 */
+        int pinnedCeiling = Math.Max(1, MaxTopLevel - (foreground != null ? 4 : 3));
         int pinnedCount = 0;
         foreach (var pinned in (settings.Qbar?.Pinned ?? new List<QEntry>()).Where(p => p != null && p.ShowInMiddleMenu))
         {

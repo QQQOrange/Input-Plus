@@ -51,11 +51,21 @@ public sealed class QbarChip
     /// <summary>标签上的文字（没有图标时显示）。</summary>
     public string Label => string.IsNullOrWhiteSpace(DisplayName) ? Key : DisplayName;
 
+    /// <summary>
+    /// 条目的**备注**（没有备注就是空串，**不退回关键字**）。
+    ///
+    /// 与 <see cref="Label"/> 唯一的区别就是那条兜底：胶囊必须有个名字才点得动，
+    /// 所以 Label 会拿关键字兜；而 Qbar 的结果行按用户要求"没备注就只显示图标"，
+    /// 那里一律读这个值 —— 关键字在结果行里任何情况下都不出现。
+    /// </summary>
+    public string Note { get; init; } = "+";
+
     public static QbarChip FromEntry(ChipKind kind, QEntry entry) => new()
     {
         Kind = kind,
         Key = entry.Key,
         DisplayName = entry.DisplayName,
+        Note = (entry.Comment ?? "").Trim(),
         Value = entry.Value,
         IconPath = entry.IconPath,
         RunAsAdmin = entry.RunAsAdmin,

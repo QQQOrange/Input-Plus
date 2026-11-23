@@ -4728,5 +4728,20 @@
   "；已用本机配置覆盖云端": "; the cloud copy was overwritten with the local configuration",
   "；快照：": "; snapshot: ",
   "；接口额度剩余 ": "; API quota left: ",
-  "；需要时再点「检查更新」即可": "; click \"Check for updates\" again when needed"
+  "；需要时再点「检查更新」即可": "; click \"Check for updates\" again when needed",
+  "界面字体": "Interface font",
+  "预览：输入增强 Aa 0123": "Preview: Input Plus Aa 0123",
+  "重新扫描": "Rescan fonts",
+  "默认（微软雅黑）": "Default (Microsoft YaHei)",
+  "{0}（本机没有）": "{0} (not installed)",
+  "界面字体已改为 {0}": "Interface font changed to {0}",
+  "已恢复默认字体": "Default font restored",
+  "字体列表已刷新：{0} 种": "Font list refreshed: {0} fonts",
+  "等宽区域也跟随": "Monospaced areas follow too",
+  "系统里已安装的字体都能选：菜单、按钮和各附加功能窗口一起换，改完立即生效。": "Every installed font can be picked: menus, buttons and every add-on window change together, immediately.",
+  "Lua 脚本、公式输入、录制计时这几处。关掉就保持等宽字体（Cascadia Mono / Consolas）。": "Lua scripts, formula input and the recording clock. Turn it off to keep the monospaced font (Cascadia Mono / Consolas).",
+  "改回出厂字体（微软雅黑 + 西文兜底）。": "Back to the built-in font (Microsoft YaHei, with a Latin fallback).",
+  "刚装了新字体、下拉里还看不到时点这里。": "Click here when a newly installed font is still missing from the list.",
+  "搜索字体…": "Search fonts…",
+  "输入字体名过滤（中文或英文都行），按 ↓ 进入列表": "Type a font name to filter (Chinese or English); press ↓ to jump into the list"
 }

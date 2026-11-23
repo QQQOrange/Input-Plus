@@ -8,7 +8,7 @@
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         Background="{DynamicResource Brush.Background}"
         Foreground="{DynamicResource Brush.TextPrimary}"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
 
     <!-- 手势页右上那颗齿轮开的就是这个窗：开关快捷键 + 手势外观 + 手势参数，三张卡。
           以前这三块摊在页面顶部那张卡里，一展开就把手势列表挤没了；现在页面只留

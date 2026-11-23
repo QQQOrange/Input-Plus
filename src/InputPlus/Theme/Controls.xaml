@@ -12,7 +12,7 @@
 
     <!-- ============ 文本 ============ -->
     <Style x:Key="Text.Body" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
@@ -44,7 +44,7 @@
     </Style>
 
     <Style x:Key="Text.Mono" TargetType="TextBlock" BasedOn="{StaticResource Text.Body}">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Mono}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}" />
     </Style>
 
     <!-- ============ 卡片 ============ -->
@@ -93,7 +93,7 @@
 
     <!-- ============ 按钮 ============ -->
     <Style x:Key="Button.Base" TargetType="Button">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
@@ -185,7 +185,7 @@
         <Setter Property="BorderBrush" Value="{StaticResource Brush.BrandOnLight}" />
         <Setter Property="Foreground" Value="{StaticResource Brush.BrandOnLightText}" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Padding" Value="16,8" />
         <Setter Property="Cursor" Value="Hand" />
@@ -241,7 +241,7 @@
 
     <!-- ============ 输入框 ============ -->
     <Style x:Key="TextBox.Base" TargetType="TextBox">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="CaretBrush" Value="{DynamicResource Brush.Accent}" />
@@ -294,7 +294,7 @@
     </Style>
 
     <Style x:Key="ComboBox.Base" TargetType="ComboBox">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
@@ -353,7 +353,7 @@
     </Style>
 
     <Style TargetType="ComboBoxItem">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="Padding" Value="10,7" />
@@ -382,7 +382,7 @@
       在深色主题下会变成一块刺眼的白板，和周围控件完全不搭。
     -->
     <Style x:Key="PasswordBox.Base" TargetType="PasswordBox">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="CaretBrush" Value="{DynamicResource Brush.Accent}" />
@@ -835,7 +835,7 @@
 
     <!-- ============ 复选框 ============ -->
     <Style x:Key="CheckBox.Text" TargetType="CheckBox">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="Cursor" Value="Hand" />
@@ -875,7 +875,7 @@
 
     <!-- ============ 单选 ============ -->
     <Style TargetType="RadioButton">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Ui}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="FontSize" Value="{StaticResource Size.Text}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="Cursor" Value="Hand" />
@@ -1028,6 +1028,7 @@
          带 key 的样式只有显式 StaticResource 才会生效 —— 全程序 0 处引用，
          等于这条定义从来没起过作用，提示气泡在任何主题下都是系统白底。 -->
     <Style TargetType="ToolTip">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">
@@ -1109,6 +1110,7 @@
          默认的 WPF ContextMenu 是系统灰底、方角、无边框，在深色界面里特别突兀。
          这里统一成：卡片底 + 1px 边框 + 圆角 + 悬停高亮，勾选项用强调色对勾。 -->
     <Style TargetType="ContextMenu">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="HasDropShadow" Value="False" />
         <Setter Property="Template">
@@ -1128,6 +1130,7 @@
     </Style>
 
     <Style TargetType="MenuItem">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="Padding" Value="9,7" />

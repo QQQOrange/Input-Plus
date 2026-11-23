@@ -5,7 +5,7 @@
         Title="{loc:T '提示'}" SizeToContent="WidthAndHeight" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
         ShowActivated="False" Focusable="False" IsHitTestVisible="False"
-        FontFamily="{StaticResource Font.Ui}">
+        FontFamily="{DynamicResource Font.Ui}">
     <!-- 外观回到 v1.6.0 之前、也是 v1.0~v1.2 一直用的那一版：
          主题卡片 + 22px 图标 + 13px 文字，没有阴影、不居中。
          底色/可调白边仍由 ToastWindow.Apply 按 ToastStyles.Current 覆盖：

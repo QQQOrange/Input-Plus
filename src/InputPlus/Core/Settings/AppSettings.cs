@@ -382,6 +382,25 @@ public sealed class QEntry
     /// </summary>
     public bool ShowInMiddleMenu { get; set; }
 
+    /// <summary>
+    /// 「来源」：把这一条收进固定项时，前台程序是谁（例如 <c>wpspdf</c>、<c>notepad</c>）。
+    ///
+    /// 只用于排查 —— 用户报「这条怎么多出来的」时，日志里有它就能一句话答完。
+    /// **不参与排序**：固定项的顺序就是用户在设置页里拖出来的顺序，
+    /// 为一个来源字段去插队，等于把用户的手工排序弄乱。
+    /// </summary>
+    public string Source { get; set; } = "";
+
+    /// <summary>
+    /// 用过几次（v1.5.1）。目前只有「收藏当前文件」在"已经收藏过"时 +1 ——
+    /// 它是"这条确实被反复需要"的证据，将来清理长期不用的固定项要用它。
+    /// 老配置里没有这个字段，反序列化取默认值 0，不需要迁移。
+    /// </summary>
+    public int UseCount { get; set; }
+
+    /// <summary>最近一次用它的时间（本地时间）。null = 从没用过。</summary>
+    public DateTime? LastUsed { get; set; }
+
     /// <summary>标签上显示的名字：优先用备注，其次用关键字。</summary>
     /// <summary>
     /// 界面上显示的备注。
@@ -403,6 +422,10 @@ public sealed class QEntry
         EngineIcon = EngineIcon,
         RunAsAdmin = RunAsAdmin, Arguments = Arguments,
         ShowInMiddleMenu = ShowInMiddleMenu,
+        /* 这三个也要带上：收藏那条路靠它们做"已收藏过 → 次数 +1"，
+         * 漏了就等于每次双击都把证据抹掉（设置页里那份是活对象，
+         * 但备份/同步是走 Clone/序列化的，漏字段会在往返里丢）。 */
+        Source = Source, UseCount = UseCount, LastUsed = LastUsed,
     };
 }
 
@@ -594,6 +617,27 @@ public sealed class GlobalOptions
 
     /// <summary>主题：system / light / dark。</summary>
     public string Theme { get; set; } = "system";
+
+    /// <summary>
+    /// 界面字体：系统里**已安装字体**的族名（例如 <c>Microsoft YaHei UI</c>、<c>思源黑体 CN</c>）。
+    ///
+    /// 空字符串 = 出厂字体（<c>FontManager.BuiltInUi</c>：微软雅黑 + 西文兜底）。
+    /// 这个值一改，整个软件的界面文字立刻跟着变 —— 菜单、按钮、各页面、附加功能窗口、
+    /// 浮层与提示条都算，因为它们共用 <c>Font.Ui</c> 这一个资源键（见 FontManager 的说明）。
+    ///
+    /// 存的是**字体族名而不是索引**：换机后同名就还原，没装则整串退回出厂字体，
+    /// 不会因为"这台机器少了个字体"变成一片空白。
+    /// </summary>
+    public string UiFont { get; set; } = "";
+
+    /// <summary>
+    /// 等宽区域（Lua 脚本编辑器、公式输入、录制计时）是否也跟着 <see cref="UiFont"/> 变。
+    ///
+    /// 默认 **true**：用户说"只要是这个软件的字体都要跟着改"，那就不该留一半是原来的。
+    /// 留这个开关是因为等宽字体换成比例字体后，脚本缩进和计时的数字会跳宽 ——
+    /// 想保住等宽观感的人把它关掉即可（关掉就回到 Cascadia Mono / Consolas）。
+    /// </summary>
+    public bool UiFontMono { get; set; } = true;
 
     /// <summary>
     /// 「按键映射」页的键盘大小档位（small / medium / large / xlarge）。
@@ -1598,6 +1642,14 @@ public sealed class AppSettings
     /// </summary>
     public string MiddleClickMenuScope { get; set; } = MiddleMenuScope.DesktopAndExplorer;
 
+    /// <summary>
+    /// 「打开文件所在位置」的行为，存字符串而不是枚举 —— 和
+    /// <see cref="MiddleClickMenuScope"/> 同一个理由：配置被人手改成别的词时
+    /// 只退回默认，不会让整份设置反序列化抛异常。
+    /// 取值见 <see cref="FileLocationMode"/>，默认选中文件（用户要的是"这个文件在哪"）。
+    /// </summary>
+    public string OpenFileLocationMode { get; set; } = FileLocationMode.SelectFile;
+
     public KeyBinding? FindBinding(string combo) =>
         Keys.FirstOrDefault(k => string.Equals(k.Combo, combo, StringComparison.OrdinalIgnoreCase));
 
@@ -1666,3 +1718,32 @@ public static class MiddleMenuScope
     public static bool IncludesExplorer(MiddleClickMenuScope scope) =>
         scope == MiddleClickMenuScope.DesktopAndExplorer;
 }
+
+/// <summary>
+/// 「打开文件所在位置」（v1.5.1）的两种行为。
+///
+/// 默认选中文件，是因为用户点它的动机几乎总是"这个文件到底在哪"：
+/// 资源管理器把父目录打开、光标落在那个文件上，一眼就能看见位置；
+/// 只开一个空目录还得自己再找一遍。但"选中"会让窗口滚动一下，
+/// 有人就是不喜欢，所以留一个只开目录的开关（设置 → 附加菜单）。
+/// </summary>
+public static class FileLocationMode
+{
+    /// <summary>父文件夹里选中这个文件（出厂值）。</summary>
+    public const string SelectFile = "selectFile";
+
+    /// <summary>只把父文件夹打开，不定位、不选中。</summary>
+    public const string OpenFolderOnly = "openFolderOnly";
+
+    /// <summary>
+    /// 存储串 → 是不是"只开目录"。空 / 不认识的词一律按"选中"处理 ——
+    /// 那是更常用、也更符合"我要看这个文件在哪"的行为。
+    /// </summary>
+    public static bool IsOpenFolderOnly(string? stored) =>
+        string.Equals((stored ?? "").Trim(), OpenFolderOnly, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>存储串 → 规范化的存储串（写回设置时用，避免把脏值一次次存回去）。</summary>
+    public static string Normalize(string? stored) =>
+        IsOpenFolderOnly(stored) ? OpenFolderOnly : SelectFile;
+}
+

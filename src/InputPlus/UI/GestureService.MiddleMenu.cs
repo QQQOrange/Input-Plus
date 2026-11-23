@@ -3,6 +3,7 @@ using InputPlus.Core;
 using InputPlus.Core.Actions;
 using InputPlus.Core.Gestures;
 using InputPlus.Core.Interop;
+using InputPlus.Core.Qbar;
 using InputPlus.Core.Scripting;
 using InputPlus.Core.Settings;
 using InputPlus.Core.Windows;
@@ -99,8 +100,17 @@ public sealed partial class GestureService
     private struct MiddleTap
     {
         public bool Armed;
+
+        /// <summary>这一下该弹菜单（桌面空白 / 资源管理器 / 文件对话框）。</summary>
+        public bool Takeable;
+
+        /// <summary>落在哪种界面上（决定收藏星标该收藏什么）。</summary>
+        public MiddleSurface Surface;
+
         public GestureMath.Pt Start;
-        public BlankProbe Probe;
+
+        /// <summary>判定原因，只给诊断日志用。</summary>
+        public string Why;
     }
 
     private MiddleTap _middleTap;
@@ -120,8 +130,10 @@ public sealed partial class GestureService
     internal bool MiddleMenuSwallowWhileOpen(int vk, bool down, bool injected)
     {
         if (injected || !IsMenuButton(vk)) return false;
-        AttachDiag($"menu-open-swallow: down={down}");
+        /* 先判菜单在不在：以前这行诊断在判空之前，等于**每一下中键/侧键**都写一次盘，
+         * 而它跑在钩子回调里（见 AttachDiag 的注释）—— 热路径上白付一次文件系统开销。 */
         if (_middleMenu == null) return false;
+        AttachDiag($"menu-open-swallow: down={down}");
 
         if (down)
         {
@@ -129,6 +141,58 @@ public sealed partial class GestureService
             Interlocked.Exchange(ref _swallowUpVk, vk);
         }
         return true;
+    }
+
+    /// <summary>
+    /// 指针此刻在不在「附加菜单可以弹」的地方 —— 只决定**菜单**能不能弹。
+    ///
+    /// 从 v1.5.0 起有四处：系统桌面（空白处）、资源管理器文件夹窗口（文件/文件夹上或空白处）、
+    /// 打开/保存文件对话框、选文件夹对话框。范围外的地方（浏览器正文、编辑器、终端…）
+    /// 菜单不弹，那里中键各有原生用途。
+    ///
+    /// ⚠ v1.5 起它**不再**是"中键归不归我们"的依据：那颗键如果在这里配了手势，
+    /// 按下照样由手势接管（判据是 <see cref="GestureService.Candidates"/> 非空）。
+    /// 以前两者被当成一回事，结果是"配了中键手势的软件里中键手势全没了"。
+    ///
+    /// 判据只看窗口类名/shell 句柄，全程几次窗口查询；**不问**图标列表、**不碰** UIA。
+    /// 桌面要不要算"空白"由 <see cref="DesktopBlankAt"/> 在按下那一刻再问一次。
+    /// </summary>
+    private bool MiddleMenuInScope()
+    {
+        try
+        {
+            var (px, py) = CursorPos();
+            var pt = new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py));
+            var scope = MiddleMenuScope.ToScope(Settings().MiddleClickMenuScope);
+            var probe = MiddleMenuSurfaces.AtPoint(pt, scope);
+            AttachDiag($"scope: surface={probe.Surface} why={probe.Why}");
+            return probe.IsUsable;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "附加菜单：判定作用范围");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 桌面上这一点是不是空白（图标之间的空地）。只有桌面需要这一步 ——
+    /// 资源管理器与文件对话框里"点在文件上"照样该弹菜单，判空白的跨进程 UIA 纯属白花时间。
+    /// </summary>
+    private static bool DesktopBlankAt(double px, double py)
+    {
+        try
+        {
+            var probe = BlankHit.AtPoint(
+                new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)),
+                MiddleClickMenuScope.Desktop);
+            return probe.IsBlank;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "附加菜单：桌面空白判定");
+            return false;
+        }
     }
 
     /// <summary>
@@ -160,14 +224,19 @@ public sealed partial class GestureService
         if (settings == null || !settings.MiddleClickMenuEnabled) return false;
 
         var (px, py) = CursorPos();
-        // 鼠标唤出只在系统桌面：资源管理器里中键/侧键有它自己的用途，不接管。
-        var scope = MiddleClickMenuScope.Desktop;
-        var probe = BlankHit.AtPoint(new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)), scope);
+        var pt = new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py));
+        var scope = MiddleMenuScope.ToScope(settings.MiddleClickMenuScope);
+        var probe = MiddleMenuSurfaces.AtPoint(pt, scope);
 
-        /* 范围判断用的是"命中的是哪种壳"，不是设置里的字面值：
-         * 范围写"仅桌面"时，资源管理器的列表必须当成不在范围内。 */
-        bool inScope = probe.Kind == HitKind.Desktop
-            || (probe.Kind == HitKind.ExplorerItems && MiddleMenuScope.IncludesExplorer(scope));
+        /* 这一下该不该弹：桌面只在空白处弹（压在图标上仍然交给 shell）；
+         * 资源管理器与文件对话框无条件弹 —— 那是用户明确要的两处新入口。 */
+        bool takeable = probe.Surface switch
+        {
+            MiddleSurface.Desktop => DesktopBlankAt(px, py),
+            MiddleSurface.ExplorerItems => true,
+            MiddleSurface.FileDialog => true,
+            _ => false,
+        };
 
         var action = MiddleMenuPolicy.Decide(new MiddleMenuInput(
             MiddleVk: true,
@@ -175,16 +244,16 @@ public sealed partial class GestureService
             Injected: false,
             MenuOpen: _middleMenu != null,
             Enabled: true,
-            InScope: inScope,
+            InScope: probe.IsUsable,
             /* 任务栏在 OnButton 里已经先放行了（IsShellTaskbarAtCursor），这里传 false；
              * 全屏要自己再判一次 —— 手势那个开关（DisableInFullscreen）出厂是关的，
              * 而"全屏不弹菜单"是这一条功能的硬要求，不能跟着它走。 */
             Taskbar: false,
             Fullscreen: FullscreenBlocksMiddleMenu(),
-            Blank: probe.IsBlank,
+            Takeable: takeable,
             HasMiddleGesture: hasMiddleGesture));
 
-        AttachDiag($"arm-decide: kind={probe.Kind} blank={probe.IsBlank} scope={inScope} fgFull={FullscreenBlocksMiddleMenu()} action={action} why={probe.Why}");
+        AttachDiag($"arm-decide: surface={probe.Surface} takeable={takeable} why={probe.Why} fgFull={FullscreenBlocksMiddleMenu()} action={action}");
         bool take = action is MiddleMenuAction.StartGesture or MiddleMenuAction.SwallowTap;
         if (!take) return false;
 
@@ -193,8 +262,10 @@ public sealed partial class GestureService
             _middleTap = new MiddleTap
             {
                 Armed = true,
+                Takeable = takeable,
+                Surface = probe.Surface,
                 Start = new GestureMath.Pt(px, py),
-                Probe = probe,
+                Why = probe.Why,
             };
         }
         return true;
@@ -230,19 +301,20 @@ public sealed partial class GestureService
             return;
         }
 
-        if (!pending.Probe.IsBlank)
+        if (!pending.Takeable)
         {
-            /* 没落在桌面空白处（压在图标上 / 别的窗口 / 判定不出空白）。
+            /* 没落在"该弹菜单"的地方（桌面压在图标上 / 别的窗口 / 判定不出空白）。
              *
              * 这一下本来就不该被我们吃掉，但**按下时已经吞了**（那一刻必须按"可能是手势"处理），
              * 只吞不还就是用户说的"中键功能好像失效"：既没弹菜单，原生中键也没了。
              * 现在确认它只是点了一下 → 补发一次原生中键，浏览器的自动滚动 /
              * 资源管理器与桌面原有的中键行为照旧。
              *
-             * 补发用的是 InputSender（带 InjectionTag），我们自己的钩子认得出这是注入的，不会再套娃。 */
-            AttachDiag("  -> 非空白点击：补发原生中键");
-            try { InputPlus.Core.Input.InputSender.Tap(vk); }
-            catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：补发原生中键"); }
+             * 走 QueueReplayTap 这个唯一入口（静默期 + 线程池 + 补发自检都在里面），
+             * 补发用的是 InputSender（带 InjectionTag），我们自己的钩子认得出这是注入的，
+             * 不会再套娃。 */
+            AttachDiag("  -> 非空白/范围外的单击：补发原生中键");
+            QueueReplayTap(vk);
             return;
         }
 
@@ -258,10 +330,6 @@ public sealed partial class GestureService
         if (!IsMenuButton(vk)) return false;
 
         var settings = Settings();
-        // 鼠标唤出只在系统桌面：资源管理器里中键/侧键有它自己的用途，不接管。
-        var scope = MiddleClickMenuScope.Desktop;
-        bool inScope = pending.Armed && (pending.Probe.Kind == HitKind.Desktop
-            || (pending.Probe.Kind == HitKind.ExplorerItems && MiddleMenuScope.IncludesExplorer(scope)));
 
         var action = MiddleMenuPolicy.Decide(new MiddleMenuInput(
             MiddleVk: true,
@@ -269,10 +337,10 @@ public sealed partial class GestureService
             Injected: injectedStart,
             MenuOpen: _middleMenu != null,
             Enabled: settings.MiddleClickMenuEnabled,
-            InScope: inScope,
+            InScope: pending.Armed && pending.Surface != MiddleSurface.None,
             Taskbar: false,
             Fullscreen: FullscreenBlocksMiddleMenu(),
-            Blank: pending.Armed && pending.Probe.IsBlank,
+            Takeable: pending.Armed && pending.Takeable,
             HasMiddleGesture: true));
 
         if (action != MiddleMenuAction.MenuInsteadOfTap) return false;
@@ -285,10 +353,15 @@ public sealed partial class GestureService
     ///
     /// 没有这一句，慢按一次中键会变成最难解释的行为：菜单不弹，原生中键也被吞掉
     /// （OnPoll 的 startTimedOut 分支会 ResetActive 并吞掉抬起）。
+    ///
+    /// **返回 true = 菜单已接手这一下**，调用方就不要再补发原生中键
+    /// （否则用户会同时得到"菜单 + 一次自动滚动"）；返回 false 时必须补发，
+    /// 不然这一下按了等于没按 —— 范围外的中键（浏览器、WPS、Electron 程序）
+    /// 走的正是 false 这条。
     /// </summary>
-    private void MiddleMenuOnSilentCancel(int vk, double px, double py)
+    private bool MiddleMenuOnSilentCancel(int vk, double px, double py)
     {
-        if (!IsMenuButton(vk)) return;
+        if (!IsMenuButton(vk)) return false;
 
         MiddleTap pending;
         lock (_gate)
@@ -296,16 +369,26 @@ public sealed partial class GestureService
             pending = _middleTap;
             _middleTap = default;
         }
-        if (!pending.Armed || !pending.Probe.IsBlank) return;
+        if (!pending.Armed || !pending.Takeable) return false;
         MiddleMenuOpen(Settings());
+        return true;
+    }
+
+    /// <summary>
+    /// 这一下中键是不是"按下时已经登记、而且落在能弹菜单的地方"。
+    ///
+    /// 只在"按下被吞、最后没成笔"的那几条收尾分支里用：是 → 松手时会弹菜单，
+    /// 不能同时补发原生中键；否 → 必须补发，绝不能让这一下凭空消失。
+    /// </summary>
+    private bool MiddleMenuTapPending()
+    {
+        lock (_gate) return _middleTap.Armed && _middleTap.Takeable;
     }
 
     // ───────────────────────── 弹 / 关 ─────────────────────────
 
-    private void MiddleMenuOpen(AppSettings settings)
+    private void MiddleMenuOpen(AppSettings settings, bool fromKeyboard = false)
     {
-        if (_middleMenu != null) return;
-
         /* 建窗必须在界面线程：WPF 对象绑定在创建它的 Dispatcher 上。
          * 钩子线程 new 出来的窗口之后每次 Show 都会抛线程亲和性异常，
          * 而那条异常会被 Ui() 吞掉 —— 表现就是"按了没反应"（覆盖层那边踩过一次，见 EnsureOverlay）。
@@ -314,10 +397,47 @@ public sealed partial class GestureService
          * 这些都不该占着钩子线程做。 */
         Ui(() =>
         {
-            if (_middleMenu != null) return;
+            /* 残留引用就地清掉：上一次窗口如果在关闭过程中抛过异常（见 GestureMenuWindow.SafeClose
+             * 的注释），Closed 没跑到，_middleMenu 就永远是旧值 —— 之后每次中键都从这里早退，
+             * 用户看到的就是「附加菜单此后再也不弹了」。判 IsVisible 必须在界面线程（WPF 对象不能跨线程碰）。 */
+            if (_middleMenu is { IsVisible: true }) return;
+            _middleMenu = null;
+            /* 「收藏当前文件 / 打开文件所在位置」的锚点必须在 Show() **之前**记：
+             * 菜单一上屏，前台就变成我们自己了，之后再问"前台是哪个程序"只会问出 InputPlus。
+             * 这里抓一次窗口/进程/类名，连同可不可点一起交给菜单去置灰。 */
+            /* 鼠标唤出按"指针底下那个窗口"取锚点：这一下中键被我们吞了，
+             * 桌面/资源管理器并不会因此变成前台，GetForegroundWindow 还是上一个程序。 */
+            IntPtr probeRoot = IntPtr.Zero;
+            try
+            {
+                var (px, py) = CursorPos();
+                var probe = MiddleMenuSurfaces.AtPoint(
+                    new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)),
+                    MiddleMenuScope.ToScope(settings.MiddleClickMenuScope));
+                if (probe.IsUsable) probeRoot = probe.Root;
+            }
+            catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：取指针窗口"); }
+
+            IntPtr anchor = ForegroundFiles.ChooseAnchor(fromKeyboard, probeRoot, NativeMethods.GetForegroundWindow());
+            NativeMethods.GetWindowThreadProcessId(anchor, out uint anchorPid);
+            string anchorProc = ForegroundWatcher.ProcessNameOf(anchor);
+            string anchorClass = WindowService.ClassNameOf(anchor) ?? "";
+            bool actionable = ForegroundFileProbe.CanActOnForegroundFile(anchorProc, anchorClass);
+            FavoriteTrace.Write($"menu: anchor=0x{anchor.ToInt64():X} proc={anchorProc} class={anchorClass} " +
+                                $"actionable={actionable} fromKeyboard={fromKeyboard}");
+
+            ForegroundFile? cachedFile = ForegroundFiles.Cached;
+            bool cachedHit = cachedFile != null && cachedFile.Pid == (int)anchorPid;
+            var foregroundState = new ForegroundFileState(
+                actionable,
+                anchorProc,
+                cachedHit ? cachedFile!.FileName : "",
+                cachedHit && _host.IsPinnedFile(cachedFile!.Path));
+
+            ForegroundFiles.BeginSession(anchor, (int)anchorPid);
 
             GestureMenuDef? def;
-            try { def = MiddleMenuPolicy.Build(settings, MiddleMenuHistory(), MiddleMenuUrlTitles(settings)); }
+            try { def = MiddleMenuPolicy.Build(settings, MiddleMenuHistory(), MiddleMenuUrlTitles(settings), foregroundState); }
             catch (Exception ex)
             {
                 CoreLog.Swallow(ex, "中键菜单：拼菜单");
@@ -325,9 +445,13 @@ public sealed partial class GestureService
             }
             if (def == null || def.Items.Count == 0) return;
 
+            /* 收藏星标的上下文必须在**建窗之前**抓：窗口一 Show，前台就变成我们自己了，
+             * 之后再去问"用户在看哪个程序"只会问出 InputPlus.exe。 */
+            var favorite = MiddleMenuFavoriteTarget(settings, fromKeyboard);
+
             try
             {
-                var win = new GestureMenuWindow(def, ActionCatalog.TitleOf);
+                var win = new GestureMenuWindow(def, ActionCatalog.TitleOf, favorite);
                 win.Closed += (_, _) => OnMiddleMenuClosed(win);
                 _middleMenu = win;
                 win.Show();
@@ -345,6 +469,31 @@ public sealed partial class GestureService
                 if (handle != IntPtr.Zero && !WindowService.ForceForeground(handle))
                     CoreLog.Warn("[中键菜单] 抢前台失败：Esc / 数字键可能按不到");
 
+                /* 预热：不等用户点就先扫一次。点了才扫的话，第一次点击要等 800ms
+                 * （WPS/浏览器句柄多的时候真会等满）。返回值到了就**原地**补到菜单上：
+                 * 文件名显示在第二行，已经在收藏里的那颗星变实心，
+                 * 而「打开文件所在位置」的灰/亮就靠这里的 hasFile 决定 ——
+                 * 没扫到文件时它必须一直是灰的（v1.5 修：以前 Electron / 浏览器里
+                 * 这一条永远亮着，点下去弹"选择要定位的文件"）。
+                 * 所以**失败也要通知**：以前这里 `if (file == null) return;` 让失败彻底
+                 * 没机会把条目刷成灰的。
+                 *
+                 * 桌面 / 资源管理器 / 任务栏不扫：菜单里那一条本来就建成了灰的，
+                 * 扫也只会立刻返回 NotActionable。 */
+                if (actionable)
+                {
+                    _ = ForegroundFiles.GetOrRefreshAsync().ContinueWith(t =>
+                    {
+                        ForegroundFile? file = t.IsCompletedSuccessfully ? t.Result.File : null;
+                        bool already = file != null && _host.IsPinnedFile(file.Path);
+                        Ui(() =>
+                        {
+                            try { win.MarkForegroundFile(file?.FileName ?? "", already, file != null); }
+                            catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：补当前文件信息"); }
+                        });
+                    }, TaskScheduler.Default);
+                }
+
             }
             catch (Exception ex)
             {
@@ -352,6 +501,30 @@ public sealed partial class GestureService
                 CoreLog.Error("中键菜单弹出失败", ex);
             }
         });
+    }
+
+    /// <summary>
+    /// 抓"这次要收藏什么"：中键唤出看指针底下，键盘唤出看前台窗口。
+    /// 抓不到也返回 <see cref="FavoriteTarget.Empty"/> —— 星标照旧在，
+    /// 点开会给一个空表单让用户手填，而不是"这个位置不能收藏"。
+    /// </summary>
+    private static FavoriteTarget MiddleMenuFavoriteTarget(AppSettings settings, bool fromKeyboard)
+    {
+        try
+        {
+            var (px, py) = CursorPos();
+            var scope = MiddleMenuScope.ToScope(settings.MiddleClickMenuScope);
+            return FavoriteTarget.Capture(
+                new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)),
+                scope,
+                NativeMethods.GetForegroundWindow(),
+                preferForeground: fromKeyboard);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "附加菜单：抓收藏上下文");
+            return FavoriteTarget.Empty;
+        }
     }
 
     // ───────────────────────── 键盘唤出 ─────────────────────────
@@ -435,7 +608,9 @@ public sealed partial class GestureService
         if (!s.MiddleClickMenuEnabled) return;
         if (FullscreenBlocksMiddleMenu()) return;
         if (IsMiddleMenuException(ForegroundExe())) return;
-        MiddleMenuOpen(s);
+        /* fromKeyboard: 收藏的上下文看**前台**（用户在看的是那个程序），不看指针底下 ——
+         * 热键唤出时指针常常停在任务栏或桌面角落，按指针抓会收藏错东西。 */
+        MiddleMenuOpen(s, fromKeyboard: true);
     }
 
     // ── 历史记录（= 搜索前建议）与网址标题 ─────────────────────────
@@ -516,15 +691,33 @@ public sealed partial class GestureService
     private void OnMiddleMenuClosed(GestureMenuWindow win)
     {
         _middleMenu = null;
-        var picked = win.Selected;
-        if (picked == null) return;   // Esc / 点别处 / 再按中键：什么都不执行
 
-        /* 和「弹出菜单：xxx」那条动作走同一个出口：菜单里的条目就是一个普通的动作 id + 参数，
-         * 没有第二套执行路径。 */
-        try { _host.InvokeAction(picked.Action, picked.Arg); }
-        catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单动作"); }
+        try
+        {
+            /* 星标：菜单已经收了，剩下的交给宿主（弹收藏对话框 → 写进 Qbar 固定项）。
+             * 和其它动作一样走宿主那条出口，菜单窗自己不认识 Settings/SaveSettings。 */
+            if (win.FavoriteRequested)
+            {
+                try { _host.BeginFavoriteCapture(win.Favorite ?? FavoriteTarget.Empty); }
+                catch (Exception ex) { CoreLog.Swallow(ex, "附加菜单：收藏"); }
+                return;
+            }
+
+            var picked = win.Selected;
+            if (picked == null) return;   // Esc / 点别处 / 再按中键：什么都不执行
+
+            /* 和「弹出菜单：xxx」那条动作走同一个出口：菜单里的条目就是一个普通的动作 id + 参数，
+             * 没有第二套执行路径。 */
+            try { _host.InvokeAction(picked.Action, picked.Arg); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单动作"); }
+        }
+        finally
+        {
+            /* 锚点在这里才作废。上面两条出口（星标 / 顶部那两条入口）都可能**立刻**再做一次识别，
+             * 而识别的锚点就是"菜单弹出之前那个窗口" —— 清早了，问出来的只会是菜单自己。 */
+            ForegroundFiles.EndSession();
+        }
     }
-
     private void MiddleMenuClose()
     {
         var win = _middleMenu;
@@ -540,16 +733,68 @@ public sealed partial class GestureService
 
     internal static void AttachDiag(string message)
     {
-        /* 始终写：用户复现一次，我读这个文件就能看到真实类名与判定结果。
-         * 只在"附加菜单"这条路径上写（中键/侧键/键盘唤出），一次点击最多三行，
-         * 并限制 256KB 自截断，不会无限长大。 */
-        try
+        /* ⚠ 这个函数**会在钩子回调里**被调用（每一下鼠标键都可能走到）。
+         *
+         * 以前这里是同步的 `new FileInfo(...)` + `File.AppendAllText(...)`：
+         * 一次磁盘慢（云同步 / 杀软扫描 / 机械盘）就能把钩子回调拖过 300ms，
+         * 而超过 300ms 系统会**直接摘掉钩子并丢掉这次输入** —— 表现是
+         * "手势忽然全失效、鼠标键也没反应"，且日志里什么都看不出来。
+         * 现在只入队，写盘交给一条后台线程；队列满了就丢（日志永远不能拖住输入）。 */
+        if (!DiagEnabled) return;
+        if (DiagQueue.Count > 512) return;
+        DiagQueue.Enqueue(DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message);
+        if (Interlocked.Exchange(ref _diagPumpStarted, 1) == 0)
         {
-            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-attach-diag.log");
-            var info = new System.IO.FileInfo(path);
-            if (info.Exists && info.Length > 256 * 1024) System.IO.File.Delete(path);
-            System.IO.File.AppendAllText(path, DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine);
+            try
+            {
+                var t = new System.Threading.Thread(DiagPump)
+                {
+                    IsBackground = true,
+                    Name = "InputPlus.GestureDiag",
+                    Priority = System.Threading.ThreadPriority.BelowNormal,
+                };
+                t.Start();
+            }
+            catch { Interlocked.Exchange(ref _diagPumpStarted, 0); }
         }
-        catch { }
+    }
+
+    /// <summary>诊断行是否落盘：`INPUTPLUS_ATTACH_DIAG=0` 可关掉。</summary>
+    private static readonly bool DiagEnabled =
+        !string.Equals(Environment.GetEnvironmentVariable("INPUTPLUS_ATTACH_DIAG"), "0", StringComparison.Ordinal);
+
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> DiagQueue = new();
+    private static int _diagPumpStarted;
+
+    private static void DiagPump()
+    {
+        var sb = new System.Text.StringBuilder(4096);
+        while (true)
+        {
+            try
+            {
+                Thread.Sleep(250);
+                if (DiagQueue.IsEmpty) continue;
+
+                sb.Clear();
+                while (sb.Length < 8192 && DiagQueue.TryDequeue(out string? line))
+                    sb.Append(line).Append(Environment.NewLine);
+                if (sb.Length == 0) continue;
+
+                string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "inputplus-attach-diag.log");
+                try
+                {
+                    var info = new System.IO.FileInfo(path);
+                    if (info.Exists && info.Length > 256 * 1024) System.IO.File.Delete(path);
+                }
+                catch { }
+                System.IO.File.AppendAllText(path, sb.ToString());
+            }
+            catch
+            {
+                // 诊断线程绝不能死，也绝不能反过来影响主流程
+                try { Thread.Sleep(1000); } catch { }
+            }
+        }
     }
 }

@@ -49,6 +49,13 @@ public static class ThemeManager
             .ToList();
         foreach (var d in existing) app.Resources.MergedDictionaries.Remove(d);
         app.Resources.MergedDictionaries.Insert(0, dict);
+
+        /* 主题字典里带着 Font.Ui / Font.Mono 的**初始值**，整套换成新的之后
+         * 用户选的界面字体必须重新写回应用级资源 —— 否则一次深浅色切换
+         * 就把用户设的字体悄悄换回微软雅黑了。
+         * 放在 ThemeChanged 之前：事件里新建的窗口应当已经是用户那套字。 */
+        FontManager.Reapply();
+
         ThemeChanged?.Invoke(dark);
 
         // 跟随系统模式下开始监听，其它模式没必要

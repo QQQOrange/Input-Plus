@@ -5,7 +5,7 @@
         xmlns:w="clr-namespace:InputPlus.UI.Windows"
         Title="{loc:T '文件搜索'}" Width="1120" Height="720" MinWidth="860" MinHeight="520"
         WindowStartupLocation="CenterScreen" Background="{DynamicResource Brush.WindowGradient}"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True"
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True"
         PreviewKeyDown="OnWindowKeyDown">
 
     <WindowChrome.WindowChrome>

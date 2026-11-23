@@ -425,6 +425,26 @@ public partial class App : Application
             Environment.Exit(Core.Suggestions.SuggestionsProbeCli.Run());
             return;
         }
+        if (e.Args.Any(a => a.Equals("--foreground-file", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(Core.ForegroundFileCli.Run(e.Args));
+            return;
+        }
+        int officeRecentIndex = Array.FindIndex(e.Args,
+            a => a.Equals("--office-recent", StringComparison.OrdinalIgnoreCase));
+        if (officeRecentIndex >= 0)
+        {
+            Environment.Exit(Core.ForegroundFileCli.RunOfficeRecent(
+                officeRecentIndex + 1 < e.Args.Length ? e.Args[officeRecentIndex + 1] : ""));
+            return;
+        }
+        int revealFileIndex = Array.FindIndex(e.Args,
+            a => a.Equals("--reveal-file", StringComparison.OrdinalIgnoreCase));
+        if (revealFileIndex >= 0 && revealFileIndex + 1 < e.Args.Length)
+        {
+            Environment.Exit(Core.RevealFileCli.Run(e.Args[revealFileIndex + 1]));
+            return;
+        }
 
         if (e.Args.Any(a => a.Equals("--dialogprobe", StringComparison.OrdinalIgnoreCase)))
         {
@@ -788,6 +808,14 @@ public partial class App : Application
         MigrateVaultIfPasswordSet(settings);
 
         ThemeManager.Apply(ThemeManager.Parse(settings.Global.Theme));
+
+        /* 界面字体：必须紧跟在主题后面、**任何窗口创建之前**。
+         * ThemeManager.Apply 会重刷一次字体（主题字典里带着 Font.Ui 的初始值），
+         * 但那时 FontManager 还是出厂状态；这里才把用户选的那套字读进来。
+         *
+         * 为什么不能等到 Host.Start() 之后：托盘菜单在 Host 构造里就建好了，
+         * 它按当时的字体做一次测量，晚一步就会先按微软雅黑画出来。 */
+        FontManager.Apply(settings.Global.UiFont, settings.Global.UiFontMono);
 
         /* 界面语言：**必须在这里**（主题之后、密码门之前）——
          * 密码窗、主窗口、托盘菜单都要用当前语言，晚一步就会先闪一下中文。

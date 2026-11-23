@@ -7,7 +7,7 @@
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True" ShowActivated="True"
-        FontFamily="{StaticResource Font.Ui}" UseLayoutRounding="True">
+        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <Border CornerRadius="14" Background="{DynamicResource Brush.Surface}" BorderThickness="1"
             BorderBrush="{DynamicResource Brush.BorderStrong}" Margin="18">
