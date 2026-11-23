@@ -1,3 +1,30 @@
+## v1.5.8.2 — 包从 37.7 MiB 收到 12.7 MiB，重新支持 Windows 10（1809+）
+
+**症状/问题**
+1. 1.5.8.1 的单文件包 37.7 MiB，比 1.5.8 的 8.1 MiB 大了 4.6 倍。
+2. 安装包只认 Windows 11（22000+），Windows 10 用户装不上。
+
+**根因**
+包多出来的 25.7 MiB 是 `Microsoft.Windows.SDK.NET.dll`（25,717,792 字节）+ `WinRT.Runtime.dll`
+（528,944 字节）—— C#/WinRT 的 **Windows SDK 托管投影**，来自 NuGet 包
+`microsoft.windows.sdk.net.ref`。它**不在 Windows 里、也不在任何 .NET 共享框架里**（三个共享框架
+与 System32/SysWOW64 都没有），只因为目标框架写了平台版本 `net10.0-windows10.0.22000.0`，
+SDK 就把它引用进来并随包发布。而本程序一行 WinRT 类型都没用（界面是 WPF、系统能力是 P/Invoke）。
+"只支持 Win11"这个约束本身也来自同一个 TFM（`SupportedOSPlatformVersion=10.0.22000.0`）。
+
+**修法**
+- `TargetFramework` 改回 **`net10.0-windows`**（不带平台版本）→ 不再引用 WinRT 投影；
+  `SupportedOSPlatformVersion` 随之删掉（它不能高于 TargetPlatformVersion=7.0，否则 NETSDK1135）。
+- "最低系统版本"改成**运行期检查**：`App.EnsureSupportedOs()` —— Windows 10 1809（build 17763）
+  起；太旧的系统弹一句人话（中英双语 + 当前版本号）再退出，而不是崩在某个 P/Invoke 里。
+- `tools/release.ps1` / `.github/workflows/*` / docs 的形态名与命令同步（`win-x64`、`net10.0-windows`）。
+
+**验证**
+- `dotnet publish` 单文件：**13,289,146 字节 = 12.7 MiB**（原 39,541,130 = 37.7 MiB），FileVersion 1.5.8.2。
+- 发布版 exe 实跑：`--index-status` 676k 条 / schema=2 / 40k 条每秒；`--selftest --only=Qbar` 全绿。
+- **Windows 10 上未实测**（本机只有 Win11）：最低版本走的是运行期分支，代码里所有 Win11 专属
+  DWM 属性（圆角 33、backdrop 38 等）本来就以 `DwmSetWindowAttribute(...) == 0` 判成功、失败即忽略，
+  Win10 上会退化成直角无背景材质 —— 这是设计内的降级，不是崩溃路径。
 ## v1.5.8.1 — 文件索引 13 项缺陷（F0～F12）
 
 > 本版同时包含其下的「索引内核从 Everything 换成进程内 tantivy」那次改造 —— 它此前只在开发线上，
@@ -43,7 +70,7 @@
 - `--qbar-bench`：p95 19.2 ms、均值 8.12 ms、单条中位最大 21.4 ms。
 - golden 对照：缺失 657 / 新增 697（历史值 656，差异来自磁盘内容变化）。
 - 手工：删掉一个 `.term` 后 `--index-status` 自动恢复；把 `ipidx.dll` 改名后状态行写明原因。
-## v1.6.0 — 索引内核从 Everything 换成 tantivy，只支持 Windows 11 x64
+## v1.6.0 — 索引内核从 Everything 换成 tantivy（该版未发布；系统要求见顶部 v1.5.8.2）
 
 > 本版同时包含其下的「索引内核从 Everything 换成进程内 tantivy」那次改造 —— 它此前只在开发线上，
 > 没有单独发过版。也就是：从 1.5.8 升到本版会一次性拿到新索引内核 + 下面这 13 项修复。
@@ -61,7 +88,7 @@
 - 设置迁移：旧的两个布尔字段映射成新的 `Backend` 枚举（读一次就清掉，写回时不再出现）。
 - `--everything-status` → `--index-status`（条数/体积/构建分段/watcher/查询 p50-p95）；设置页的"索引与后端"卡片改成同一份状态，按钮从"启动外部程序"改成"重建索引"。
 - 删掉全部外部依赖：SDK 封装、内置客户端释放、引导器、三个 `.gz` 资源、打包脚本，以及那条"降级到内存快照"的路。索引没就绪时明确提示，不静默换源。
-- 只支持 Windows 11 x64：只留 `net10.0-windows10.0.22000.0` / `win-x64`，删掉 net7 专线与 `app-win7.manifest`，发布只出一个形态。
+- 只留 `net10.0-windows10.0.22000.0` / `win-x64` 一个形态，删掉 net7 专线与 `app-win7.manifest`。**（v1.5.8.2 已把这条撤销：TFM 改回不带平台版本的 `net10.0-windows`，重新支持 Windows 10 1809+；原因是要甩掉 25.7 MB 的 WinRT 投影，见顶部 v1.5.8.2。）**
 
 **验证**：`dotnet build -c Release` 0 error 0 新警告；`cargo test` 45 项全绿（18 单元 + 27 夹具）；`--selftest` **7086 项全过**（新增约 70 项索引用例：中文子串/拼音首字母与全拼/正则/谓词组合/取反/目录 vs 文件/glob/排序/未就绪行为）；`--index-status` 在本机 68 万条上：建索引 30 秒、索引体积 207 MB、查询 p50 7.6 ms / p95 12.4 ms；golden 对照 24 条查询无"索引根范围内"的召回缺失。
 ## v1.5.8 — 附加菜单最上面那条空白收掉了

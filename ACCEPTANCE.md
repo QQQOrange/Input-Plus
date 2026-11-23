@@ -361,7 +361,7 @@
 8. 崩溃恢复：进程被杀后重启不丢已完成部分（`state.json` 的 `Done` 语义）。
 9. `--render docs\screenshots` 正常出图，Qbar 与设置页无布局回归。
 10. `grep -ri everything src tools .github`：只剩 1 处旧配置键名常量（迁移必需，见文末说明）。
-11. `csproj` 只剩 `net10.0-windows10.0.22000.0` 与 `win-x64`。
+11. `csproj` 只剩 `net10.0-windows10.0.22000.0` 与 `win-x64`。（**v1.5.8.2 起改为 `net10.0-windows`：同一轮里为了体积又把平台版本去掉了，见 CHANGELOG v1.5.8.2。**）
 ---
 
 ## v1.5.8.1 索引缺陷修复轮（F0～F12）验收

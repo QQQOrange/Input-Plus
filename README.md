@@ -10,7 +10,7 @@
 >
 > **简体中文** ｜ [English](README.en.md)
 
-**版本 v1.0** ｜ **Windows 10 1809+ / Windows 11（x64 / x86）· Windows 7 SP1（x64 / x86）** ｜ **单文件：Win10+ 约 2.9 MB（依赖 .NET 10 桌面运行时）/ Win7 约 140 MB / 32 位约 130 MB（自带运行时）**
+**版本 1.5.8.2** ｜ **Windows 10 1809+（build 17763）/ Windows 11，x64** ｜ **单文件约 12.7 MB（依赖 .NET 10 桌面运行时；其中 5.4 MB 是进程内文件索引内核 ipidx.dll）**
 
 > ### ⚠️ 运行前必须先装 .NET 10 桌面运行时
 >
@@ -76,7 +76,7 @@ dotnet --list-runtimes | findstr WindowsDesktop
 | --- | --- | --- |
 | **Windows 11，64 位** | `InputPlus.exe` | 需装 .NET 10 桌面运行时（见第 1 步） |
 
-> **v1.5.8.1 起只支持 Windows 11 x64（22000 及以上）**。文件索引内核换成了进程内的
+> **v1.5.8.2 起支持 Windows 10 1809+（build 17763 及以上）与 Windows 11，x64**。文件索引内核换成了进程内的
 > Rust/tantivy，再维护 Win7/Win10 与 32 位两条线的代价已经大过收益。
 > 需要旧平台的用户仍可从 Releases 历史里下载旧版本。
 
@@ -1137,7 +1137,7 @@ Windows Hello（指纹/PIN）或设置一个短的无操作自动锁定时间。
 需要 **.NET 10 SDK**。详细说明见 [BUILD.md](BUILD.md)。
 
 ```powershell
-# 发版：出产物（Windows 11 x64）+ 哈希清单 + 发布说明
+# 发版：出产物（Windows 10 1809+ / 11，x64）+ 哈希清单 + 发布说明
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
 
 # 用法总览（自检 / 诊断 / 出图 / 界面，全部开关都在这里）
@@ -1184,7 +1184,7 @@ dist\InputPlus.exe --render docs\screenshots
 | `--svg2png` | 把内置 SVG 渲染结果另存为 PNG（图标资源回归用） |
 | `--help` | 打印上面这张表（WinExe 没有自己的控制台，会先 AttachConsole，并把用法写进数据目录 `usage.txt`） |
 
-> csproj 只留一个目标框架 `<TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>`（Windows 11 x64）；
+> csproj 只留一个目标框架 `<TargetFramework>net10.0-windows</TargetFramework>`（不带平台版本，省掉 25.7 MB 的 WinRT 投影；最低系统版本由 `App.EnsureSupportedOs()` 在运行期检查）；
 > 两条线共用同一份源码：net7 线的 LangVersion 锁 C# 11、换 System.Management 8.0.0、
 > 用 `app-win7.manifest`（补 Win7 supportedOS GUID、去掉 PerMonitorV2）。
 > 少数 .NET 8+ 的便利 API（`JsonNode.DeepClone`、`AesGcm(byte[],int)`、

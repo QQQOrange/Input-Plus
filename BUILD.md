@@ -1,4 +1,4 @@
-# 构建与运行（Windows 11 x64 / .NET 10）
+# 构建与运行（Windows 10 1809+ / Windows 11 x64 / .NET 10）
 
 构建需要 **.NET 10 SDK** 和 **Rust 1.91+**（文件索引内核是 Rust cdylib）；
 **运行只需要 .NET 10 桌面运行时** —— 单文件发布里已经包含我们自己的原生库。
@@ -26,15 +26,18 @@ cargo build --release        # 产物：target\release\ipidx.dll（约 5.5 MB）
 dotnet build src\InputPlus\InputPlus.csproj
 
 # 单文件发布（框架依赖；运行前需装 .NET 10 桌面运行时）
-dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows10.0.22000.0 -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
 
 # 需要更小（放弃内置自检与离屏渲染，再省约 0.5 MB）
-dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows10.0.22000.0 -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
 ```
 
 ### 发布形态只有一个
 
-v1.5.8.1 起只支持 **Windows 11 x64**（`net10.0-windows10.0.22000.0` / `win-x64`）。
+v1.5.8.2 起支持 **Windows 10 1809+（build 17763）与 Windows 11，x64**（TFM `net10.0-windows` / `win-x64`）。
+目标框架**故意不带平台版本**：带 `10.0.xxxxx` 会让 SDK 引用 25.7 MB 的 WinRT 托管投影
+（`Microsoft.Windows.SDK.NET.dll`），而本程序一个 WinRT 类型都没用。实测单文件 12.7 MiB vs 37.7 MiB。
+代价是失去编译期的系统版本约束，最低版本改在 `App.EnsureSupportedOs()`（运行期检查）里。
 Win7/Win10 与 x86 的形态已经删除：Rust 侧的 tantivy 要求 1.91+ 工具链，
 两条线共用一份源码的代价已经大过收益。
 
@@ -50,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File tools\release.ps1 -SkipBuild
 
 ```
 dist\<版本>\
-  InputPlus.exe       Windows 11 x64（框架依赖）
+  InputPlus.exe       Windows 10 1809+ / Windows 11（x64，框架依赖）
   SHA256SUMS.txt      每行「哈希  文件名」，certutil / 7-Zip 都能校验
   manifest.json       版本 / 大小 / 哈希（CI 与上传脚本用）
   release-notes.md    从 CHANGELOG.md 抽出的本版说明（Release 正文）

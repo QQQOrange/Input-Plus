@@ -2,7 +2,7 @@ name: build
 
 # 每次推到 main / 每个 PR：先把"能不能编译"和"自检是否还能过"守住。
 # 真正发版（出单文件 + 建 Release）在 release.yml，由 tag 触发。
-# v1.6 起只有一个形态：Windows 11 x64。
+# v1.5.8.2 起只有一个形态：Windows 10 1809+ / Windows 11，x64。
 
 on:
   push:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    name: 构建（Windows 11 x64）
+    name: 构建（Windows 10 1809+ / 11，x64）
     runs-on: windows-latest
 
     steps:
@@ -78,7 +78,7 @@ jobs:
       - name: 发布单文件（win11-x64）
         run: >
           dotnet publish src/InputPlus/InputPlus.csproj
-          -c Release -f net10.0-windows10.0.22000.0 -r win-x64
+          -c Release -f net10.0-windows -r win-x64
           --self-contained false
           -p:PublishSingleFile=true
           -o dist/ci

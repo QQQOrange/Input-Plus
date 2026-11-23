@@ -1,7 +1,7 @@
 name: release
 
 # 推一个 v* 标签就出产物 + 建 GitHub Release（v1.6 起只有一个形态）：
-#   InputPlus.exe                                  Windows 11 x64（框架依赖）
+#   InputPlus.exe                                  Windows 10 1809+ / Windows 11（x64，框架依赖）
 #   SHA256SUMS.txt / manifest.json / release-notes.md
 #
 # 构建规则、资产名、Rust 原生库的处理全在 tools/release.ps1 里 ——

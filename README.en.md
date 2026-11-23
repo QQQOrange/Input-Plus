@@ -75,7 +75,7 @@ file in any folder:
 | Windows 11 / Windows 10 1809+, **64-bit** (most PCs) | `InputPlus.exe` | Requires the .NET 10 Desktop Runtime |
 
 > GitHub rewrites non-alphanumeric characters in asset filenames to dots, hence the
-> The release ships one asset, `InputPlus.exe` (Windows 11 x64).
+> The release ships one asset, `InputPlus.exe` (Windows 10 1809+ / Windows 11, x64).
 
 > **About the Windows 7 build**: .NET 10 does not support Windows 7 (minimum is Win10 1809),
 > so the Win7 build targets **.NET 7** (the last release supporting Win7 SP1) with the runtime
@@ -636,7 +636,7 @@ the UAC prompt (or run it as administrator).
 **How do I uninstall?** Quit from the tray, delete the executable and the two data folders.
 Nothing is written to the registry except the optional autostart entry.
 
-**Can I use it on Windows 7 or 10?** No. From v1.5.8.1 only Windows 11 x64 (22000+) is supported; older releases remain in the Releases history.
+**Can I use it on Windows 7?** No. From v1.5.8.2 Windows 10 1809+ (build 17763) and Windows 11 x64 are supported; older releases remain in the Releases history.
 
 **Does it conflict with AutoHotkey?** Both can hook the keyboard; Caps combos are consumed by
 whichever hooks first. Disable the overlapping hotkeys in one of them.
@@ -648,7 +648,7 @@ whichever hooks first. Disable the overlapping hotkeys in one of them.
 Requires the **.NET 10 SDK**. See [BUILD.md](BUILD.md).
 
 ```powershell
-# Release the artifacts (Windows 11 x64) + hashes + notes
+# Release the artifacts (Windows 10 1809+ / 11, x64) + hashes + notes
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
 
 # All command-line switches
@@ -680,7 +680,7 @@ dist\InputPlus.exe --render docs\screenshots
 | `--svg2png` | Dump built-in SVG icons as PNG |
 | `--help` | Print this table (writes `usage.txt` in the data folder) |
 
-The project targets a single framework, `net10.0-windows10.0.22000.0` (Windows 11 x64).
+The project targets a single framework, `net10.0-windows` (no platform version: that would drag in the 25.7 MB WinRT projection assembly). The minimum OS is checked at runtime instead: `App.EnsureSupportedOs()` (Windows 10 1809 / build 17763).
 locks C# 11, uses System.Management 8.0.0 and `app-win7.manifest`. A few .NET 8+ conveniences
 are written in a form both targets compile, so behaviour never diverges.
 

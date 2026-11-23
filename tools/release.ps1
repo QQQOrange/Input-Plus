@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    出一个发布形态（Windows 11 x64），并生成可直接上传 GitHub Release 的资产。
+    出一个发布形态（Windows 10 1809+ / Windows 11，x64），并生成可直接上传 GitHub Release 的资产。
 
 .DESCRIPTION
-    发版只交一个单文件 exe（v1.6 起只支持 Windows 11 x64）：
-      · InputPlus.exe         Windows 11 x64（框架依赖，需 .NET 10 桌面运行时）
+    发版只交一个单文件 exe（v1.5.8.2 起支持 Windows 10 1809+ 与 Windows 11，x64）：
+      · InputPlus.exe         Windows 10 1809+ / Windows 11（x64，框架依赖，需 .NET 10 桌面运行时）
 
     为什么必须用脚本而不是手敲 dotnet publish：
       · 发布前要先把 Rust 侧的原生索引内核（src/ipidx）编出来，
@@ -69,12 +69,12 @@ $stageRoot = Join-Path $OutRoot ('_staging-' + $version)
 $outDir = Join-Path $OutRoot $version
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
-# 单一形态（v1.6 起只支持 Windows 11 x64）。
+# 单一形态（v1.5.8.2 起：Windows 10 1809+ / Windows 11，x64）。
 # Asset 名要与 README 的下载表、UpdateService.PickAsset 的识别规则一致。
 $allShapes = @(
     [pscustomobject]@{
-        Id = 'win11-x64'; Tfm = 'net10.0-windows10.0.22000.0'; Rid = 'win-x64'; SelfContained = $false
-        Asset = 'InputPlus.exe'; Note = 'Windows 11 x64（框架依赖，需 .NET 10 桌面运行时）'
+        Id = 'win-x64'; Tfm = 'net10.0-windows'; Rid = 'win-x64'; SelfContained = $false
+        Asset = 'InputPlus.exe'; Note = 'Windows 10 1809+ / Windows 11（x64，框架依赖，需 .NET 10 桌面运行时）'
     }
 )
 
@@ -104,7 +104,7 @@ $results = @()
 $failed = @()
 
 Write-Host ''
-Write-Host "Input Plus $version — 发布（Windows 11 x64）" -ForegroundColor Cyan
+Write-Host "Input Plus $version — 发布（Windows 10 1809+ / 11，x64）" -ForegroundColor Cyan
 Write-Host ''
 
 foreach ($shape in $shapes) {

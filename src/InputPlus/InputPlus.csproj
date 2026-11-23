@@ -2,13 +2,16 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- 从 v1.6 起只支持 Windows 11 x64。
-         .NET 10 是唯一目标框架；改造前那条 net7.0-windows 的 Win7 专线已经删除
-         （Rust 侧的 tantivy 需要 1.91+ 工具链、并要求现代 Windows 的系统接口，
-          两条线共用一份源码的代价已经大过收益）。 -->
-    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
-    <!-- Windows 11 的起始版本（22000 = 21H2）。低于它的机器不装、也不假装能跑。 -->
-    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <!-- 目标框架**不带平台版本**（`net10.0-windows`，即 TargetPlatformVersion=7.0）。
+         这不是随手写的：带平台版本（`net10.0-windows10.0.22000.0`）会让 SDK 引用
+         `Microsoft.Windows.SDK.NET.Ref` 那套 WinRT 托管投影，单文件包直接多 25.7 MB
+         （`Microsoft.Windows.SDK.NET.dll` 25,717,792 字节 + `WinRT.Runtime.dll` 528,944），
+         而本程序一行 WinRT 类型都没用（界面全是 WPF，系统能力全是 P/Invoke）。
+         实测：不带平台版本 12.7 MiB，带了 37.7 MiB。
+         代价是**失去编译期的"只允许 Win11"约束**（`SupportedOSPlatformVersion` 不能高于
+         TargetPlatformVersion=7.0，写了就是 NETSDK1135），所以最低系统版本改成运行期检查：
+         见 `App.xaml.cs` 的 `EnsureSupportedOs()`（Windows 10 1809 / build 17763 起）。 -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <LangVersion>latest</LangVersion>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
@@ -25,11 +28,11 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.5.8.1</Version>
-    <FileVersion>1.5.8.1</FileVersion>
+    <Version>1.5.8.2</Version>
+    <FileVersion>1.5.8.2</FileVersion>
     <!-- AssemblyVersion 必须跟 <Version> 一致：UpdateService.CurrentVersion 读的是
          Assembly.GetName().Version（三段式），漏改的话发布包会自己弹一次「发现新版本」。 -->
-    <AssemblyVersion>1.5.8.1</AssemblyVersion>
+    <AssemblyVersion>1.5.8.2</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。

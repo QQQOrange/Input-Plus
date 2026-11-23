@@ -13,9 +13,59 @@ public partial class App : Application
 {
     public static AppHost Host { get; private set; } = null!;
 
+    /// <summary>最低支持的系统 build：Windows 10 1809（17763）。</summary>
+    internal const int MinOsBuild = 17763;
+
+    /// <summary>
+    /// 系统版本够不够。不够就弹一句人话然后退出（返回 false）。
+    ///
+    /// 为什么不用 csproj 的 SupportedOSPlatformVersion：见 OnStartup 里的长注释 ——
+    /// 那个属性会把 25.7 MB 的 WinRT 投影拖进单文件包，而本程序一个 WinRT 类型都没用。
+    /// 这里也不引 <c>Loc</c>：这一步发生在设置与语言包加载之前，查表可能还没就绪。
+    /// </summary>
+    internal static bool EnsureSupportedOs()
+    {
+        try
+        {
+            int build = Environment.OSVersion.Version.Build;
+            if (build >= MinOsBuild) return true;
+
+            string text = "Input Plus 需要 Windows 10 版本 1809（内部版本 17763）或更高。"
+                          + Environment.NewLine + Environment.NewLine
+                          + "当前系统：" + Environment.OSVersion.VersionString
+                          + "（内部版本 " + build + "）"
+                          + Environment.NewLine + Environment.NewLine
+                          + "Input Plus requires Windows 10 version 1809 (build 17763) or later."
+                          + Environment.NewLine
+                          + "Current: " + Environment.OSVersion.VersionString + " (build " + build + ")";
+            MessageBox.Show(text, "Input Plus", MessageBoxButton.OK, MessageBoxImage.Error);
+            /* Shutdown 是实例方法：这里在静态方法里，取当前 Application 实例。 */
+            Current?.Shutdown(2);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            /* 取版本号失败不该挡住启动：真有系统级问题，后面任何一步都会更早暴露。 */
+            CoreLog.Swallow(ex, "检查系统版本");
+            return true;
+        }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        /* ---- 最低系统版本：Windows 10 1809（build 17763）----
+         *
+         * 为什么在这里检查而不是 csproj 的 `SupportedOSPlatformVersion`：那个属性要求
+         * TargetPlatformVersion ≥ 它，而 TargetPlatformVersion 一旦写成 10.0.xxxx，
+         * SDK 就会引用 25.7 MB 的 WinRT 托管投影（`Microsoft.Windows.SDK.NET.dll`），
+         * 而本程序一个 WinRT 类型都没用 —— 包的体积会从 12.7 MiB 变成 37.7 MiB。
+         * 所以约束挪到运行期：启动时说清楚"系统太旧"，而不是让用户在崩溃里猜。
+         *
+         * 1809 是选出来的下限：`DWMWA_USE_IMMERSIVE_DARK_MODE`（属性 20）从 1809 起才有，
+         * 清单里的 PerMonitorV2 需要 1703+，而 1607/1703/1803 早已全部停止支持。 */
+        if (!EnsureSupportedOs()) return;
 
         /* ---- 软件渲染逃生口 ----
          *
