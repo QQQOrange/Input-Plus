@@ -44,6 +44,8 @@ public sealed partial class GestureService : IDisposable
     private DispatcherTimer? _linger;
     /* 名称框淡出的第二段定时器：停留结束 → 开始淡出 → 淡完才清窗口。 */
     private DispatcherTimer? _fade;
+    /* 名称框显示后 160ms 的"再顶一次"（见 ShowLabel）：复用同一个，别每次 new。 */
+    private DispatcherTimer? _raise;
 
     /* ── 覆盖层的「这一笔」代号 ───────────────────────────────────
      * 每次起手 +1。上一笔排的延迟收起（停留 / 淡出）回来时号对不上就作废。
@@ -54,6 +56,18 @@ public sealed partial class GestureService : IDisposable
     /* 两个延迟收起定时器各自记着"我是哪一代排的队"。 */
     private int _lingerEpoch;
     private int _fadeEpoch;
+
+    /* 覆盖层这一屏"故意留在屏幕上给用户看"的截止时间（TickCount64，0 = 没有排期）。
+     *
+     * 看门狗（OnOverlayGuard）只看到"有可见内容 + 没在跟踪"，分不清
+     *   「上一笔漏收的残留」和「热角/贴边/滚轮手势刚弹出来的名字、手势太频繁的提示、
+     *     起始超时的红点」—— 后者本来就该按 HideOverlay 排的时间挂着。
+     * 以前它每 100ms 一律清掉，于是那些名字/提示实际只闪了不到 0.1 秒。
+     * 现在由这里记一个截止时间，到点之前看门狗不动手；起手/主动收起时清零。 */
+    private long _overlayHoldUntil;
+
+    /// <summary>看门狗的宽限：排期到点后再多等这么久，避免定时器与 100ms 节拍抢跑。</summary>
+    private const int OverlayHoldGraceMs = 400;
 
     /* 手势进行中每隔一会儿把覆盖层重新顶到最前（有些程序会把自己置顶压上来）。 */
     private long _lastRaiseAt;
@@ -243,6 +257,20 @@ public sealed partial class GestureService : IDisposable
     public GestureService(AppHost host)
     {
         _host = host;
+
+        /* 两个"延迟收起"定时器必须建在**界面线程**上。
+         *
+         * 以前它们是懒建的（`_linger ??= new DispatcherTimer(...)`），而
+         * HideOverlay / ShowLabel 有好几条路是从**钩子线程**进来的（滚轮/热角/
+         * 贴边手势 → ShowLabelOnly → ShowLabel）。DispatcherTimer 绑的是
+         * `Dispatcher.CurrentDispatcher`，在钩子线程上懒建就会绑到那个线程的
+         * Dispatcher 上 —— 那里只有一个 Win32 GetMessage 循环，没人跑
+         * Dispatcher 队列，定时器永远不响：名字/提示只能等看门狗兜底。
+         * 现在在构造函数（界面线程）里一次建好，之后谁调都落在界面线程。 */
+        var dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        _linger = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
+        _fade = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
+
         /* 附加菜单的键盘唤出：设置一变就重注册（用户改完组合键立刻生效），
          * 启动时先按当前设置注册一次。 */
         _host.SettingsChanged += ApplyMiddleHotkey;
@@ -389,7 +417,21 @@ public sealed partial class GestureService : IDisposable
         _poll?.Stop();
         _linger?.Stop();
         _fade?.Stop();
+        _raise?.Stop();
         _hotWatch?.Stop();
+        /* 看门狗也要停：它是界面线程上的 100ms 定时器，不停就等于把整个
+         * GestureService（连同钩子、设置引用）一直钉在内存里；服务重建时
+         * 还会出现两个看门狗互相抢着 Clear/Hide。 */
+        try
+        {
+            if (_overlayGuard != null)
+            {
+                _overlayGuard.Stop();
+                _overlayGuard.Tick -= OnOverlayGuard;
+                _overlayGuard = null;
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "停手势覆盖层看门狗"); }
         try
         {
             if (_hotkeySource != null)
@@ -1538,9 +1580,16 @@ public sealed partial class GestureService : IDisposable
 
             var overlay = _overlay;
             if (overlay == null || !overlay.IsVisible) return;
+
+            /* 这一屏可能是"故意留给人看"的：热角/贴边/滚轮手势的名字、手势太频繁的
+             * 提示、起始超时的红点都会在**没有跟踪**的状态下挂在屏幕上，各自由
+             * HideOverlay 排了收起的点。以前这里只问"有没有可见内容"，100ms 一到
+             * 就把它们清掉 —— 名字和提示根本来不及看清。现在按排期放行。 */
+            long holdUntil = Volatile.Read(ref _overlayHoldUntil);
+            if (OverlayHoldActive(Environment.TickCount64, holdUntil)) return;
+
             AttachDiag("guard: 收掉残留的轨迹/名称框");
-            overlay.Clear();
-            overlay.Hide();
+            overlay.HideWhenBlank();
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "覆盖层看门狗"); }
     }
@@ -2749,8 +2798,10 @@ public sealed partial class GestureService : IDisposable
             var overlay = EnsureOverlay();
             overlay.ShowPassive();
             overlay.ShowTimeoutDot(px, py);
-            /* 不设自动收：WG2 的红点是手势开始时显示（A/T.cs:51-52）、
-             * 手势结束才藏（A/T.cs:383）。不画也不松手，它就一直亮着。 */
+            /* 红点没有"下一拍收起"的定时器：它就是让人看清"起手超时了"。
+             * 给它 1.5 秒的排期，到点由看门狗兜底收掉 —— 既不遮屏幕太久，
+             * 也不会像以前那样 100ms 就被看门狗擦掉（等于没显示）。 */
+            HoldOverlay(1500);
         });
     }
 
@@ -2788,17 +2839,19 @@ public sealed partial class GestureService : IDisposable
             overlay.ShowLabel(text, px, py, keepTrail: false);
 
             /* 动作打开的窗口可能在这一帧之后才完成激活，160ms 后再顶一次，
-             * 防止资源管理器/浏览器把胶囊盖住。只顶一次，不改变窗口状态。 */
-            var raise = new DispatcherTimer(DispatcherPriority.Send)
+             * 防止资源管理器/浏览器把胶囊盖住。只顶一次，不改变窗口状态。
+             *
+             * 复用同一个定时器（以前每次 new 一个，频繁弹名字时会堆一串），
+             * 而且回调里要再确认窗口还可见 —— 这 160ms 里名字可能已经被收掉了，
+             * 这时 ShowPassive() 会把窗口重新 Show() 出来、贴上旧表面（闪第二下）。 */
+            _raise ??= new DispatcherTimer(DispatcherPriority.Send)
             {
                 Interval = TimeSpan.FromMilliseconds(160)
             };
-            raise.Tick += (_, _) =>
-            {
-                raise.Stop();
-                overlay.ShowPassive();
-            };
-            raise.Start();
+            _raise.Stop();
+            _raise.Tick -= OnRaiseTick;
+            _raise.Tick += OnRaiseTick;
+            _raise.Start();
         });
         CoreLog.Info($"显示手势名：{text}");
         /* 这段时长只决定名称框留多久：轨迹在收尾那一帧就已经清掉了
@@ -2871,6 +2924,9 @@ public sealed partial class GestureService : IDisposable
     private void BeginStrokeVisual()
     {
         Interlocked.Increment(ref _hideEpoch);
+        /* 新手势接手这一屏：上一笔的"还留着给人看"的排期一律作废，
+         * 否则看门狗会拿上一笔的截止时间放行，反而漏收新一笔的残留。 */
+        Volatile.Write(ref _overlayHoldUntil, 0);
         try { _linger?.Stop(); } catch (Exception ex) { CoreLog.Swallow(ex, "停手势名称停留"); }
         try { _fade?.Stop(); } catch (Exception ex) { CoreLog.Swallow(ex, "停手势名称淡出"); }
         _lastRaiseAt = 0;
@@ -2881,14 +2937,16 @@ public sealed partial class GestureService : IDisposable
     {
         _linger?.Stop();
         int epoch = Interlocked.Increment(ref _hideEpoch);
+        /* 淡出最长 250+250ms：这段时间里看门狗不许插手，否则淡出会被截成 100ms
+         * （FadeOutExecuted 那条 100ms 的也一样，统一按最长的算，代价只是兜底晚一点）。 */
+        HoldOverlay(600);
         Ui(() =>
         {
             if (epoch != Volatile.Read(ref _hideEpoch)) return;      // 新手势已经起手，这一笔的回报作废
             int fade = _overlay?.FadeOutLabel() ?? 0;
             if (fade <= 0)
             {
-                _overlay?.Clear();
-                _overlay?.Hide();
+                _overlay?.HideWhenBlank();
                 return;
             }
 
@@ -2910,8 +2968,7 @@ public sealed partial class GestureService : IDisposable
         {
             /* 号变了 = 新手势已经开始：这一下是上一笔的尾巴，不许碰现在的画面。 */
             if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
-            _overlay?.Clear();
-            _overlay?.Hide();
+            _overlay?.HideWhenBlank();
         });
     }
 
@@ -2922,22 +2979,30 @@ public sealed partial class GestureService : IDisposable
         int epoch = Interlocked.Increment(ref _hideEpoch);
         if (delayMs <= 0)
         {
+            /* 立刻收：这一屏不再需要留给用户看，看门狗可以随时接手兜底。 */
+            Volatile.Write(ref _overlayHoldUntil, 0);
             Ui(() =>
             {
                 if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
-                _overlay?.Clear();
-                _overlay?.Hide();
+                _overlay?.HideWhenBlank();
             });
             return;
         }
 
-        _lingerEpoch = epoch;
-        _linger ??= new DispatcherTimer(DispatcherPriority.Background);
-        _linger.Stop();
-        _linger.Interval = TimeSpan.FromMilliseconds(delayMs);
-        _linger.Tick -= OnLinger;
-        _linger.Tick += OnLinger;
-        _linger.Start();
+        HoldOverlay(delayMs);
+        /* 定时器的 Interval/Tick 都在界面线程上改：HideOverlay 有一半调用点来自
+         * 钩子线程（ShowLabelOnly → ShowLabel），在那边改 Tick 事件与 UI 线程
+         * 触发是并发的（Stop/Start 本身线程安全，但事件订阅不是）。 */
+        Ui(() =>
+        {
+            _lingerEpoch = epoch;
+            _linger ??= new DispatcherTimer(DispatcherPriority.Background);
+            _linger.Stop();
+            _linger.Interval = TimeSpan.FromMilliseconds(delayMs);
+            _linger.Tick -= OnLinger;
+            _linger.Tick += OnLinger;
+            _linger.Start();
+        });
     }
 
     private void OnLinger(object? sender, EventArgs e)
@@ -2948,10 +3013,28 @@ public sealed partial class GestureService : IDisposable
         Ui(() =>
         {
             if (epoch != Volatile.Read(ref _hideEpoch) || IsTracking) return;
-            _overlay?.Clear();
-            _overlay?.Hide();
+            _overlay?.HideWhenBlank();
         });
     }
+
+    /// <summary>名称框显示 160ms 后的"再顶一次"：只顶还看得见的窗口（见 ShowLabel）。</summary>
+    private void OnRaiseTick(object? sender, EventArgs e)
+    {
+        _raise?.Stop();
+        var overlay = _overlay;
+        if (overlay is { IsVisible: true }) overlay.ShowPassive();
+    }
+
+    /// <summary>
+    /// 记下"这一屏还要留给用户看多久"。看门狗按这个时间放行（见 <see cref="_overlayHoldUntil"/>），
+    /// 到点之后再兜底清理 —— 名字/提示的停留时长从此由各自排的 HideOverlay 说了算。
+    /// </summary>
+    private void HoldOverlay(int ms)
+        => Volatile.Write(ref _overlayHoldUntil,
+            Environment.TickCount64 + Math.Max(0, ms) + OverlayHoldGraceMs);
+
+    /// <summary>看门狗这一刻该不该放行（纯函数，自检里钉规则用）。</summary>
+    internal static bool OverlayHoldActive(long now, long holdUntil) => now < holdUntil;
 
     // ───────────────────────── Win32 ─────────────────────────
 

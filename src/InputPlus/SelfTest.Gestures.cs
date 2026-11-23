@@ -872,6 +872,21 @@ public static partial class SelfTest
             typeof(GestureService).GetMethod("UnrecognizedHoldMs",
                 System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) == null);
 
+        /* 看门狗只该收「漏收的残留」，不能顺手把还在排期里的名字/提示/红点一起清掉：
+         * 以前它只问"有没有可见内容"，100ms 一刀，热角名字和「手势太频繁」提示
+         * 实际只闪 0.1 秒，FadeOutExecuted 的淡出也基本被吃掉。 */
+        Check("看门狗：排期没到就不动手", GestureService.OverlayHoldActive(1000, 1400));
+        Check("看门狗：到点了照收", !GestureService.OverlayHoldActive(1500, 1400));
+        Check("看门狗：没有排期（0）时立刻可收", !GestureService.OverlayHoldActive(1, 0));
+
+        /* 收起覆盖层必须走"空帧后隐藏"：直接 Clear()+Hide() 会把上一笔的位图留在
+         * 窗口表面上，下一次 Show() 先把它贴出来 —— 用户报的"上一笔闪一下"。
+         * `--gesture-overlay-diag` 场景 ④ 实测：旧写法再显示后 1704 像素，新写法 0。 */
+        Check("覆盖层提供「空帧后隐藏」入口",
+            typeof(InputPlus.UI.Windows.GestureOverlayWindow).GetMethod("HideWhenBlank") != null);
+        Check("覆盖层提供「作废待隐藏」入口",
+            typeof(InputPlus.UI.Windows.GestureOverlayWindow).GetMethod("CancelPendingHide") != null);
+
         /* 命中的手势是"命令已经发出去了"，用户要的是动作，不是名字。
          * 规则（用户原话）：勾了「识别手势立即执行」的，生效那一刻就消失；
          * 没勾的，画的过程中方框跟着预览，松手结算执行时立刻消失。

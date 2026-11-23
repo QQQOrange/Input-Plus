@@ -55,7 +55,7 @@ public static class CliFlags
          "  --capture-test                 打开自定义按键捕获窗并自检三路输入来源\n" +
          "  --probe-key <键>               拿当前配置判定一个键：会不会被吞、被哪条规则吞\n" +
         "  --gesture-probe [手势名] [文件]  说清这条手势为什么认不出来：超阈、两条都像、还是没模板\n" +
-        "  --gesture-overlay-diag          实测轨迹覆盖层：建窗/首帧要多久、快划有没有上屏、连划两下会不会被上一笔的淡出吃掉（写数据目录 gesture-overlay-diag.txt）\n" +
+        "  --gesture-overlay-diag          实测轨迹覆盖层：建窗/首帧要多久、快划有没有上屏、连划两下会不会被上一笔的淡出吃掉、收笔留不留残影（写数据目录 gesture-overlay-diag.txt）\n" +
         "  --gesture-import <文件> [--keep]  把手势表整表换成 WGestures 2 的配置（.wg28bw 或 gestures.json）\n" +
         "  --hwtest                        硬件测试：真的调一次音量与亮度（会出声/变亮）\n" +
         "  --pick-test <结果文件>           验证「选中文字直接搜索」的取词链路，结果写进文件\n" +

@@ -18,10 +18,11 @@ namespace InputPlus.UI;
 /// <summary>
 /// 临时诊断（`--gesture-overlay-diag`）：量「手势轨迹到底什么时候才会出现在屏幕上」。
 ///
-/// 三个场景，全部按运行期真实节奏（8ms 一次 AddPoint）驱动，每拍都采一次屏：
+/// 四个场景，全部按运行期真实节奏（8ms 一次 AddPoint）驱动，每拍都采一次屏：
 ///   ① 正常一笔（320ms）：首帧延迟、可见像素的峰值；
 ///   ② 快划一笔（48ms 后立刻收笔）：整笔期间有没有被 present 过 —— 用户报的"没显示"；
-///   ③ 连划两下：上一笔的淡出定时器（默认 131ms）会不会把下一笔 Hide 掉。
+///   ③ 连划两下：上一笔的淡出定时器（默认 131ms）会不会把下一笔 Hide 掉；
+///   ④ 残影：收笔时直接 Clear()+Hide()，窗口表面上留不留上一笔（用户报的"闪一下"）。
 /// 结果写数据目录 gesture-overlay-diag.txt。
 /// </summary>
 internal static class GestureOverlayDiag
@@ -173,6 +174,9 @@ internal static class GestureOverlayDiag
         var settle = type.GetMethod("SettleOverlay", Priv);
         var beginVisual = type.GetMethod("BeginStrokeVisual", Priv);
         var overlayField = type.GetField("_overlay", Priv);
+        /* 这一条测的是"淡出定时器会不会把下一笔吃掉"。看门狗在 100ms 时也会收，
+         * 分不清是谁收的 —— 所以把 _active 假装成 true（=正在跟踪），让看门狗让路。 */
+        var activeField = type.GetField("_active", Priv);
         if (settle == null || beginVisual == null || overlayField == null)
         {
             Log.AppendLine("③ 反射没找到 GestureService 的私有成员，跳过");
@@ -205,6 +209,7 @@ internal static class GestureOverlayDiag
             {
                 begin.Stop();
                 beginVisual.Invoke(svc, null);         // 新手势起手：作废上一笔的收起排期
+                activeField?.SetValue(svc, true);      // 假装这一笔还在跟踪：让看门狗让路
                 var live = (GestureOverlayWindow?)overlayField.GetValue(svc);
                 live?.Begin(Opts, "right");
                 live?.ShowPassive();
@@ -214,16 +219,133 @@ internal static class GestureOverlayDiag
                 check.Tick += (_, _) =>
                 {
                     check.Stop();
+                    activeField?.SetValue(svc, false);
                     var now = (GestureOverlayWindow?)overlayField.GetValue(svc);
                     long px = CountPixels(380, 660, 400, 80);
-                    Log.AppendLine($"③ 连划两下（新手势起手 320ms 后）：IsVisible={now?.IsVisible}，"
+                    Log.AppendLine($"③ 连划两下（新手势起手 320ms 后、看门狗已让路）：IsVisible={now?.IsVisible}，"
                                    + $"{px} 像素 → " + (now?.IsVisible == true ? "没被吃掉" : "被上一笔的淡出 Hide 掉了"));
-                    Finish();
+                    TestStaleSurface();
                 };
                 check.Start();
             };
             begin.Start();
         }
+    }
+
+    /// <summary>
+    /// ④ 残影：一笔画完直接 Clear()+Hide()（未命中手势走的就是这条），
+    /// 窗口表面上还留着那一笔吗？再 Show() 出来的时候会不会把它贴出来？
+    ///
+    /// 量法刻意绕开"新一笔的渲染"：画完 → 收 → 原样 Show()（不 Begin、不喂点），
+    /// 这时屏幕上除了上次提交的位图之外不该有东西。旧写法这里是上一笔的轨迹，
+    /// 新写法（HideWhenBlank）应该是 0。
+    /// </summary>
+    private static void TestStaleSurface()
+    {
+        /* 先证明这块区域采得到轨迹：画一笔、量一次。
+         * 注意喂点必须在 Show 之后另起一拍 —— 新窗口第一次显示前 WPF 的 DPI
+         * 还是 96，这一拍里加的点会按 1:1 映射，画到两倍远的地方去。 */
+        var probe = new GestureOverlayWindow();
+        DrawStroke(probe, () =>
+        {
+            long baseline = CountPixels(250, 250, 400, 100);
+            Log.AppendLine($"④ 起点：画完那一刻 {baseline} 像素（应 >0，否则这段测不出东西）");
+            probe.Clear();
+            probe.Hide();
+            StaleOldWay();
+        });
+    }
+
+    /// <summary>④-A 旧写法：Clear 与 Hide 同一拍 —— 空画布没机会提交。</summary>
+    private static void StaleOldWay()
+    {
+        var overlay = new GestureOverlayWindow();
+        DrawStroke(overlay, () =>
+        {
+            overlay.Clear();
+            overlay.Hide();                     // ← 旧写法（等价于以前的 HideOverlay(0)）
+            Pump(150, () =>
+            {
+                /* 后台高频采屏：闪现只有 1~2 帧，80ms 后再看就已经被新的一帧盖掉了。
+                 * 先起采样线程，再 Show()。 */
+                SampleMaxAsync(250, 250, 400, 100, 260, stale =>
+                {
+                    Log.AppendLine($"④ 旧写法（Clear+Hide 同一拍）：再显示后峰值 {stale} 像素 → "
+                                   + (stale > 0 ? "上一笔留在窗口表面上（用户看到的就是闪一下）" : "没留下（这台机器上看不到这一帧）"));
+                    overlay.Clear();
+                    overlay.Hide();
+                    StaleNewWay();
+                });
+                overlay.Show();                 // 原样再显示：表面里剩什么就贴什么
+            });
+        });
+    }
+
+    /// <summary>④-B 新写法：先让空画布上屏，再藏。</summary>
+    private static void StaleNewWay()
+    {
+        var overlay = new GestureOverlayWindow();
+        DrawStroke(overlay, () =>
+        {
+            overlay.HideWhenBlank();
+            Pump(320, () =>                     // 等它把两帧走完、真的藏起来
+            {
+                SampleMaxAsync(250, 250, 400, 100, 260, stale =>
+                {
+                    Log.AppendLine($"④ 新写法（HideWhenBlank）：再显示后峰值 {stale} 像素 → "
+                                   + (stale == 0 ? "表面已经是空的，不会再闪" : "还有残留，没修干净"));
+                    overlay.Clear();
+                    overlay.Hide();
+                    Finish();
+                });
+                overlay.Show();
+            });
+        });
+    }
+
+    /// <summary>
+    /// 后台线程高频采屏（不占界面线程），返回这段时间里同一块区域的峰值像素数。
+    /// 用来抓只有 1~2 帧的闪现 —— 界面线程上的 80ms 定时采样根本看不到。
+    /// </summary>
+    private static void SampleMaxAsync(int x, int y, int w, int h, int ms, Action<long> done)
+    {
+        var thread = new System.Threading.Thread(() =>
+        {
+            long max = 0;
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < ms)
+            {
+                long px = CountPixels(x, y, w, h);
+                if (px > max) max = px;
+            }
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => done(max)));
+        })
+        { IsBackground = true };
+        thread.Start();
+    }
+
+    /// <summary>
+    /// 画一条固定的横线：Show 之后另起一拍再喂点（避开首次显示前的 DPI），
+    /// 而且必须**按 8ms 的节奏一点一点喂** —— 重绘有 16ms 节流（B/X.cs:119），
+    /// 一口气同步喂 31 个点只会画出头两个点之间的那一小段。
+    /// </summary>
+    private static void DrawStroke(GestureOverlayWindow overlay, Action done)
+    {
+        overlay.Begin(Opts, "right");
+        overlay.ShowPassive();
+        int tick = 0;
+        var timer = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromMilliseconds(8) };
+        timer.Tick += (_, _) =>
+        {
+            tick++;
+            overlay.AddPoint(300 + tick * 10, 300);
+            if (tick < 30) return;
+            timer.Stop();
+            Pump(150, done);
+        };
+        /* 等首次显示把 DPI 换过来（这个窗口是新建的，Show 之前 WPF 还按 96 DPI 算），
+         * 再开始喂点，否则整条线会画到两倍远的地方去。 */
+        Pump(80, timer.Start);
     }
 
     /// <summary>跑一小段消息循环再继续（用于校准时等窗口上屏）。</summary>

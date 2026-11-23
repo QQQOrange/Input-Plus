@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Threading;
 using InputPlus.Core.Gestures;
 using InputPlus.Core.Localization;
 using InputPlus.Core.Settings;
@@ -45,6 +46,13 @@ public sealed partial class GestureOverlayWindow : Window
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
 
+    /* 虚拟屏幕矩形（物理像素）。和 SystemParameters 那组 DIP 值不是一回事，
+     * 见 SyncBounds 的注释。 */
+    private const int SM_XVIRTUALSCREEN = 76;
+    private const int SM_YVIRTUALSCREEN = 77;
+    private const int SM_CXVIRTUALSCREEN = 78;
+    private const int SM_CYVIRTUALSCREEN = 79;
+
     private double _scale = 1;
     private GestureOptions _opts = new();
     private string? _button;
@@ -64,6 +72,37 @@ public sealed partial class GestureOverlayWindow : Window
     /// <summary>重绘最小间隔（<c>B/X.cs:119</c>：距上次画满 16ms 才重来一次）。</summary>
     private const int PaintIntervalMs = 16;
 
+    /* ── 「空一帧再藏」─────────────────────────────────────────────
+     *
+     * 这块是"上一笔闪一下"的根子，改动前先说清楚为什么。
+     *
+     * WPF（AllowsTransparency=true 的分层窗口）是**把整窗位图提交给系统**才上屏的，
+     * 而提交只发生在窗口**可见**的时候。所以：
+     *     Clear()   → 只是把 WPF 这边的视觉树清空，屏幕上那一帧还在；
+     *     Hide()    → 同一拍里执行，WPF 根本没机会提交"空画布"；
+     *     Show()    → 系统先把上一次提交的位图贴出来（上一笔的轨迹），
+     *                 要等新的一帧渲染完才被盖掉 —— 用户看到的就是"上一笔闪一下"。
+     *
+     * 这也正好解释了现象为什么只出现在**未命中**的手势上：命中的那条走
+     * SettleOverlay → 名称框淡出 100~500ms，窗口一直可见，空画布早就提交上去了；
+     * 未命中走 HideOverlay(0)，清空与隐藏在同一拍，表面留着的还是上一笔。
+     *
+     * WGestures 2 没有这个问题，因为它的轨迹窗**从不隐藏**：B/X.cs 的 x 建好后
+     * A(true) 就是加 WS_VISIBLE（a/E.cs:244 的 A(bool)），手势结束时 A/T.cs:115-119
+     * 只把位图刷成透明，窗口一直可见，所以透明帧永远来得及提交。
+     *
+     * 这里不动窗口生命周期（全屏置顶窗一直挂着不好），改成等价的做法：
+     * 藏之前先让"空画布"真的上屏一帧，之后表面就是透明的，Show() 出来自然是空的。 */
+    private int _hideToken;
+    private DispatcherTimer? _hideFallback;
+
+    /// <summary>两帧 ≈ 32ms：第 1 帧提交清空后的画布，第 2 帧确认已经上屏。</summary>
+    private const int BlankFramesBeforeHide = 2;
+
+    /// <summary>渲染回调万一不来（远程桌面 / 合成被关掉），最多等这么久就照藏。</summary>
+    private const int BlankHideFallbackMs = 160;
+
+
     public GestureOverlayWindow()
     {
         InitializeComponent();
@@ -72,6 +111,17 @@ public sealed partial class GestureOverlayWindow : Window
         Top = SystemParameters.VirtualScreenTop;
         Width = SystemParameters.VirtualScreenWidth;
         Height = SystemParameters.VirtualScreenHeight;
+        /* 关窗时把还没跑完的"空帧后隐藏"作废：CompositionTarget.Rendering 是静态事件，
+         * 漏一个订阅就等于把整个窗口（和它整屏的视觉树）钉在内存里。 */
+        Closed += (_, _) =>
+        {
+            _hideToken++;
+            if (_hideFallback is { } fallback)
+            {
+                try { fallback.Stop(); } catch (Exception) { }
+                _hideFallback = null;
+            }
+        };
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -82,6 +132,8 @@ public sealed partial class GestureOverlayWindow : Window
             ex | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
         _scale = GetDpiForWindow(hwnd) / 96.0;
         if (_scale <= 0.1) _scale = 1;
+        /* HWND 有了才知道真实 DPI：按它把窗口摆到整个虚拟屏幕上。 */
+        SyncBounds();
     }
 
     /* DPI 比例不能只靠 SourceInitialized 那次取：窗口没显示时
@@ -100,12 +152,13 @@ public sealed partial class GestureOverlayWindow : Window
         }
     }
 
-    /// <summary>物理像素 → 画布坐标（DIP，相对虚拟屏幕左上角）。</summary>
+    /// <summary>物理像素 → 画布坐标（DIP，相对窗口左上角）。</summary>
     private Point ToCanvas(double px, double py)
     {
+        /* 用窗口自己的 Left/Top 当归一化原点，而不是 SystemParameters 里那组
+         * 按主屏 DPI 折算的虚拟屏 DIP 值：多屏不同缩放时两者不等，轨迹会整体偏移。 */
         double scale = Scale;
-        return new(px / scale - SystemParameters.VirtualScreenLeft,
-                   py / scale - SystemParameters.VirtualScreenTop);
+        return new(px / scale - Left, py / scale - Top);
     }
 
     // ───────────────── 轨迹颜色（照 WGestures 2 的两色模型） ─────────────────
@@ -212,6 +265,10 @@ public sealed partial class GestureOverlayWindow : Window
     /// <summary>一次手势开始时调用：清干净上一笔，按配置铺好"未识别"配色。</summary>
     public void Begin(GestureOptions opts, string? button = null)
     {
+        /* 新手势来了：上一笔排的"空帧后隐藏"必须作废，否则它会在这一笔
+         * 刚起手的两帧里把窗口藏掉（轨迹还在、屏幕上一个像素没有）。 */
+        CancelPendingHide();
+        SyncBounds();
         _opts = opts ?? new GestureOptions();
         _button = button;
         ClearTrail();
@@ -222,6 +279,44 @@ public sealed partial class GestureOverlayWindow : Window
         ApplyLabelStyle(executed: false);
         LabelBox.Opacity = 1.0;
         LabelBox.BeginAnimation(OpacityProperty, null);
+    }
+
+    /// <summary>
+    /// 覆盖层铺满整个虚拟屏幕，但尺寸只在建窗时取过一次。换分辨率、插拔显示器、
+    /// 远程桌面改尺寸之后窗口还是旧大小 —— 画到外面去的轨迹会被裁掉。
+    /// 每一笔起手对一次，代价只是四次比较。
+    ///
+    /// 尺寸按**物理像素**的虚拟屏算再除以窗口 DPI，不直接用 SystemParameters 的
+    /// 那组 DIP：混合 DPI（主屏 100% + 副屏 200%）下它是按主屏折算的，拿它当
+    /// 窗口的 DIP 尺寸会让窗口只覆盖到副屏的一半，副屏上的轨迹被裁掉。
+    /// </summary>
+    private void SyncBounds()
+    {
+        double scale = Scale;
+        double left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        double top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        double width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        double height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+        if (width < 1 || height < 1)
+        {
+            /* 拿不到物理尺寸（极少见）：退回 SYSTEM 那组 DIP，至少能画在主屏上。 */
+            left = SystemParameters.VirtualScreenLeft;
+            top = SystemParameters.VirtualScreenTop;
+            width = SystemParameters.VirtualScreenWidth;
+            height = SystemParameters.VirtualScreenHeight;
+            scale = 1.0;
+        }
+
+        left /= scale;
+        top /= scale;
+        width /= scale;
+        height /= scale;
+
+        if (Math.Abs(Left - left) > 0.5) Left = left;
+        if (Math.Abs(Top - top) > 0.5) Top = top;
+        if (Math.Abs(Width - width) > 0.5) Width = width;
+        if (Math.Abs(Height - height) > 0.5) Height = height;
     }
 
     /// <summary>
@@ -302,6 +397,63 @@ public sealed partial class GestureOverlayWindow : Window
         element.BeginAnimation(OpacityProperty, null);
         element.Opacity = 1.0;
     }
+
+    /// <summary>新的内容要显示 / 新手势起手：作废还没跑完的"空帧后隐藏"。</summary>
+    public void CancelPendingHide() => _hideToken++;
+
+    /// <summary>
+    /// 收起覆盖层：**先把画布清空、等空画布真的上屏，再 Hide()**。
+    ///
+    /// 所有"收起来"的路径都必须走这里。直接 <see cref="Clear"/> + <see cref="Window.Hide"/>
+    /// 会把上一笔的画面留在窗口表面上：隐藏期间 WPF 不提交新帧，下一次 Show()
+    /// 先把旧位图贴出来、再等新帧覆盖 —— 就是用户报的"上一笔闪一下"
+    /// （详细机制见字段区那段注释）。
+    ///
+    /// 两帧之后才真藏：第 1 帧把清空后的画布提交给系统，第 2 帧确认它已经上屏。
+    /// 这两帧里窗口是空的，用户看不见任何东西；真藏之前要是又起手了
+    /// （<see cref="CancelPendingHide"/>），这一下就作废，绝不藏掉新的一笔。
+    /// </summary>
+    public void HideWhenBlank()
+    {
+        Clear();
+        if (!IsVisible)
+        {
+            _hideToken++;          // 已经藏着了：没有"旧画面"可留，顺手作废之前的排期
+            return;
+        }
+
+        int token = ++_hideToken;
+        int frames = 0;
+
+        var fallback = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(BlankHideFallbackMs)
+        };
+
+        void Finish()
+        {
+            CompositionTarget.Rendering -= OnFrame;
+            try { fallback.Stop(); } catch (Exception) { }
+            if (ReferenceEquals(_hideFallback, fallback)) _hideFallback = null;
+            if (token != _hideToken) return;   // 中途又起手 / 又有新内容：不许藏
+            try { Hide(); } catch (Exception) { /* 窗口已经关了 */ }
+        }
+
+        void OnFrame(object? sender, EventArgs e)
+        {
+            if (token != _hideToken) { CompositionTarget.Rendering -= OnFrame; return; }
+            if (++frames < BlankFramesBeforeHide) return;
+            Finish();
+        }
+
+        CompositionTarget.Rendering += OnFrame;
+        /* 上一次没跑完的兜底作废；它自己那帧回调看到号对不上会退订。 */
+        try { _hideFallback?.Stop(); } catch (Exception) { }
+        _hideFallback = fallback;
+        fallback.Tick += (_, _) => Finish();
+        fallback.Start();
+    }
+
     private Point ToCanvasPointOf(Point device) => ToCanvas(device.X, device.Y);
 
     /// <summary>
@@ -407,7 +559,16 @@ public sealed partial class GestureOverlayWindow : Window
     /// <summary>让窗口"存在但不打扰"：不激活、不进 Alt+Tab、不抢鼠标。</summary>
     public void ShowPassive()
     {
-        if (!IsVisible) Show();
+        /* 要显示了 = 之前排的"空帧后隐藏"不能再跑（否则它会在这一帧里把窗口藏掉）。 */
+        CancelPendingHide();
+        bool wasHidden = !IsVisible;
+        if (wasHidden) Show();
+
+        /* 从隐藏状态出来的第一帧，系统贴的是上一次提交的位图。正常路径下那张图
+         * 已经是空的了（见 HideWhenBlank），但窗口一旦被别的路径藏过（用户手动
+         * 关掉、WarmUp、异常收尾），这里强制重画一次，让新的一帧尽快盖上去。 */
+        if (wasHidden) Root.InvalidateVisual();
+
         // 每次显示都重新压到最上层：别的程序可能刚好也置顶了。
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero)
