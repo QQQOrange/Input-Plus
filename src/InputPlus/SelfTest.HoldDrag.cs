@@ -612,12 +612,41 @@ public static partial class SelfTest
                 Near(a1.Height, a0.Height) && Near(a1.Top, a0.Top) && Near(a1.Width, a0.Width),
                 Fmt(a1) + " 起点 " + Fmt(a0));
             // 横着拉 70：右边缘跟着光标走，高度仍然不动 —— 这才是"调整能用、而且跟手"。
+            //
+            // 断言拆成两层，因为这两件事本来就是两层：
+            //   ① **解算层**（ResizeGeometry）：给定起始矩形 + 一次鼠标位移，算出来的目标矩形
+            //      必须立刻是「宽 -70、左边不动、高度不动」。纯函数，不读真实窗口，不可能 flake。
+            //   ② **落地层**（真实窗口矩形）：SetWindowPos 是投给窗口线程的，高负载下它可能
+            //      晚一帧才被处理 —— 所以这一条用 WaitUntil 等条件成立，而不是"挪完立刻读"。
+            // 以前只有 ②，而且按"当场到位"断言，于是窗口系统一忙就 FAIL；那是断言打错了层，
+            // 不是解算算错了。
+            var solver = new AltState();
+            Native.RECT solveTrack = a0;
+            var grabPoint = new Native.POINT(a0.Right - 4, a0.Top + a0.Height / 2);
+            AltDragCore.RecordOrigin(solver, hwnd, solveTrack);
+            AltDragCore.QueryMinMax(hwnd, grabPoint, out Native.POINT solveMin, out Native.POINT solveMax);
+            solver.MinTrack = solveMin;
+            solver.MaxTrack = solveMax;
+            AltDragCore.Rebase(solver, move: false, grabPoint, solveTrack, cfg);
+            int goalX = 0, goalY = 0, goalW = 0, goalH = 0;
+            AltDragCore.ResizeGeometry(solver, new Native.POINT(grabPoint.X - 70, grabPoint.Y),
+                solveTrack, ref goalX, ref goalY, ref goalW, ref goalH);
+            Check("按住拖拽：解算层算出的目标矩形当场跟手（不读真实窗口）",
+                goalW == solveTrack.Width - 70 && goalX == solveTrack.Left && goalH == solveTrack.Height,
+                "目标 " + goalX + "," + goalY + " " + goalW + "x" + goalH + " 起点 " + Fmt(solveTrack)
+                + " 边=" + solver.EdgeX + "/" + solver.EdgeY + " offset=" + solver.OffsetX + "," + solver.OffsetY);
+
             fx -= 70;
             var a2Step = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
             sink.OnMouse(Native.WM_MOUSEMOVE, ref a2Step);
+            bool landed = WaitUntil(() =>
+            {
+                Native.GetWindowRect(hwnd, out Native.RECT now);
+                return Near(now.Width, a1.Width - 70) && Near(now.Left, a1.Left) && Near(now.Height, a1.Height);
+            }, 2000);
             Native.GetWindowRect(hwnd, out Native.RECT a2);
-            Check("按住拖拽：抓右边框中段横着拖，宽度跟着光标变（当场到位）",
-                Near(a2.Width, a1.Width - 70) && Near(a2.Left, a1.Left) && Near(a2.Height, a1.Height),
+            Check("按住拖拽：抓右边框中段横着拖，宽度跟着光标变（轮询等窗口落地）",
+                landed,
                 Fmt(a2) + " 上一帧 " + Fmt(a1));
             var a1Up = new Native.MSLLHOOKSTRUCT { pt = new Native.POINT(fx, fy) };
             sink.OnMouse(Native.WM_RBUTTONUP, ref a1Up);

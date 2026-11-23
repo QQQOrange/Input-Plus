@@ -40,7 +40,7 @@ Windows 10 1809+ / Windows 11（x64、x86）；Win7 SP1 版为自包含包	Windo
 设置文件	Settings file
 关于这个程序	About this app
 Input Plus（Input Plus）是一个 Windows 键盘增强工具：按住一个触发键进入功能层，就能把任意按键变成快捷键 —— 光标移动、文字选择、窗口切换、打开网页、播放宏，全部可以自己配。	Input Plus is a Windows keyboard utility: hold a trigger key to enter a function layer, then any key becomes a shortcut — move the cursor, select text, switch windows, open websites, play macros. All of it is up to you.
-支持 10 个独立图层，每层可以有自己的触发键和整套按键绑定。所有配置都在图形界面里完成，也支持 WebDAV 同步与导入导出。	Ten independent layers, each with its own trigger key and full set of bindings. Everything is configured in the GUI, with WebDAV sync, import and export.
+支持 10 个独立图层，每层可以有自己的触发键和整套按键绑定。所有配置都在图形界面里完成，也支持 WebDAV 同步与导入导出。	Ten independent layers, each with its own trigger key and full set of bindings. All configuration happens in the GUI, with WebDAV sync, import and export.
 本程序的按键语义源自 Junkai Chen 的 AutoHotkey 版 CapsLock+，界面、引擎与全部设置系统为重新实现。	The key semantics come from Junkai Chen's AutoHotkey-based CapsLock+; the UI, engine and settings system are a fresh implementation.
 帮助与反馈	Help & feedback
 遇到问题先看「使用说明」的常见问题，再查「更新日志」；确定是 bug 就到 GitHub 提 issue，附上诊断信息最快。	Start with the FAQ in the documentation, then check the changelog; if it is a bug, open an issue on GitHub — including the diagnostics gets it fixed fastest.
@@ -206,7 +206,7 @@ Caps+C / V 用剪贴板 1，Caps+LAlt+C / V 用剪贴板 2，不会覆盖系统�
 新建分组	New group
 重命名	Rename
 导出	Export
-只导出当前分组的别名；选「全部」时导出全部	Export only the selected group's aliases; with "All" selected it exports everything
+只导出当前分组的别名；选「全部」时导出全部	Export only the selected group's aliases; with "All" selected it exports all of them
 全部别名	All aliases
 从未使用	Never used
 只显示还没被展开过的别名	Show only aliases that were never expanded
@@ -258,7 +258,7 @@ Caps+C / V 用剪贴板 1，Caps+LAlt+C / V 用剪贴板 2，不会覆盖系统�
 取消	Cancel
 确定	OK
 按应用自动启用层	Enable layers per app
-切到这些程序时自动叠加它绑定的层：只接管该层绑过的组合，其余按键照常输入。	When these apps are in front, overlay the layer bound to them: only combinations bound in that layer are taken over, everything else types normally.
+切到这些程序时自动叠加它绑定的层：只接管该层绑过的组合，其余按键照常输入。	When these apps are in front, overlay the layer bound to them: only combinations bound in that layer are taken over, the rest types normally.
 进程名，如 Code.exe（大小写不敏感）；输入后按回车添加	Process name such as Code.exe (case-insensitive); press Enter to add
 按住 CapsLock	Hold CapsLock
 + 下面的键	+ the key below
@@ -656,10 +656,10 @@ Enter 执行	Enter runs
 合并恢复（推荐）	Merge (recommended)
 按主键对齐：同一个按键 / 宏 / 搜索项以备份里的为准，本地独有的内容保留。全局设置、网盘与备份密码不动。	Aligns by key: for the same key / macro / search entry the backup wins, and local-only items are kept. Global settings, WebDAV and the backup password are untouched.
 覆盖恢复	Overwrite
-整份替换成备份里的内容，本地当前配置会被清掉（恢复前会自动另存一份）。网盘与备份密码始终保留本机。	Replaces everything with the backup contents, discarding the current local settings (a copy is saved first). WebDAV and the backup password always stay local.
+整份替换成备份里的内容，本地当前配置会被清掉（恢复前会自动另存一份）。网盘与备份密码始终保留本机。	Replaces all settings with the backup contents, discarding the current local settings (a copy is saved first). WebDAV and the backup password always stay local.
 恢复选中这份	Restore this one
 恢复选中	Restore selected
-只补「当前配置里没有的」：同触发词的现有版本不会被覆盖。恢复后照常保存到配置里。	Only adds what is missing: an existing entry with the same trigger is never overwritten, and everything is saved right after.
+只补「当前配置里没有的」：同触发词的现有版本不会被覆盖。恢复后照常保存到配置里。	Only adds what is missing: an existing entry with the same trigger is never overwritten, and all of it is saved right after.
 启动密码	Startup password
 这个软件已设置启动密码，请输入密码进入主界面。	This app is protected by a startup password. Enter it to open the main UI.
 退出	Exit
@@ -1771,7 +1771,7 @@ InputPlus 备份	InputPlus backup
 已合并：新增 {0} 项，覆盖 {1} 项（本地独有的内容保留）{2}	Merged: {0} added, {1} replaced (items only present locally were kept){2}
 ；GitHub 令牌已换成备份里的	; the GitHub token was replaced with the one from the backup
 ；GitHub 令牌保留本机的	; kept this machine's GitHub token
-已整份恢复（覆盖，网盘与备份密码保留本机）	Fully restored (overwrote everything; cloud drive and backup password stay local)
+已整份恢复（覆盖，网盘与备份密码保留本机）	Fully restored (overwrote all settings; cloud drive and backup password stay local)
 早于 {0} 天的备份	Backups older than {0} days
 只保留最近 {0} 份	Keep only the latest {0}
 还没填 WebDAV 地址，云端没有可清理的对象。	No WebDAV address yet, so there is nothing to clean up in the cloud.
@@ -2356,7 +2356,7 @@ Input Plus · 快捷键速查（v{0}）	Input Plus · Shortcut cheat sheet (v{0}
 导入会和现有 {0} 条别名合并。\n\n要改成「替换全部」吗？替换会先清空现有别名，且不可撤销。	Import will merge with the {0} existing aliases.\n\nSwitch to "Replace all" instead? That clears existing aliases first and cannot be undone.
 替换全部	Replace all
 合并导入	Merge instead
-已替换为 {0} 条别名	Replaced everything with {0} aliases
+已替换为 {0} 条别名	Replaced all entries with {0} aliases
 导入完成：新增 {0} 条，更新 {1} 条	Import finished: {0} added, {1} updated
 新别名	New alias
 删除选中的 {0} 条别名？\n\n删除后不可撤销。	Delete the {0} selected aliases?\n\nThis cannot be undone.

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
@@ -214,8 +214,8 @@ public partial class QbarSettingsView : UserControl
         /* 语义层开关：控件跟随设置，越界值夹回界面允许的区间（设置文件可能被手改）。 */
         QbarSearchOptions sem = _host.Settings.Qbar.Search;
         SemanticRulesBox.IsChecked = sem.RulesEnabled;
-        // 后端固定 Everything（见 QbarSearchOptions.EverythingOnly），这一页只显示只读说明，没有开关。
-        if (SemanticEverythingNote != null) SemanticEverythingNote.Visibility = Visibility.Visible;
+        // 后端固定为进程内索引（见 QbarSearchOptions.Backend），这一页只显示只读说明，没有开关。
+        if (SemanticBackendNote != null) SemanticBackendNote.Visibility = Visibility.Visible;
         SemanticBuiltinRulesBox.IsChecked = sem.BuiltinRulesEnabled;
         SemanticPinyinBox.IsChecked = sem.PinyinEnabled;
         SemanticFacetsBox.IsChecked = sem.FacetsEnabled;
@@ -1297,8 +1297,8 @@ public partial class QbarSettingsView : UserControl
         if (_host == null || _suppress) return;
         QbarSearchOptions s = _host.Settings.Qbar.Search;
         s.RulesEnabled = SemanticRulesBox.IsChecked == true;
-        s.PreferEverything = true;      // 后端固定 Everything：界面上已经没有"换回本地快照"的入口
-        s.EverythingOnly = true;
+        s.Backend = Core.Qbar.Search.QbarFileBackend.Tantivy;   // 后端固定：界面上没有"换一条路"的入口
+
         s.BuiltinRulesEnabled = SemanticBuiltinRulesBox.IsChecked == true;
         s.PinyinEnabled = SemanticPinyinBox.IsChecked == true;
         s.FacetsEnabled = SemanticFacetsBox.IsChecked == true;
@@ -1429,25 +1429,22 @@ public partial class QbarSettingsView : UserControl
     }
 
     /// <summary>
-    /// 文件搜索的状态行 —— 现在报的是 Everything 的状态，不是本地快照。
+    /// 文件搜索的状态行 —— 报的是进程内 tantivy 索引的状态。
     ///
-    /// 语义层把检索整块交给了 Everything（m02881：只用 Everything），所以这一页唯一
-    /// 有意义的"索引状态"就是 Everything 有没有在跑、索引库加载完没有。本地快照只在
-    /// 自检和基准对照里用，这里**不再偷偷 Start() 去扫盘** —— 一边说只用 Everything、
-    /// 一边在后台扫 40 万个文件，是最难查的那种"看起来在工作"。
-    ///
-    /// 没就绪时每 900ms 刷一次（等 Everything 启动/加载索引），就绪后立刻停表。
+    /// 语义层把检索整块交给了进程内索引（单一后端，没有第二条路），所以这一页唯一
+    /// 有意义的"索引状态"就是：原生库能不能加载、索引建到哪一步、建好之后有多少文件。
+    /// 没就绪时每 900ms 刷一次，就绪后立刻停表 —— 让一个定时器长期空转是最没必要的开销。
     /// </summary>
     private void RefreshIndexStatus()
     {
         if (IndexState == null) return;
 
         ApplyIndexStatus();
-        if (EverythingReady) { _indexTimer?.Stop(); return; }
+        if (QbarIndex.Ready) { _indexTimer?.Stop(); return; }
 
-        /* 没就绪就顺手把内置客户端拉起来（后台线程、内部有并发保护）。
+        /* 没就绪就顺手把索引拉起来（后台线程、内部有并发保护）。
          * 用户打开这一页多半就是"文件搜索不出东西"，让他点第二次才动是多余的。 */
-        EverythingBootstrap.WarmupAsync();
+        QbarIndex.Start();
 
         if (_indexTimer == null)
         {
@@ -1457,128 +1454,88 @@ public partial class QbarSettingsView : UserControl
         if (!_indexTimer.IsEnabled) _indexTimer.Start();
     }
 
-    /// <summary>Everything 三件套：DLL 能加载、客户端在跑、索引库已加载。</summary>
-    private static bool EverythingReady =>
-        Core.Qbar.Search.EverythingApi.IsAvailable
-        && Core.Qbar.Search.EverythingApi.IsClientRunning
-        && Core.Qbar.Search.EverythingApi.IsDbLoaded;
-
     private void OnIndexTimerTick(object? sender, EventArgs e)
     {
         ApplyIndexStatus();
-        if (EverythingReady) _indexTimer?.Stop();
+        if (QbarIndex.Ready) _indexTimer?.Stop();
     }
 
     /// <summary>
-    /// 四种状态：Everything 可用 / 没在运行 / 索引还没加载 / SDK 加载不了。
+    /// 三种状态：索引可用 / 正在建立 / 原生库加载不了。
     /// 都只是"暂时搜不到文件"，别画成红色故障；每种状态都给一句下一步怎么办。
     /// </summary>
     private void ApplyIndexStatus()
     {
         if (IndexState == null) return;
 
-        /* 本地快照的信息降级成一行旁注：它还在建也没关系，反正不参与搜索，
-         * 但自检和基准对照要看它，所以数字留着。 */
-        int files = Core.Qbar.NativeSearchIndex.FileCount;
-        int dirs = Core.Qbar.NativeSearchIndex.DirCount;
-        IndexInfo.Text = (files > 0 || dirs > 0)
-            ? Loc.T("本地快照（只给自检与基准对照用）：") + files.ToString("N0") + " " + Loc.T("个文件")
-              + " · " + dirs.ToString("N0") + " " + Loc.T("个文件夹")
-            : "";
+        IndexInfo.Text = Loc.T("索引目录：") + QbarIndex.IndexDir;
 
-        if (!Core.Qbar.Search.EverythingApi.IsAvailable)
+        if (!TantivyApi.IsAvailable)
         {
-            IndexState.Text = Loc.T("内置 Everything 没能就绪");
-            IndexDetail.Text = (Core.Qbar.Search.EverythingApi.LastErrorText.Length > 0
-                                   ? Core.Qbar.Search.EverythingApi.LastErrorText + "\n"
-                                   : "")
-                               + Loc.T("客户端与 SDK 都内置在本软件里，正常情况下第一次用到时会自动释放到数据目录。这里报错时点「刷新状态」重试一次；仍然不行就把 Everything64.dll 手工放到程序目录。");
+            IndexState.Text = Loc.T("索引原生库没能加载");
+            IndexDetail.Text = TantivyApi.StatusText
+                               + "\n" + Loc.T("ipidx.dll 随程序发布，正常情况下就在程序目录里。这里报错时点「刷新状态」重试一次；仍然不行说明文件被杀软隔离或位数不对（只支持 x64）。");
             IndexDot.Fill = (Brush)FindResource("Brush.Warning");
-            SetStartButton(Loc.T("启动 Everything"), true);
+            SetStartButton(Loc.T("重建索引"), true);
             return;
         }
 
-        if (!Core.Qbar.Search.EverythingApi.IsClientRunning)
+        if (QbarIndex.Building || !QbarIndex.Ready)
         {
-            IndexState.Text = Loc.T("内置 Everything 还没启动");
-            IndexDetail.Text = Loc.T("点「启动 Everything」当场拉起内置客户端（不弹窗口）。第一次启动要建索引，整机几十万文件通常一两分钟，之后就一直可用。");
+            IndexState.Text = QbarIndex.Building ? Loc.T("正在建立索引") : Loc.T("索引还没建立");
+            IndexDetail.Text = QbarIndex.Status
+                               + (QbarIndex.Problem.Length > 0 ? "\n" + QbarIndex.Problem : "")
+                               + "\n" + Loc.T("第一次建索引要扫一遍常用目录，几十万文件通常一两分钟；建好之后增量在后台维护，不用再等。");
             IndexDot.Fill = (Brush)FindResource("Brush.Warning");
-            SetStartButton(Loc.T("启动 Everything"), true);
-            return;
-        }
-
-        if (!Core.Qbar.Search.EverythingApi.IsDbLoaded)
-        {
-            IndexState.Text = Loc.T("Everything 正在建索引");
-            IndexDetail.Text = Loc.T("索引还没加载完，文件搜索先给不出结果。这一行会自己变；也可以点「刷新状态」立刻看一次。");
-            IndexDot.Fill = (Brush)FindResource("Brush.Warning");
-            SetStartButton(Loc.T("索引加载中…"), false);
+            SetStartButton(Loc.T("正在建立…"), false);
             return;
         }
 
         IndexState.Text = Loc.T("可用");
-        IndexDetail.Text = Core.Qbar.Search.EverythingApi.StatusText
-                           + " · " + Loc.T("SDK：")
-                           + Core.Qbar.Search.EverythingApi.SourceText
-                           + (Core.Qbar.Search.EverythingApi.IsAdmin
-                               ? ""
-                               : "\n" + Loc.T("Everything 不是以管理员身份运行：部分系统目录可能不在它的索引里。用管理员身份运行本软件即可。"));
+        IndexDetail.Text = Loc.F("{0} 个文件 · {1} 个文件夹 · {2} MB · 建索引于 {3}",
+                QbarIndex.FileCount, QbarIndex.DirCount,
+                (QbarIndex.IndexBytes / 1024.0 / 1024.0).ToString("0.0"),
+                QbarIndex.BuiltAt.ToString("yyyy-MM-dd HH:mm:ss"))
+            + "\n" + Loc.T("实时监视：") + QbarIndex.WatcherStatus;
         IndexDot.Fill = (Brush)FindResource("Brush.Success");
-        SetStartButton(Loc.T("Everything 已启动"), false);
+        SetStartButton(Loc.T("重建索引"), true);
     }
 
-    /// <summary>
-    /// 启动按钮跟着状态变：已经在跑还摆一个「启动 Everything」，用户会以为上次没点成功，
-    /// 点下去也没反应（内部会直接判定已经就绪）。就绪时改成「Everything 已启动」并置灰。
-    /// </summary>
+    /// <summary>按钮文案跟着状态变：正在建的时候按下去只会把两趟扫描叠在一起。</summary>
     private void SetStartButton(string text, bool enabled)
     {
-        if (OpenEverythingButton == null) return;
-        OpenEverythingButton.Content = text;
-        OpenEverythingButton.IsEnabled = enabled;
-        OpenEverythingButton.ToolTip = enabled
-            ? Loc.T("启动内置的 Everything 客户端（不弹窗口）。还没装过 Everything 的机器也能直接搜文件。")
-            : Loc.T("Everything 已经在运行，不需要再启动。");
+        if (RebuildIndexButton == null) return;
+        RebuildIndexButton.Content = text;
+        RebuildIndexButton.IsEnabled = enabled;
+        RebuildIndexButton.ToolTip = enabled
+            ? Loc.T("丢掉现有索引重扫一遍（索引就在本程序里，不装任何外部软件）。")
+            : Loc.T("索引正在建立，建完会自动变成可点。");
     }
 
     private void OnRefreshIndex(object sender, RoutedEventArgs e) => RefreshIndexStatus();
 
     /// <summary>
-    /// 「启动 Everything」：先起**内置**那份（用户什么都没装也能用），
-    /// 内置起不来（被杀软拦、数据目录不可写）再回落到系统里已装的 Everything。
-    ///
-    /// 不碰 Everything 的全局配置、不读写它的索引库（红线 1）：内置那份跑在
-    /// 数据目录的 portable 模式里，和用户自己装的 Everything 互不影响。
+    /// 「重建索引」：清空索引目录重扫。索引在本进程里，所以这件事不需要启动任何外部程序，
+    /// 也不需要用户去别处点一下再回来。
     /// </summary>
-    private void OnOpenEverything(object sender, RoutedEventArgs e)
+    private void OnRebuildIndex(object sender, RoutedEventArgs e)
     {
-        _host?.Notify(Loc.T("正在启动内置 Everything…"));
+        _host?.Notify(Loc.T("正在重建文件索引…"));
         Task.Run(() =>
         {
-            bool ok = EverythingBootstrap.EnsureClient(4000);
-            if (!ok)
-            {
-                try
-                {
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "Everything.exe",
-                        UseShellExecute = true,
-                    });
-                }
-                catch (Exception ex)
-                {
-                    Core.CoreLog.Warn("启动 Everything 失败：" + ex.Message);
-                }
-            }
+            QbarIndex.RequestRebuild();
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            while (!QbarIndex.Ready && watch.ElapsedMilliseconds < 8000)
+                System.Threading.Thread.Sleep(200);
 
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                _host?.Notify(ok
-                    ? Loc.T("内置 Everything 已启动；索引建好后文件搜索就能用（这一页会自动刷新）。")
-                    : (EverythingBootstrap.LastDetail.Length > 0
-                        ? EverythingBootstrap.LastDetail
-                        : Loc.T("还没能启动 Everything，稍后再点一次或手动打开它。")));
+                _host?.Notify(QbarIndex.Ready
+                    ? Loc.F("文件索引已就绪：{0} 个文件 / {1} 个目录", QbarIndex.FileCount, QbarIndex.DirCount)
+                    : (QbarIndex.Problem.Length > 0
+                        ? QbarIndex.Problem
+                        : Loc.T("索引还在建立，稍后这一页会自动更新。")));
                 RefreshIndexStatus();
             }));
         });

@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 #pragma warning disable CS0649, CS8632, CS0414, CA1416
 ﻿using System;
 using System.Collections.Generic;
@@ -356,7 +356,7 @@ namespace InputPlus.Modules.HoldDrag
 			["下载地址："] = "Download URL: ",
 			["　　　　　（未填令牌：程序内不会下载，请用上面的地址在浏览器下载）"] = "          (no token: nothing is downloaded in the app — open the URL above in your browser)",
 			["检查抛异常："] = "Check threw an exception: ",
-			["当前正在以【普通用户权限】运行。\r\n\r\n这个状态下：\r\n  · 日常拖动浏览器、编辑器、资源管理器等都正常；\r\n  · 但拖不动以管理员身份运行的窗口（例如任务管理器、部分安装程序）。\r\n\r\n建议改用管理员权限重新打开。现在重启吗？\r\n（选\"否\"就保持现状继续使用，功能不受影响）"] = "HoldDrag is running with normal user rights.\r\n\r\nIn this state:\r\n  · dragging browsers, editors and Explorer works as usual;\r\n  · windows running as administrator (Task Manager, some installers) cannot be dragged.\r\n\r\nRestarting with administrator rights is recommended. Restart now?\r\n(Choose \"No\" to keep running as is — everything else still works)",
+			["当前正在以【普通用户权限】运行。\r\n\r\n这个状态下：\r\n  · 日常拖动浏览器、编辑器、资源管理器等都正常；\r\n  · 但拖不动以管理员身份运行的窗口（例如任务管理器、部分安装程序）。\r\n\r\n建议改用管理员权限重新打开。现在重启吗？\r\n（选\"否\"就保持现状继续使用，功能不受影响）"] = "HoldDrag is running with normal user rights.\r\n\r\nIn this state:\r\n  · dragging browsers, editors and Explorer works as usual;\r\n  · windows running as administrator (Task Manager, some installers) cannot be dragged.\r\n\r\nRestarting with administrator rights is recommended. Restart now?\r\n(Choose \"No\" to keep running as is — the rest still works)",
 			["长按拖窗 · 权限提示"] = "HoldDrag · Permission",
 			["长按拖窗"] = "HoldDrag",
 			["外框已关闭"] = "Frame is off",
@@ -731,7 +731,7 @@ namespace InputPlus.Modules.HoldDrag
 			["诊断"] = "Diagnostics",
 			["遇到问题先导出诊断包：配置 + 最近日志 + 系统信息"] = "Export a diagnostics bundle first: config, recent logs and system info",
 			["导出诊断包"] = "Export diagnostics bundle",
-			["打成一个 zip，方便发给开发者"] = "Pack everything into one zip to send to the developer",
+			["打成一个 zip，方便发给开发者"] = "Pack all of it into one zip to send to the developer",
 			["导出诊断包…"] = "Export diagnostics bundle…",
 			["压缩包"] = "Zip archive",
 			["诊断包已导出："] = "Diagnostics bundle exported: ",

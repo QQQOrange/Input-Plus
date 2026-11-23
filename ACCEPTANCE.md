@@ -349,3 +349,101 @@
 
 对应 6 条自检断言（`SelfTest.MiddleMenu`）：没认出文件→灰、第二行「识别中…」、认出后亮、
 第二行是文件名、桌面/资源管理器→灰、第二行「前台没有打开文件」。全部通过。
+## v1.6.0 索引验收（进程内 tantivy）
+
+1. `cargo build --release`（`src\ipidx`）0 error；`cargo test` 全绿（45 项）。
+2. `dotnet build src\InputPlus\InputPlus.csproj -c Release` 0 error、0 新增警告。
+3. `--selftest` 退出码 0，项数 ≥ 7055（本轮 7086），索引相关新增 ≥ 60 项（本轮约 73）。
+4. `--qbar-bench`：热态 p95 ≤ 40 ms、均值 ≤ 15 ms；冷启首轮 p95 ≤ 120 ms。
+5. `--index-status`：条数 / 体积 / 建索引分段 / watcher 状态 / 查询 p50-p95 齐全。
+6. 索引体积 ≤ 1.5 GB（本机 68 万条 207 MB）；工作集增量 ≤ 300 MB（见 TANTIVY-MIGRATION §5）。
+7. 增量：新建 2 秒内可搜到、删除 2 秒内搜不到、改名旧名消失新名出现。
+8. 崩溃恢复：进程被杀后重启不丢已完成部分（`state.json` 的 `Done` 语义）。
+9. `--render docs\screenshots` 正常出图，Qbar 与设置页无布局回归。
+10. `grep -ri everything src tools .github`：只剩 1 处旧配置键名常量（迁移必需，见文末说明）。
+11. `csproj` 只剩 `net10.0-windows10.0.22000.0` 与 `win-x64`。
+---
+
+## v1.5.8.1 索引缺陷修复轮（F0～F12）验收
+
+### 构建与测试（真实输出）
+
+```
+src\ipidx> cargo build --release
+    Finished `release` profile [optimized] target(s) in 9.44s
+
+src\ipidx> cargo test
+test result: ok. 26 passed; 0 failed          （单元）
+test result: ok. 28 passed; 0 failed          （夹具）
+test result: ok. 0 passed;  0 failed          （doc-tests）
+
+> dotnet build src\InputPlus\InputPlus.csproj -c Release
+    0 个警告
+    0 个错误
+```
+
+```
+> InputPlus.exe --selftest
+==== 通过 7203 项，失败 0 项 ====
+
+> InputPlus.exe --selftest --only=HoldDrag     （连跑 3 次）
+==== 通过 181 项，失败 0 项 ====   ×3
+```
+
+### `--index-status --rebuild --increment-check`
+
+```
+原生库: ipidx/0.1.0 schema=2 ok
+根目录: C:\ ；D:\
+文档总数: 676594
+文件 / 目录: 545321 / 131273
+段数: 14
+索引体积: 233.9 MB（362 字节/文档）
+建索引分段: 15857 ms（枚举 375 ms · 写索引 15958 ms · 拼音 58 ms） · 676,594 条 · 42,668 条/秒
+watcher: 2 个根目录正在监视（全部实时）
+目录快照: 50,000 个目录（快照已截断 60,517 个目录）
+查询 p50: 9.3 ms
+查询 p95: 23.7 ms
+样本数: 32
+新建后可见: 是 · 延迟 1425 ms（≤2s 达标）
+删除后不可见: 是 · 延迟 220 ms（≤2s 达标）
+```
+
+### `--qbar-bench`
+
+```
+20 条查询端到端中位数的 p95: 19.2 ms（预算 50 ms）
+中位数的最小/最大: 0.4 / 21.4 ms
+均值（20 条中位数）: 8.12 ms（预算 ≤ 15 ms）
+本地重排: 候选最多 2000 条，RankMs 中位 2.01 ms，最大 2.88 ms（预算 50 ms）
+翻译层: 2000 次平均 15.17 us/次（预算 5000 us）
+```
+
+### golden 对照（`tools\qbar-golden-compare.ps1`）
+
+```
+查询数=24 缺失合计=657 新增合计=697
+```
+
+任务书写的历史缺失数是 656；那一天的磁盘内容与本轮不同（OneDrive / `D:\Desktop` / `D:\Downloads`
+在这几小时里被移动过）。两条稳定缺席的是 `D:\tmp\qbar-efu\report-2026.docx` 与
+`…\报表-2026.pdf` —— 目标文件已不在盘上，属于正确行为（见 TANTIVY-MIGRATION §5.4 / §8）。
+
+### 分面直出的延迟 A/B（F9 决策依据）
+
+| | `doc:` 中位 | 20 条 p95 |
+|---|---|---|
+| 分面开 | 10.0 ms | 17.4 ms |
+| 分面关（`INPUTPLUS_QBAR_NOFACETS=1`） | 10.9 ms | 19.2 ms |
+
+增量 ≈ 0 ms（噪声内）≤ 10 ms → 上线，文案「全部：」。
+
+### 已知限制
+
+见 `docs/qbar/TANTIVY-MIGRATION.md` §8，逐条都有触发条件与处理方式。与本轮直接相关的两条：
+
+- **单字符查询**（F11）：界面路径不发单字符文件查询（`QbarProviders.MatchFiles` 里
+  `if (text.Length < 2) yield break;`），风险只在 `--qbar-query "a"` 这类诊断里；
+  诊断时把输入加长即可。详见 TANTIVY-MIGRATION §8 第 5 条。
+- **`dir` 字段保留**（F12）：去掉它省 47 MB 且召回不降，但相对 206 MB 基线只降 9.4%（< 20% 门槛）、
+  实测 186.7 MB > 165 MB 验收线 → 按决策规则不改，见 DECISIONS D73。

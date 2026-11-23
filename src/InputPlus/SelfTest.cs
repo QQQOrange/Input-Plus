@@ -33,6 +33,31 @@ public static partial class SelfTest
 
     private static readonly StringBuilder Log = new();
 
+    /// <summary>
+    /// `--selftest --only=片段` 的子集过滤串。空串 = 跑全量（默认）。
+    ///
+    /// 为什么要它：全量自检 7000 多项，改一处索引后端要先等十几分钟才知道对不对，
+    /// 一轮改造要跑几十次门槛，时间全烧在跟本次改动无关的输入法用例上。
+    /// 过滤按**用例方法名**（`TestQbar*` 这种）做包含匹配，不按断言名 ——
+    /// 断言名是给人读的句子，方法名才是用例的身份。
+    /// </summary>
+    private static string _only = "";
+
+    /// <summary>本次过滤下实际执行的用例数（用来在报告末尾说清"这是子集，不是全量"）。</summary>
+    private static int _ran;
+
+    /// <summary>还没打印的章节名。过滤时整章一个用例都不跑，就不该留一个空标题。</summary>
+    private static string _pendingSection = "";
+
+    /// <summary>由命令行入口在 <see cref="Run"/> 之前调用一次。</summary>
+    public static void Configure(string? only)
+    {
+        _only = (only ?? "").Trim();
+    }
+
+    /// <summary>本次是否子集模式。</summary>
+    internal static bool SubsetMode => _only.Length > 0;
+
     public static int Run()
     {
         // 整体包一层：自检里任何一步意外抛异常，也要保证写出报告并返回退出码，
@@ -51,6 +76,8 @@ public static partial class SelfTest
         }
 
         Log.AppendLine();
+        if (SubsetMode)
+            Log.AppendLine($"（子集模式 --only={_only}：执行 {_ran} 个用例方法，跳过其余）");
         Log.AppendLine($"==== 通过 {_passed} 项，失败 {_failed} 项 ====");
         WriteReport();
         return _failed == 0 ? 0 : 1;
@@ -69,381 +96,392 @@ public static partial class SelfTest
         Check("数据目录可创建", TryCreateDataDir());
 
         Section("按键模型");
-        TestKeyNames();
+        T(nameof(TestKeyNames), TestKeyNames);
 
         Section("鼠标手势");
-        TestGestures();
-        TestGestureEngine();
-        TestWGesturesEngine();
-        TestWg2Layer();
-        TestWg2Plus();
-        TestGestureListOrder();
+        T(nameof(TestGestures), TestGestures);
+        T(nameof(TestGestureEngine), TestGestureEngine);
+        T(nameof(TestWGesturesEngine), TestWGesturesEngine);
+        T(nameof(TestWg2Layer), TestWg2Layer);
+        T(nameof(TestWg2Plus), TestWg2Plus);
+        T(nameof(TestGestureListOrder), TestGestureListOrder);
 
         Section("中键菜单");
-        TestMiddleMenu();
-        TestFavorites();
+        T(nameof(TestMiddleMenu), TestMiddleMenu);
+        T(nameof(TestFavorites), TestFavorites);
 
         Section("收藏当前文件");
-        TestFavoriteFile();
+        T(nameof(TestFavoriteFile), TestFavoriteFile);
 
         Section("笔画平滑");
-        TestSmoothing();
-        TestNativeFileIndex();
+        T(nameof(TestSmoothing), TestSmoothing);
+        T(nameof(TestQbarIndex), TestQbarIndex);
+        T(nameof(TestQbarIndexQuery), TestQbarIndexQuery);
 
         Section("轨迹校正");
-        TestGestureCanonical();
+        T(nameof(TestGestureCanonical), TestGestureCanonical);
 
         Section("平滑滚动");
-        TestSmoothScroll();
+        T(nameof(TestSmoothScroll), TestSmoothScroll);
 
         Section("按住拖拽");
-        TestHoldDrag();
+        T(nameof(TestHoldDrag), TestHoldDrag);
 
         Section("搜索引擎");
-        TestSearchEngines();
-        TestEngineMigration();
+        T(nameof(TestSearchEngines), TestSearchEngines);
+        T(nameof(TestEngineMigration), TestEngineMigration);
 
         Section("Qbar 图标");
-        TestLegacyIconPathRevival();
-        TestSearchSiteDedupe();
+        T(nameof(TestLegacyIconPathRevival), TestLegacyIconPathRevival);
+        T(nameof(TestSearchSiteDedupe), TestSearchSiteDedupe);
 
         Section("表达式求值");
-        TestEvaluator();
+        T(nameof(TestEvaluator), TestEvaluator);
 
         Section("Qbar 检索");
-        TestQbar();
+        T(nameof(TestQbar), TestQbar);
 
         Section("Qbar 标签");
-        TestChips();
+        T(nameof(TestChips), TestChips);
 
         Section("Qbar 语义层");
-        TestQbarSemantics();
+        T(nameof(TestQbarSemantics), TestQbarSemantics);
 
         Section("Qbar 展开窗口");
-        TestQbarExpandSort();
-        TestQbarTitleSegments();
+        T(nameof(TestQbarExpandSort), TestQbarExpandSort);
+        T(nameof(TestQbarTitleSegments), TestQbarTitleSegments);
 
         Section("设置存取");
-        TestSettings();
-        TestNotificationStyle();
-        TestDataLocationAndEncryptedExport();
+        T(nameof(TestSettings), TestSettings);
+        T(nameof(TestNotificationStyle), TestNotificationStyle);
+        T(nameof(TestDataLocationAndEncryptedExport), TestDataLocationAndEncryptedExport);
 
         Section("开机自启");
-        TestStartupModeDecision();
-        TestStartupTaskXml();
-        TestStartupTaskCommands();
+        T(nameof(TestStartupModeDecision), TestStartupModeDecision);
+        T(nameof(TestStartupTaskXml), TestStartupTaskXml);
+        T(nameof(TestStartupTaskCommands), TestStartupTaskCommands);
 
         Section("取词代理");
-        TestSelectionProxyArgs();
-        TestUiaReaderTimeout();
+        T(nameof(TestSelectionProxyArgs), TestSelectionProxyArgs);
+        T(nameof(TestUiaReaderTimeout), TestUiaReaderTimeout);
 
         Section("剪贴板快照");
-        TestClipboardBackup();
+        T(nameof(TestClipboardBackup), TestClipboardBackup);
 
         Section("失败通知");
-        TestActionFailureText();
+        T(nameof(TestActionFailureText), TestActionFailureText);
 
         Section("基础改键");
-        TestBaseRemap();
+        T(nameof(TestBaseRemap), TestBaseRemap);
 
         Section("使用统计");
-        TestUsageStats();
+        T(nameof(TestUsageStats), TestUsageStats);
 
         Section("按应用层");
-        TestAppLayerOverlay();
+        T(nameof(TestAppLayerOverlay), TestAppLayerOverlay);
 
         Section("双击动作");
-        TestDoubleTapGesture();
+        T(nameof(TestDoubleTapGesture), TestDoubleTapGesture);
 
         Section("文本片段");
-        TestSnippets();
+        T(nameof(TestSnippets), TestSnippets);
 
         Section("组合键");
 
         Section("Qbar 搜动作");
-        TestQbarActionSearch();
+        T(nameof(TestQbarActionSearch), TestQbarActionSearch);
 
 
         Section("片段可编辑性");
-        TestEditableTargetRule();
+        T(nameof(TestEditableTargetRule), TestEditableTargetRule);
 
         Section("宏的流程控制");
-        TestMacroFlow();
+        T(nameof(TestMacroFlow), TestMacroFlow);
 
         Section("宏的等待与重试");
-        TestMacroWaitAndRetry();
+        T(nameof(TestMacroWaitAndRetry), TestMacroWaitAndRetry);
 
         Section("宏的变量与循环计数");
-        TestMacroVars();
+        T(nameof(TestMacroVars), TestMacroVars);
         Section("宏的动作步骤");
-        TestMacroActionStep();
+        T(nameof(TestMacroActionStep), TestMacroActionStep);
 
 
         Section("键盘设备");
-        TestKeyboardDevices();
+        T(nameof(TestKeyboardDevices), TestKeyboardDevices);
 
         Section("按设备改键");
-        TestDeviceRemap();
+        T(nameof(TestDeviceRemap), TestDeviceRemap);
 
         Section("设备方案");
-        TestDeviceProfiles();
-        TestDeviceAliasAndDefaults();
+        T(nameof(TestDeviceProfiles), TestDeviceProfiles);
+        T(nameof(TestDeviceAliasAndDefaults), TestDeviceAliasAndDefaults);
 
         Section("原键替换层");
-        TestReplacementLayer();
+        T(nameof(TestReplacementLayer), TestReplacementLayer);
 
         Section("动作分类");
-        TestKeyAndMouseCategories();
+        T(nameof(TestKeyAndMouseCategories), TestKeyAndMouseCategories);
 
         Section("别名前缀与找回");
-        TestSnippetPrefixes();
-        TestHotstringGroupRules();
+        T(nameof(TestSnippetPrefixes), TestSnippetPrefixes);
+        T(nameof(TestHotstringGroupRules), TestHotstringGroupRules);
+
+        /* 剪贴板 → 别名（任务 A）与流式尾部匹配（任务 B）。
+         * 两个都要能单独跑：--only=SnippetDraft / --only=SnippetBuffer / --only=SnippetSpan */
+        Section("剪贴板转别名");
+        T(nameof(TestSnippetDraft), TestSnippetDraft);
+
+        Section("别名流式匹配");
+        T(nameof(TestSnippetBuffer), TestSnippetBuffer);
+        T(nameof(TestSnippetSpan), TestSnippetSpan);
+        T(nameof(TestSnippetStreamEngine), TestSnippetStreamEngine);
 
         Section("启动密码");
-        TestStartupPassword();
+        T(nameof(TestStartupPassword), TestStartupPassword);
 
         Section("旧版 ini 迁移");
-        TestLegacyImport();
+        T(nameof(TestLegacyImport), TestLegacyImport);
 
         Section("动作目录");
-        TestActionCatalog();
+        T(nameof(TestActionCatalog), TestActionCatalog);
 
         Section("录键窗口");
-        TestKeyCaptureMouseGuard();
+        T(nameof(TestKeyCaptureMouseGuard), TestKeyCaptureMouseGuard);
 
         Section("帮助页");
-        TestHelpActionLine();
+        T(nameof(TestHelpActionLine), TestHelpActionLine);
 
         Section("窗口绑定");
-        TestWindowBindings();
-        TestCapsloxLayer();
-        TestScreenPlacement();
-        TestWindowSearchCache();
-        TestCloseBehavior();
+        T(nameof(TestWindowBindings), TestWindowBindings);
+        T(nameof(TestCapsloxLayer), TestCapsloxLayer);
+        T(nameof(TestScreenPlacement), TestScreenPlacement);
+        T(nameof(TestWindowSearchCache), TestWindowSearchCache);
+        T(nameof(TestCloseBehavior), TestCloseBehavior);
 
         Section("打开文件夹");
-        TestFolderLeafName();
+        T(nameof(TestFolderLeafName), TestFolderLeafName);
 
         Section("窗口激活与最小化");
-        TestWindowActivateAndMinimize();
+        T(nameof(TestWindowActivateAndMinimize), TestWindowActivateAndMinimize);
 
         Section("主题");
-        TestTheme();
+        T(nameof(TestTheme), TestTheme);
 
         Section("界面字体");
-        TestFonts();
+        T(nameof(TestFonts), TestFonts);
 
         Section("界面文案");
-        TestUiText();
+        T(nameof(TestUiText), TestUiText);
 
         Section("界面语言");
-        TestLocalization();
+        T(nameof(TestLocalization), TestLocalization);
 
         Section("关于页 · GitHub 令牌");
-        TestAboutTokenUi();
+        T(nameof(TestAboutTokenUi), TestAboutTokenUi);
 
         Section("Qbar 引擎过滤");
-        TestQbarEntryFilter();
+        T(nameof(TestQbarEntryFilter), TestQbarEntryFilter);
 
         Section("触发键配置");
-        TestTriggerConfig();
+        T(nameof(TestTriggerConfig), TestTriggerConfig);
 
         Section("按键名表");
-        TestKeyNameTable();
+        T(nameof(TestKeyNameTable), TestKeyNameTable);
 
         Section("组合键往返");
-        TestComboRoundTrip();
-        TestHoldOnOtherKey();
-        TestModifierTracker();
+        T(nameof(TestComboRoundTrip), TestComboRoundTrip);
+        T(nameof(TestHoldOnOtherKey), TestHoldOnOtherKey);
+        T(nameof(TestModifierTracker), TestModifierTracker);
 
         Section("触发键展示");
-        TestTriggerDisplayProps();
+        T(nameof(TestTriggerDisplayProps), TestTriggerDisplayProps);
 
         Section("提权");
-        TestElevation();
-        TestElevationRoute();
+        T(nameof(TestElevation), TestElevation);
+        T(nameof(TestElevationRoute), TestElevationRoute);
 
         Section("提权取词");
-        TestSelectionElevated();
+        T(nameof(TestSelectionElevated), TestSelectionElevated);
 
         Section("手势·shell 浮层");
-        TestShellOverlay();
+        T(nameof(TestShellOverlay), TestShellOverlay);
 
         Section("热路径缓存");
-        TestHotPathCaching();
+        T(nameof(TestHotPathCaching), TestHotPathCaching);
 
         Section("宏与速查表展示");
-        TestMacroDisplayProps();
-        TestMacroVarUi();
-        TestHelpCoversAllLayers();
+        T(nameof(TestMacroDisplayProps), TestMacroDisplayProps);
+        T(nameof(TestMacroVarUi), TestMacroVarUi);
+        T(nameof(TestHelpCoversAllLayers), TestHelpCoversAllLayers);
 
         Section("宏绑定与 keepKey");
-        TestMacroBindableInKeysView();
-        TestKeepKeyTapAction();
-        TestQbarEngineActions();
-        TestFilterActions();
-        TestDictionaryActions();
-        TestTriggerKeyPosition();
-        TestKeyboardLayoutGeometry();
-        TestEditorDensity();
-        TestEditorButtonWidths();
-        TestResetLayerOne();
-        TestArbitraryWindowBinding();
-        TestWinBindRestoreLogic();
-        TestWebPageCategory();
-        TestSmartOpen();
-        TestKeycapVisualStates();
-        TestProductIdentity();
-        TestWebTitleExtract();
-        TestNoDuplicateKeycaps();
-        TestKeycapShortTitles();
-        TestWinBindCustomName();
-        TestQbarThemeContrast();
-        TestQbarChipTextContrast();
-        TestQbarTabContrast();
-        TestQbarNativeIndex();
-        TestQbarRecentTargets();
-        TestQbarOutsideClick();
-        TestComplexTriggerKey();
-        TestTriggerBadgeFollowsLayer();
-        TestSubLayers();
-        TestSubLayerCombos();
-        TestSubLayerRepeatAndState();
-        TestSubLayerKeyEntersLayerBeforeHold();
-        TestHoldThresholdWithoutUiTimer();
-        TestOrphanKeyUpIsSwallowed();
-        TestHoldNotMistakenAsTap();
-        TestTriggerTapHoldSemantics();
-        TestErrorFailClosedPolicy();
-        TestDirectSearch();
-        TestCommandSearchAction();
-        TestTypeTextAction();
-        TestImeGuard();
-        TestClipboardPaste();
+        T(nameof(TestMacroBindableInKeysView), TestMacroBindableInKeysView);
+        T(nameof(TestKeepKeyTapAction), TestKeepKeyTapAction);
+        T(nameof(TestQbarEngineActions), TestQbarEngineActions);
+        T(nameof(TestFilterActions), TestFilterActions);
+        T(nameof(TestDictionaryActions), TestDictionaryActions);
+        T(nameof(TestTriggerKeyPosition), TestTriggerKeyPosition);
+        T(nameof(TestKeyboardLayoutGeometry), TestKeyboardLayoutGeometry);
+        T(nameof(TestEditorDensity), TestEditorDensity);
+        T(nameof(TestEditorButtonWidths), TestEditorButtonWidths);
+        T(nameof(TestResetLayerOne), TestResetLayerOne);
+        T(nameof(TestArbitraryWindowBinding), TestArbitraryWindowBinding);
+        T(nameof(TestWinBindRestoreLogic), TestWinBindRestoreLogic);
+        T(nameof(TestWebPageCategory), TestWebPageCategory);
+        T(nameof(TestSmartOpen), TestSmartOpen);
+        T(nameof(TestKeycapVisualStates), TestKeycapVisualStates);
+        T(nameof(TestProductIdentity), TestProductIdentity);
+        T(nameof(TestWebTitleExtract), TestWebTitleExtract);
+        T(nameof(TestNoDuplicateKeycaps), TestNoDuplicateKeycaps);
+        T(nameof(TestKeycapShortTitles), TestKeycapShortTitles);
+        T(nameof(TestWinBindCustomName), TestWinBindCustomName);
+        T(nameof(TestQbarThemeContrast), TestQbarThemeContrast);
+        T(nameof(TestQbarChipTextContrast), TestQbarChipTextContrast);
+        T(nameof(TestQbarTabContrast), TestQbarTabContrast);
+        T(nameof(TestQbarNativeIndex), TestQbarNativeIndex);
+        T(nameof(TestQbarRecentTargets), TestQbarRecentTargets);
+        T(nameof(TestQbarOutsideClick), TestQbarOutsideClick);
+        T(nameof(TestComplexTriggerKey), TestComplexTriggerKey);
+        T(nameof(TestTriggerBadgeFollowsLayer), TestTriggerBadgeFollowsLayer);
+        T(nameof(TestSubLayers), TestSubLayers);
+        T(nameof(TestSubLayerCombos), TestSubLayerCombos);
+        T(nameof(TestSubLayerRepeatAndState), TestSubLayerRepeatAndState);
+        T(nameof(TestSubLayerKeyEntersLayerBeforeHold), TestSubLayerKeyEntersLayerBeforeHold);
+        T(nameof(TestHoldThresholdWithoutUiTimer), TestHoldThresholdWithoutUiTimer);
+        T(nameof(TestOrphanKeyUpIsSwallowed), TestOrphanKeyUpIsSwallowed);
+        T(nameof(TestHoldNotMistakenAsTap), TestHoldNotMistakenAsTap);
+        T(nameof(TestTriggerTapHoldSemantics), TestTriggerTapHoldSemantics);
+        T(nameof(TestErrorFailClosedPolicy), TestErrorFailClosedPolicy);
+        T(nameof(TestDirectSearch), TestDirectSearch);
+        T(nameof(TestCommandSearchAction), TestCommandSearchAction);
+        T(nameof(TestTypeTextAction), TestTypeTextAction);
+        T(nameof(TestImeGuard), TestImeGuard);
+        T(nameof(TestClipboardPaste), TestClipboardPaste);
 
         Section("自定义按键");
-        TestCustomKey();
+        T(nameof(TestCustomKey), TestCustomKey);
 
         Section("音量与亮度");
-        TestVolumeCore();
-        TestBrightnessMath();
-        TestBrightnessPumpStarts();
-        TestOsdAndTextInput();
-        TestOsdAlwaysOnTop();
-        TestOsdIconFollowsBrightness();
-        TestOsdIconAnimates();
-        TestOsdAboveShellMenu();
-        TestOsdScalesAcrossDisplays();
+        T(nameof(TestVolumeCore), TestVolumeCore);
+        T(nameof(TestBrightnessMath), TestBrightnessMath);
+        T(nameof(TestBrightnessPumpStarts), TestBrightnessPumpStarts);
+        T(nameof(TestOsdAndTextInput), TestOsdAndTextInput);
+        T(nameof(TestOsdAlwaysOnTop), TestOsdAlwaysOnTop);
+        T(nameof(TestOsdIconFollowsBrightness), TestOsdIconFollowsBrightness);
+        T(nameof(TestOsdIconAnimates), TestOsdIconAnimates);
+        T(nameof(TestOsdAboveShellMenu), TestOsdAboveShellMenu);
+        T(nameof(TestOsdScalesAcrossDisplays), TestOsdScalesAcrossDisplays);
 
         Section("托盘");
-        TestTrayDoubleClick();
+        T(nameof(TestTrayDoubleClick), TestTrayDoubleClick);
 
-        TestToastCoalescing();
-        TestDirectSearchCoversAllEngines();
-        TestCopyChordEndToEnd();
-        TestSelectionWatcher();
-        TestContextHasSelectionWatcher();
+        T(nameof(TestToastCoalescing), TestToastCoalescing);
+        T(nameof(TestDirectSearchCoversAllEngines), TestDirectSearchCoversAllEngines);
+        T(nameof(TestCopyChordEndToEnd), TestCopyChordEndToEnd);
+        T(nameof(TestSelectionWatcher), TestSelectionWatcher);
+        T(nameof(TestContextHasSelectionWatcher), TestContextHasSelectionWatcher);
 
         Section("审计修复");
-        TestAuditFindings();
+        T(nameof(TestAuditFindings), TestAuditFindings);
 
         Section("引擎复查修复");
-        TestEngineAuditFixes();
+        T(nameof(TestEngineAuditFixes), TestEngineAuditFixes);
 
         Section("引擎回归（第二轮）");
-        TestEngineRegressions2();
-        TestAuditFixes();
+        T(nameof(TestEngineRegressions2), TestEngineRegressions2);
+        T(nameof(TestAuditFixes), TestAuditFixes);
         Section("本地文件加密");
-        TestLocalEncryption();
-        TestVaultRecovery();
+        T(nameof(TestLocalEncryption), TestLocalEncryption);
+        T(nameof(TestVaultRecovery), TestVaultRecovery);
 
         Section("宏可绑定");
-        TestMacroIsBindable();
-        TestActionCategories();
+        T(nameof(TestMacroIsBindable), TestMacroIsBindable);
+        T(nameof(TestActionCategories), TestActionCategories);
 
         Section("窗口绑定未启动时先启动");
-        TestWindowBindingLaunch();
+        T(nameof(TestWindowBindingLaunch), TestWindowBindingLaunch);
 
         Section("窗口点选");
-        TestWindowPreview();
-        TestPickerWithOverlayVisible();
-        TestPickerCommitKeepsResult();
+        T(nameof(TestWindowPreview), TestWindowPreview);
+        T(nameof(TestPickerWithOverlayVisible), TestPickerWithOverlayVisible);
+        T(nameof(TestPickerCommitKeepsResult), TestPickerCommitKeepsResult);
 
         Section("文字度量");
-        TestTextMetrics();
+        T(nameof(TestTextMetrics), TestTextMetrics);
 
         Section("Qbar 网址与路径");
-        TestQbarUrlAndPath();
+        T(nameof(TestQbarUrlAndPath), TestQbarUrlAndPath);
 
         Section("键盘层");
-        TestLayers();
-        TestLayerIsolation();
-        TestHoldThreshold();
-        TestLayerSurvivesIdle();
-        TestModifierOnlyBinding();
-        TestModifierTriggerWithRepeat();
-        TestContinuousVolumeRepeat();
-        TestRepeatSurvivesPhysicalJitter();
-        TestTwoContinuousKeysIndependent();
-        TestTriggerRecovery();
-        TestSubLayerWindowLayout();
+        T(nameof(TestLayers), TestLayers);
+        T(nameof(TestLayerIsolation), TestLayerIsolation);
+        T(nameof(TestHoldThreshold), TestHoldThreshold);
+        T(nameof(TestLayerSurvivesIdle), TestLayerSurvivesIdle);
+        T(nameof(TestModifierOnlyBinding), TestModifierOnlyBinding);
+        T(nameof(TestModifierTriggerWithRepeat), TestModifierTriggerWithRepeat);
+        T(nameof(TestContinuousVolumeRepeat), TestContinuousVolumeRepeat);
+        T(nameof(TestRepeatSurvivesPhysicalJitter), TestRepeatSurvivesPhysicalJitter);
+        T(nameof(TestTwoContinuousKeysIndependent), TestTwoContinuousKeysIndependent);
+        T(nameof(TestTriggerRecovery), TestTriggerRecovery);
+        T(nameof(TestSubLayerWindowLayout), TestSubLayerWindowLayout);
 
         Section("宏");
-        TestMacroRecorder();
-        TestMacroLiveRecording();
-        TestComboCapture();
-        TestExtendedCombos();
-        TestMacroStepEditing();
+        T(nameof(TestMacroRecorder), TestMacroRecorder);
+        T(nameof(TestMacroLiveRecording), TestMacroLiveRecording);
+        T(nameof(TestComboCapture), TestComboCapture);
+        T(nameof(TestExtendedCombos), TestExtendedCombos);
+        T(nameof(TestMacroStepEditing), TestMacroStepEditing);
 
         Section("备份加密");
-        TestCrypto();
+        T(nameof(TestCrypto), TestCrypto);
 
         Section("导入导出");
-        TestExportGroups();
-        TestExportRoundTrip();
-        TestExportImport();
-        TestExportImportOnDisk();
+        T(nameof(TestExportGroups), TestExportGroups);
+        T(nameof(TestExportRoundTrip), TestExportRoundTrip);
+        T(nameof(TestExportImport), TestExportImport);
+        T(nameof(TestExportImportOnDisk), TestExportImportOnDisk);
 
         Section("WebDAV");
-        TestWebDav();
+        T(nameof(TestWebDav), TestWebDav);
 
         Section("同步载荷");
-        TestSyncPayload();
-        TestTokenInBackup();
+        T(nameof(TestSyncPayload), TestSyncPayload);
+        T(nameof(TestTokenInBackup), TestTokenInBackup);
 
         Section("备份策略");
-        TestBackupPolicy();
-        TestBackupCleanup();
+        T(nameof(TestBackupPolicy), TestBackupPolicy);
+        T(nameof(TestBackupCleanup), TestBackupCleanup);
 
         Section("窗口与进程");
-        TestWindows();
+        T(nameof(TestWindows), TestWindows);
 
         Section("输入注入");
-        TestInput();
+        T(nameof(TestInput), TestInput);
 
         Section("输入文本标签与本地加密");
-        TestTypeTextAndVault();
+        T(nameof(TestTypeTextAndVault), TestTypeTextAndVault);
 
         Section("单实例");
-        TestSingleInstance();
+        T(nameof(TestSingleInstance), TestSingleInstance);
 
         Section("键盘钩子");
-        TestHook();
+        T(nameof(TestHook), TestHook);
 
         Section("组合键引擎");
-        TestEngine();
+        T(nameof(TestEngine), TestEngine);
 
         Section("文件对话框");
-        TestFileDialogBar();
+        T(nameof(TestFileDialogBar), TestFileDialogBar);
 
         Section("搜索前建议");
-        TestSuggestions();
+        T(nameof(TestSuggestions), TestSuggestions);
 
         Section("更新");
-        TestUpdateDigest();
-        TestUpdateAssetPick();
-        TestUpdateCancellation();
-        TestGitHubToken();
+        T(nameof(TestUpdateDigest), TestUpdateDigest);
+        T(nameof(TestUpdateAssetPick), TestUpdateAssetPick);
+        T(nameof(TestUpdateCancellation), TestUpdateCancellation);
+        T(nameof(TestGitHubToken), TestGitHubToken);
     }
 
     /// <summary>写出自检报告（数据目录 + 控制台可用时也打印）。</summary>
@@ -474,12 +512,37 @@ public static partial class SelfTest
 
     private static void Section(string name)
     {
+        _pendingSection = name;
+    }
+
+    /// <summary>
+    /// 跑一个用例方法。过滤串非空时，方法名不含过滤串就整个跳过 ——
+    /// 连用例体一起跳过，不是"跑了再丢结果"：这些用例会真起窗口、真装钩子、
+    /// 真扫盘，跳过结果但不跳过执行等于一点时间都没省。
+    /// </summary>
+    private static void T(string name, Action body)
+    {
+        if (_only.Length > 0 &&
+            name.IndexOf(_only, StringComparison.OrdinalIgnoreCase) < 0)
+            return;
+
+        _ran++;
+        FlushSection();
+        body();
+    }
+
+    private static void FlushSection()
+    {
+        string pending = _pendingSection;
+        if (pending.Length == 0) return;
+        _pendingSection = "";
         Log.AppendLine();
-        Log.AppendLine($"── {name} ──");
+        Log.AppendLine($"── {pending} ──");
     }
 
     private static void Check(string name, bool ok, string? detail = null)
     {
+        FlushSection();
         if (ok) { _passed++; Log.AppendLine($"  [PASS] {name}"); }
         else { _failed++; Log.AppendLine($"  [FAIL] {name}{(detail == null ? "" : "  → " + detail)}"); }
     }

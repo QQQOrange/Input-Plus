@@ -1,0 +1,26 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:34
+输入: regex:^rep.*\.docx$
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 203 ms
+
+归一化: regex:^rep.*\.docx$
+索引查询: regex:^rep.*\.docx$
+后端: 后端 Everything · "^rep.*\.docx$" · Everything 1.4.1 索引已加载 · 命中 1 条 · SDK 53 ms · 本地复核剔除 0 条
+请求: 
+上下文: regex:^rep.*\.docx$
+分词: regex:^rep.*\.docx$
+各层:
+  [normalize] regex:^rep.*\.docx$
+  [tokenize] regex:^rep.*\.docx$
+  [resolveKeyword] regex:^rep.*\.docx$
+  [translate] regex:^rep.*\.docx$
+  [native] regex=^rep.*\.docx$
+
+候选: 1 条，展示 1 条，端到端 77.0 ms
+翻译 4.0ms · 检索 66.4ms · 重排 5.1ms · 合计 76.0ms
+本页：文档 1 · 近7天 1
+
+命中:
+  [文件] D:\tmp\qbar-efu\report-2026.docx   (分 482 / 档 1 / 1.9 MB / 2026-11-21)

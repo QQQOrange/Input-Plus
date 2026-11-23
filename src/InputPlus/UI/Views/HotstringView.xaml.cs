@@ -29,6 +29,15 @@ public partial class HotstringView : UserControl
     /// <summary>刷新分组列表后要选中的组名（改名/新建后用它把选中状态带过去）。</summary>
     private string? _selectGroupAfterRefresh;
 
+    /// <summary>
+    /// 下一次刷新**强制回到「全部」**（并清空搜索框）。
+    ///
+    /// 场景：用户停在「工作」组、搜索框里还有字，然后在剪贴板页加了一条未分组的别名。
+    /// 如果照旧按当前分组 + 当前关键词过滤，新建的那条根本不在列表里 ——
+    /// 选中为 null，编辑器被收起，用户看到的就是"点完什么都没发生"。
+    /// </summary>
+    private bool _focusAllGroups;
+
     /* 用户最后停在哪个分组（「全部」= null，「未分组」= ""）。
      * 新增别名用它兜底：分组列表在重建 ItemsSource 的瞬间没有选中项，
      * 那一刻 CurrentGroup 是 null —— 新别名会被扔进「未分组」，
@@ -201,12 +210,29 @@ public partial class HotstringView : UserControl
     private void Refresh()
     {
         AlignStalePrefixOnce();
-        FocusPendingAlias();
-
         if (_host == null) return;
+
+        /* 待选中的别名**先取**（Take 只能取一次），再决定这一轮怎么刷。
+         *
+         * 顺序很重要：以前是"先刷完列表、再去取待选中项"，于是分组/搜索框
+         * 会把新条目过滤掉，`TakePendingAlias()` 的那一次机会就白白丢了。
+         * 现在先拿到触发词，就能在刷新之前把过滤条件清掉。 */
+        string? pending = _host.TakePendingAlias();
+        if (pending != null)
+        {
+            _focusAllGroups = true;
+
+            /* 清搜索框不能触发 TextChanged 的二次刷新：
+             * 那会在分组还没切回「全部」的时候按旧条件重刷一遍列表。 */
+            _suppress = true;
+            try { FilterBox.Text = ""; }
+            finally { _suppress = false; }
+        }
+
         RefreshPrefixCapsule();
-        RefreshGroups();
+        RefreshGroups();                     // 它会选中「全部」
         RefreshList();
+        if (pending != null) FocusSnippet(pending);   // 此时列表已是全量
         SyncEditorToSelection();
     }
 
@@ -325,7 +351,11 @@ public partial class HotstringView : UserControl
     {
         if (_host == null) return;
 
-        string? keepGroup = _selectGroupAfterRefresh ?? CurrentGroup;
+        /* 「全部」= Group 为 null（见下面构造 rows 的第一行）。
+         * _focusAllGroups 为真时（刚加完别名）不管用户原来停在哪一组都回到「全部」，
+         * 否则维持原来的行为：优先用这一轮显式指定的组，其次用当前选中的组。 */
+        string? keepGroup = ResolveKeepGroup(_focusAllGroups, _selectGroupAfterRefresh, CurrentGroup);
+        _focusAllGroups = false;
         _selectGroupAfterRefresh = null;
         var all = Entries.ToList();
         var groups = AllGroups();
@@ -1115,20 +1145,24 @@ public partial class HotstringView : UserControl
             : Loc.F("已移到「{0}」", group));
     }
 
-    /// <summary>全局搜索跳过来时，选中指定的那条别名。</summary>
-    private void FocusPendingAlias()
+    /// <summary>
+    /// 选中指定的那条别名（全局搜索、以及"从剪贴板加别名"两条路径共用）。
+    ///
+    /// 触发词来自 <see cref="AppHost.PendingAliasTrigger"/>，是**程序自己存下来的原文**，
+    /// 所以逐字比较（Ordinal）就够；用区域文化忽略大小写比较反而会把 `;Mail`
+    /// 和 `;mail` 这两条不同的别名串成一条。
+    ///
+    /// 前提：调用它的时候列表已经是全量（强制「全部」+ 清空搜索由 Refresh 负责）。
+    /// </summary>
+    private void FocusSnippet(string trigger)
     {
-        string? trigger = _host?.TakePendingAlias();
-        if (string.IsNullOrEmpty(trigger)) return;
-
         var snippet = Entries.FirstOrDefault(x =>
-            string.Equals((x.Trigger ?? "").Trim(), trigger, StringComparison.CurrentCultureIgnoreCase));
+            string.Equals((x.Trigger ?? "").Trim(), trigger, StringComparison.Ordinal));
         if (snippet == null) return;
 
         _editing = snippet;
-        RefreshList();
+        RefreshList();                 // 让 SelectedItem 落到这条上
         LoadEditor(snippet);
-
         if (EntryList.SelectedItem is Row row) EntryList.ScrollIntoView(row);
     }
 
@@ -1942,6 +1976,17 @@ public partial class HotstringView : UserControl
 
     /// <summary>选中条数决定「删除 / 移到分组」是否可用（纯函数，自检覆盖）。</summary>
     internal static bool CanActOnSelection(int selectedCount) => selectedCount > 0;
+
+    /// <summary>
+    /// 纯函数：刷新分组列表时要保持哪一组。
+    ///
+    /// 「全部」用 null 表示（见 <c>GroupRow.Group</c>）。<paramref name="focusAll"/> 为真
+    /// （刚加完别名、要选中那一条）时**强制回到「全部」** —— 否则用户停在「工作」组
+    /// 时新加的未分组别名根本不在列表里，选中为 null、编辑器收起，
+    /// 表现就是"点完什么都没发生"。其余情况沿用原逻辑。
+    /// </summary>
+    internal static string? ResolveKeepGroup(bool focusAll, string? selectAfterRefresh, string? currentGroup)
+        => focusAll ? null : (selectAfterRefresh ?? currentGroup);
 
     private static string DescribeGroup(string? group)
         => group == null ? "全部" : group.Length == 0 ? "未分组" : group;

@@ -42,3 +42,11 @@
 | 2026-11-22 12:00 | 跟随 R8：度量与自检 a–d | `SelfTest.FileDialogBar.cs`（`TestDialogBarFollow`）、`FileDialogBarWindow`（p50/p99/误差/计数）、`AppSettings.cs`（`FollowMetrics`） | 60 次连挪：p50 0.35ms / p99 1.01ms / 误差 0px / 尺寸不变 / 几何重算 0 / 自激 0 |
 | 2026-11-22 12:10 | 设置项搬家：「文件对话框浮层」进「文件搜索」页 | `UI/Views/QbarSettingsView.xaml(.cs)`（卡片从右栏移到文件搜索页末尾，加页内目录 chip、跟随度量开关）、`RenderTools.cs`、`QbarSettingsView.ScrollToFileDialogBar` | 渲染 `qbar-filedialog-settings.png` / `qbar-files-tab-bottom.png` 确认卡片独立成项、目录 chip 对齐 |
 | 2026-11-22 12:15 | 文档：跟随根因与修复 | `ANCHORING.md` §3.1、`DECISIONS.md`（分层窗口保留理由）、`PROGRESS.md` | 与上表同批 |
+
+## v1.6.0 — 文件索引换内核（结论）
+
+文件搜索的索引构建、增量、查询、排序全部搬进本进程（Rust cdylib + vendored tantivy），
+进程外索引依赖清零；只支持 Windows 11 x64。详见 `docs/qbar/TANTIVY-MIGRATION.md`
+与 `docs/qbar/DECISIONS.md` 的 D56–D65。
+实测：67.7 万条建索引 23.1 s、索引 206 MB、查询 p50 7.4 ms / p95 21.1 ms、
+增量 230 ms / 1656 ms；`--selftest` 7086 项全过。

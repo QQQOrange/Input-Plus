@@ -254,11 +254,15 @@ public sealed partial class HotkeyEngine
          * 用户配的 `;mail` / `;log` 这类长度大于 1 的片段**永远不展开**，
          * 而这个功能看起来"装好了"（配置界面、自检的纯函数都正常）。
          *
-         * 现在只在"这个键被引擎吃掉"的地方清空 —— 被吞掉的键本来就不该
-         * 参与拼接，放行的键才按顺序累加。 */
+         * 现在只在"这个键被引擎吃掉"的地方做**记账**：把缓冲标记为不可信
+         * （下一次 token 边界会回读控件真实文本校对），内容不再清空 ——
+         * 被吞掉的键本来就不该参与拼接，但屏幕上的字不会因为我们吞了键而消失。 */
         if (IsTrigger(settings, vk))
         {
-            _snippetBuffer.Clear();     // 被吞掉的键不参与片段拼接
+            /* 标记不可信，而不是清空：这个键被我们吞了、前台没收到，
+             * 但屏幕上的字（以及用户接下来可能按的退格）仍然成立。
+             * 清空会把"打完触发键再改错字"的路彻底堵死。 */
+            _snippetBuffer.MarkUntrusted();
             // 按下和抬起都吞掉：短按的原功能由 OnTriggerUp 里补发，
             // 长按则彻底不发出。这样不会污染系统的按键状态。
             if (down) OnTriggerDown(settings, vk, wasPhysicallyDown);
@@ -306,32 +310,33 @@ public sealed partial class HotkeyEngine
         if (!_triggerHeld || !_layerActive)
         {
             /* 下面每个 `return true` 都是"这个键被引擎吃掉了"，
-             * 都要顺手清掉片段缓冲区（被吞掉的键不参与拼接）。 */
+             * 都要顺手把片段缓冲标成不可信（被吞掉的键没进前台，缓冲不再与屏幕同步）。
+             * 只是**标记**，不再清空 —— 见文档开头 R2 那条注释。 */
 
             /* 组合键：命中就把这个键扣住等第二个键，超时再放行。 */
             /* 双击动作：只对配置过的键生效，单击完全保持原样。 */
             if (down && TryRunDoubleTapGesture(settings, vk, wasPhysicallyDown))
             {
-                _snippetBuffer.Clear();
+                _snippetBuffer.MarkUntrusted();
                 return SwallowFor("双击手势");
             }
-            if (!down && _gestureSwallowUp.Remove(vk)) { _snippetBuffer.Clear(); return SwallowFor("双击手势（第二次抬起）"); }
+            if (!down && _gestureSwallowUp.Remove(vk)) { _snippetBuffer.MarkUntrusted(); return SwallowFor("双击手势（第二次抬起）"); }
 
             /* 按应用的叠加层：只接管**绑过**的组合，未绑定的键原样放行。 */
             if (down && TryRunAppLayerBinding(settings, vk))
             {
-                _snippetBuffer.Clear();
+                _snippetBuffer.MarkUntrusted();
                 return SwallowFor("按应用叠加层里有这个组合");
             }
 
             /* 原键替换层：不需要触发键，按下就直接执行绑定的功能。
              * 放在基础改键之前 —— 用户既配了替换层又配了改键时，
              * 替换层是更具体的意图（"这个键 = 这个功能"）。 */
-            if (TryApplyReplacement(settings, vk, down, device)) { _snippetBuffer.Clear(); return SwallowFor("原键替换层绑过这个键"); }
+            if (TryApplyReplacement(settings, vk, down, device)) { _snippetBuffer.MarkUntrusted(); return SwallowFor("原键替换层绑过这个键"); }
 
             /* 基础改键：只要不在层里就生效。
              * 放在"放行"之前 —— 命中就吞掉原键并改成目标键。 */
-            if (TryApplyRemap(settings, vk, down, device)) { _snippetBuffer.Clear(); return SwallowFor("基础改键（含设备专属改键）命中"); }
+            if (TryApplyRemap(settings, vk, down, device)) { _snippetBuffer.MarkUntrusted(); return SwallowFor("基础改键（含设备专属改键）命中"); }
 
             /* 按下被我们吞过、抬起还没结账的键，这里必须补吞。
              *
@@ -350,15 +355,15 @@ public sealed partial class HotkeyEngine
             if (!down)
             {
                 _swallowedDown.TryRemove(vk, out _);
-                if (_swallowedUp.TryRemove(vk, out _)) { _snippetBuffer.Clear(); return SwallowFor("补吞抬起（按下被吞过）"); }
+                if (_swallowedUp.TryRemove(vk, out _)) { _snippetBuffer.MarkUntrusted(); return SwallowFor("补吞抬起（按下被吞过）"); }
                 return false;
             }
 
             /* 文本片段：只有"真的会打出去"的键才计入缓冲区。
-             * 带 Ctrl/Alt/Win 的是命令，不是输入，直接断开。 */
+             * 带 Ctrl/Alt/Win 的是命令，不是输入 —— 缓冲不再可信（不清空）。 */
             if (_ctrlDown || _laltDown || _lwinDown || _rwinDown)
             {
-                _snippetBuffer.Clear();
+                _snippetBuffer.MarkUntrusted();
             }
             else if (ObserveSnippet(settings, vk))
             {
@@ -379,7 +384,9 @@ public sealed partial class HotkeyEngine
         if (IsMouseVk(vk) && !DeviceProfiles.MouseKeysEnabled(settings, _activeLayer, device))
             return false;
 
-        _snippetBuffer.Clear();     // 层内按键一律被接管，不参与拼接
+        /* 层内按键一律被接管：缓冲不再可信，但**不清空** ——
+         * 层里做完动作回到普通输入时，屏幕上那几个字还在。 */
+        _snippetBuffer.MarkUntrusted();
         if (!down ? OnKeyUpInLayer(vk, device) : OnKeyDownInLayer(vk, wasPhysicallyDown, device))
             return SwallowFor("层模式内（触发键按住中）");
         return false;

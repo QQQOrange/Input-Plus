@@ -27,11 +27,22 @@ public static partial class SelfTest
         TestDictionary();
         TestHistoryLog();
         TestPinyinFallback();
-        TestEverythingIntegration();
+
     }
 
     private static QbarTranslateResult Translate(string text, QbarFilterCatalog catalog)
         => QbarQueryTranslator.Translate(text, catalog, new DateTime(2026, 7, 15, 10, 0, 0));
+
+    /// <summary>
+    /// 在"当前发布的夹具索引"上跑一次结构化查询（谓词全部下推 + 本地复核）。
+    /// 原来这一层是 <c>NativeSearchIndex.SearchSpecInForTest</c>；索引换了内核，
+    /// 但断言仍然打在"谓词有没有生效"上，不是"哪个类有没有被调用"。
+    /// </summary>
+    private static IReadOnlyList<FileSearchHit> SearchSpecFixture(QbarSearchSpec spec, int limit)
+    {
+        QbarTantivyBackend.TryRun(spec, limit, out List<FileSearchHit> hits, out _, out _);
+        return hits;
+    }
 
     private static void TestTranslator()
     {
@@ -74,8 +85,8 @@ public static partial class SelfTest
             week.Spec.MinDay == today - 2 && week.Spec.MaxDay == today + 4,
             week.Spec.MinDay + ".." + week.Spec.MaxDay + "（今天 " + today + "）");
         Check("语义层：date:week 翻成 dm:thisweek",
-            QbarQueryTranslator.ToEverythingDate("week") == "thisweek",
-            QbarQueryTranslator.ToEverythingDate("week"));
+            QbarQueryTranslator.ToDisplayDate("week") == "thisweek",
+            QbarQueryTranslator.ToDisplayDate("week"));
 
         /* ---- 用例 8：否定 ---- */
         QbarTranslateResult neg = Translate("-ext:tmp", catalog);
@@ -222,7 +233,7 @@ public static partial class SelfTest
             disabledDocResult.Spec.Extensions.Count == 0
             && !disabledDocResult.Stages.Any(s => s.Stage == "degrade")
             && disabledDocResult.Spec.Terms.Count == 1,
-            disabledDocResult.EverythingText);
+            disabledDocResult.IndexText);
     }
 
     private static int ExtCount(QbarFilterCatalog catalog, string keyword)
@@ -287,13 +298,13 @@ public static partial class SelfTest
 
             /* 引擎 / 拼音索引 / 模糊扫描走的都是"全局快照"，而 SearchSpecInForTest
              * 只查临时快照。这里显式把夹具树发布成全局快照，后面几组用例才有数据可查。 */
-            int published = NativeSearchIndex.PublishForTest(root);
+            int published = Core.Qbar.QbarIndex.PublishForTest(root);
             Check("结构化检索：夹具树可发布成全局快照", published > 0, "发布 " + published + " 个文件");
 
             /* ---- 结构化检索：扩展名白名单 ---- */
             var docxSpec = new QbarSearchSpec();
             docxSpec.Extensions.Add("docx");
-            IReadOnlyList<FileSearchHit> docxHits = NativeSearchIndex.SearchSpecInForTest(root, docxSpec, 10, 5000);
+            IReadOnlyList<FileSearchHit> docxHits = SearchSpecFixture(docxSpec, 10);
             Check("结构化检索：只返回 docx",
                 docxHits.Count > 0 && docxHits.All(h => h.Path.EndsWith(".docx", StringComparison.OrdinalIgnoreCase)),
                 DescribeHits(docxHits));
@@ -303,33 +314,30 @@ public static partial class SelfTest
              * 而夹具里带 filler 的全是 .txt —— 剔干净以后当然是 0 条。 */
             var noTxt = new QbarSearchSpec();
             noTxt.NegExtensions.Add("txt");
-            IReadOnlyList<FileSearchHit> noTxtHits = NativeSearchIndex.SearchSpecInForTest(root, noTxt, 20, 5000);
+            IReadOnlyList<FileSearchHit> noTxtHits = SearchSpecFixture(noTxt, 20);
             Check("结构化检索：否定扩展名不返回 txt",
                 noTxtHits.Count > 0 && noTxtHits.All(h => !h.Path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)),
                 "命中 " + noTxtHits.Count + " 条");
 
             /* ---- 只搜目录 ---- */
             var dirsOnly = new QbarSearchSpec { FoldersOnly = true };
-            IReadOnlyList<FileSearchHit> dirHits = NativeSearchIndex.SearchSpecInForTest(root, dirsOnly, 20, 5000);
+            IReadOnlyList<FileSearchHit> dirHits = SearchSpecFixture(dirsOnly, 20);
             Check("结构化检索：folder: 只返回目录",
                 dirHits.Count > 0 && dirHits.All(h => h.IsDir), DescribeHits(dirHits));
 
             /* ---- 大小下界：夹具文件全是几十字节，1MB 下界必须一条不剩 ---- */
             var big = new QbarSearchSpec { MinSize = 1024L * 1024L };
-            IReadOnlyList<FileSearchHit> bigHits = NativeSearchIndex.SearchSpecInForTest(root, big, 10, 5000);
+            IReadOnlyList<FileSearchHit> bigHits = SearchSpecFixture(big, 10);
             Check("结构化检索：size:>1mb 滤掉夹具里的小文件", bigHits.Count == 0, "命中 " + bigHits.Count + " 条");
 
             /* ---- 时间下界：夹具刚建好，今天之后仍然命中 ---- */
             var recent = new QbarSearchSpec { MinDay = QbarSyntaxValues.ToDay(DateTime.Now) };
-            IReadOnlyList<FileSearchHit> recentHits = NativeSearchIndex.SearchSpecInForTest(root, recent, 20, 5000);
+            IReadOnlyList<FileSearchHit> recentHits = SearchSpecFixture(recent, 20);
             Check("结构化检索：date:today 命中刚创建的文件", recentHits.Count > 0, "命中 " + recentHits.Count + " 条");
 
             /* ---- 引擎：优先级剔除 + 隐藏计数 + 高亮 ----
-             * 上一步已经把快照切到夹具树，引擎这里直接吃同一份快照。 */
-            /* 单测只验语义层：夹具文件是刚写盘的，Everything 的索引可能还没跟上；
-             * 双后端一致性由 SelfTest.QbarEverything 那组用例负责。 */
+             * 上一步已经把夹具树发布成当前索引，引擎这里直接吃同一份。 */
             var context = new QbarQueryContext();
-            context.Options.PreferEverything = false;
             context.Rules.Add(new QbarPriorityRule
             {
                 Id = "test.dni",
@@ -342,7 +350,6 @@ public static partial class SelfTest
             /* 夹具里 "filler" 只出现在 批量 目录下，所以 DNI 生效后应当一条不剩。
              * 同时确认"没有规则时确实有命中"，否则这条用例可能只是查询打空了。 */
             var openBook = new QbarQueryContext();
-            openBook.Options.PreferEverything = false;
             QbarSearchOutcome unfiltered = QbarSearchEngine.Run(openBook, "filler", 30);
             string offender = "";
             foreach (QbarSearchHit probe in outcome.Hits)
@@ -360,18 +367,17 @@ public static partial class SelfTest
                 "DoNotIndex=" + outcome.HiddenDoNotIndex);
 
             var clear = new QbarQueryContext();
-            clear.Options.PreferEverything = false;
             QbarSearchOutcome precise = QbarSearchEngine.Run(clear, "filler-001", 10);
             Check("引擎：命中区间返回给 UI 用于高亮",
                 precise.Hits.Count > 0 && precise.Hits[0].Highlights.Count > 0,
                 precise.Hits.Count == 0 ? "没有命中" : precise.Hits[0].Name + " / " + precise.Hits[0].Highlights.Count);
 
-            Check("引擎：分面统计只在本页候选上做",
-                precise.Facets.Count > 0 && precise.FacetSummary().StartsWith("本页：", StringComparison.Ordinal),
-                precise.FacetSummary());
+            Check("引擎：分面口径与来源一致（文案跟着 FacetsAreGlobal 走）",
+                precise.Facets.Count == 8
+                && precise.FacetSummary().StartsWith(precise.FacetsAreGlobal ? "全部：" : "本页：", StringComparison.Ordinal),
+                precise.FacetSummary() + " · global=" + precise.FacetsAreGlobal);
 
             var folderRule = new QbarQueryContext();
-            folderRule.Options.PreferEverything = false;
             folderRule.Rules.Add(new QbarPriorityRule
             {
                 Id = "test.high",
@@ -676,10 +682,18 @@ public static partial class SelfTest
             full.Count > 0 && full.Any(h => h.Path.IndexOf("设计稿", StringComparison.Ordinal) >= 0),
             full.Count == 0 ? "0 条" : full[0].Path);
 
-        /* 子序列兜底：原生索引只认子串，chrme 这种缩写只能靠 FuzzyScan。 */
-        IReadOnlyList<FileSearchHit> fuzzy = NativeSearchIndex.FuzzyScan("chrme", 20000, 10, 3000);
+        /* 子序列兜底：索引只认 2-gram 子串，chrme 这种缩写走模糊入口
+         * （索引给出"每个字符都出现"的候选，子序列判定与打分只在 QbarNameScore 里算）。 */
+        var fuzzyHits = new List<FileSearchHit>();
+        foreach (IndexHit raw in QbarTantivyBackend.Fuzzy("chrme", 10, null))
+        {
+            int score = raw.Fuzzy == 2
+                ? 120
+                : QbarNameScore.Subsequence(Path.GetFileName(raw.Path), "chrme");
+            if (score > 0) fuzzyHits.Add(new FileSearchHit(raw.Path, raw.IsDir == 1, score, 0, raw.Day, null));
+        }
         Check("模糊：chrme 子序列命中 chrome 相关文件",
-            fuzzy.Count > 0 && fuzzy.Any(h => Path.GetFileName(h.Path).IndexOf("chrome", StringComparison.OrdinalIgnoreCase) >= 0),
-            DescribeHits(fuzzy));
+            fuzzyHits.Count > 0 && fuzzyHits.Any(h => Path.GetFileName(h.Path).IndexOf("chrome", StringComparison.OrdinalIgnoreCase) >= 0),
+            DescribeHits(fuzzyHits));
     }
 }

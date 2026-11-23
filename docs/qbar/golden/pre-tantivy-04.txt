@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:25
+输入: doc:
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 207 ms
+
+归一化: doc:
+索引查询: ext:c;chm;cpp;cxx;doc;docm;docx;dot;dotm;dotx;h;hpp;htm;html;hxx;ini;java;js;lua;mdb;mht;mhtml;pdf;potm;potx;ppam;pps;ppsm;ppsx;ppt;pptm;pptx;rtf;sldm;sldx;thmx;txt;vsd;wpd;wps;wri;xlam;xls;xlsb;xlsm;xlsx;xltm;xltx;xml
+后端: 后端 Everything · "ext:c;chm;cpp;cxx;doc;docm;docx;dot;dotm;dotx;h;hpp;htm;html;hxx;ini;java;js;lua;mdb;mht;mhtml;pdf;potm;potx;ppam;pps;ppsm;ppsx;ppt;pptm;pptx;rtf;sldm;sldx;thmx;txt;vsd;wpd;wps;wri;xlam;xls;xlsb;xlsm;xlsx;xltm;xltx;xml file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 275791，窗口已截断） · SDK 11 ms · 本地复核剔除 0 条
+请求: 
+上下文: filter doc -> 49 exts
+分词: doc:
+各层:
+  [normalize] doc:
+  [tokenize] doc:
+  [resolveKeyword] filter doc -> 49 exts
+  [translate] ext:c;chm;cpp;cxx;doc;docm;docx;dot;dotm;dotx;h;hpp;htm;html;hxx;ini;java;js;lua;mdb;mht;mhtml;pdf;potm;potx;ppam;pps;ppsm;ppsx;ppt;pptm;pptx;rtf;sldm;sldx;thmx;txt;vsd;wpd;wps;wri;xlam;xls;xlsb;xlsm;xlsx;xltm;xltx;xml
+  [native] ext=49 ext files-only filter=文档
+
+候选: 600 条，展示 40 条，端到端 38.4 ms
+翻译 4.4ms · 检索 24.3ms · 重排 8.3ms · 合计 37.4ms
+本页：文档 40 · 近7天 40
+
+命中:
+  [文件] D:\Documents\PureWriter\App\Process.txt   (分 475 / 档 1 / 2026-11-22)
+  [文件] D:\Documents\PureWriter\App\TabArticleIds.txt   (分 474 / 档 1 / 2026-11-22)
+  [文件] D:\Documents\PureWriter\App\SystemFontNames.txt   (分 474 / 档 1 / 5 KB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\桌面\2.1课件.pptx   (分 467 / 档 1 / 51 MB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\桌面\2.2课件.pptx   (分 467 / 档 1 / 79.3 MB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\dsh-purge\last-cwd.txt   (分 467 / 档 1 / 2026-11-23)
+  [文件] D:\Documents\PureWriter\App\ImageAssets\ConsumedPackages.txt   (分 466 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\app-log2.txt   (分 459 / 档 1 / 1 MB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\watch.err.txt   (分 459 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\_probe_doc.pdf   (分 459 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\dummy.status.txt   (分 458 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-old.txt   (分 458 / 档 1 / 330 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-edge.txt   (分 458 / 档 1 / 333 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-menu.txt   (分 458 / 档 1 / 333 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-repro.txt   (分 458 / 档 1 / 333 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\app-log-decrypted.txt   (分 458 / 档 1 / 1 MB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-deployed.txt   (分 458 / 档 1 / 333 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\click-log-baseline.txt   (分 458 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\hookhost-decrypted.txt   (分 458 / 档 1 / 8 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\selftest-decrypted.txt   (分 458 / 档 1 / 333 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\octoclip-re\utf8.txt   (分 451 / 档 1 / 11 MB / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\octoclip-re\ascii.txt   (分 451 / 档 1 / 18.1 MB / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\octoclip-re\utf16.txt   (分 451 / 档 1 / 19.2 MB / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\ipdata-user\gesture-probe.txt   (分 450 / 档 1 / 4 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dotnet\sdk-advertising\10.0.400\microsoft.net.workloads\workloadVersion.txt   (分 450 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\hook64.utf16.txt   (分 450 / 档 1 / 5 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\engine.strings.txt   (分 450 / 档 1 / 378 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\hook64.strings.txt   (分 450 / 档 1 / 18 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\listary_exe.cjk.txt   (分 450 / 档 1 / 6.8 MB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\hookhost64.utf16.txt   (分 450 / 档 1 / 3 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\listary_exe.utf16.txt   (分 450 / 档 1 / 17 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\hookhost64.strings.txt   (分 450 / 档 1 / 11 KB / 2026-11-22)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\listary_analysis\listary_exe.strings.txt   (分 450 / 档 1 / 4 MB / 2026-11-22)
+  [文件] C:\Users\64381\.dotnet\sdk-advertising\10.0.400\microsoft.net.workloads\AdvertisedManifestFeatureBand.txt   (分 448 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\Apps\Tampermonkey\sync\666b217b-9927-48bf-a1d2-30c9e0969fde.user.js   (分 447 / 档 1 / 11 KB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\Apps\Tampermonkey\sync\a4979212-bd89-4767-9dc8-5c5061a629c6.user.js   (分 447 / 档 1 / 27 KB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\Apps\Tampermonkey\sync\e07d7f92-9afc-47b6-a383-ad061868b6f5.user.js   (分 447 / 档 1 / 43 KB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\Apps\Tampermonkey\sync\e5992752-5b99-4c73-839a-f992978d58c7.user.js   (分 447 / 档 1 / 15 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\fp.js   (分 444 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\map.js   (分 444 / 档 1 / 2026-11-22)

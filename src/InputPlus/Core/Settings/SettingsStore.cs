@@ -1495,6 +1495,37 @@ public static class SettingsStore
     internal static bool LooksStructurallyEmptyForTest(AppSettings s) => IsStructurallyEmpty(s);
 
     /// <summary>补齐缺失字段、修正非法值。</summary>
+    /// <summary>
+    /// 文件搜索后端的旧字段迁移。
+    ///
+    /// v1.5.x 的配置里有两个布尔（键名由 QbarSearchOptions.LegacyWord 拼出来，
+    /// 见那边的注释），默认都是 true。索引内核换成进程内 tantivy 之后它们再没有意义，
+    /// 但**不能直接删掉读逻辑** —— 读过老配置的用户升级后设置页会显示一个
+    /// 自己没选过的值。所以：
+    ///   · 只要读到任意一个 false，就认定用户当初选的是"本地索引"，记成
+    ///     <see cref="Core.Qbar.Search.QbarFileBackend.Native"/>；
+    ///   · 其余情况（含两个字段都缺，即新配置）→ <see cref="Core.Qbar.Search.QbarFileBackend.Tantivy"/>；
+    ///   · 迁移完把两个旧字段清成 null，写回时它们就消失了
+    ///     （JsonOptions 的 DefaultIgnoreCondition = WhenWritingNull）。
+    /// 两个枚举值都落到同一个进程内索引上，不存在第二条后端路径。
+    /// </summary>
+    private static void NormalizeQbarBackend(Core.Qbar.Search.QbarSearchOptions options)
+    {
+        bool sawLegacy = options.LegacyPreferBackend.HasValue || options.LegacyOnlyBackend.HasValue;
+        if (sawLegacy)
+        {
+            bool local = options.LegacyPreferBackend == false || options.LegacyOnlyBackend == false;
+            options.Backend = local
+                ? Core.Qbar.Search.QbarFileBackend.Native
+                : Core.Qbar.Search.QbarFileBackend.Tantivy;
+        }
+        options.LegacyPreferBackend = null;
+        options.LegacyOnlyBackend = null;
+
+        if (options.MaxCandidates < 200) options.MaxCandidates = 200;
+        if (options.MaxCandidates > 20000) options.MaxCandidates = 20000;
+    }
+
     public static void Normalize(AppSettings s, bool includeBaseLayerDefaults = true)
     {
         /* 先把对象图里的 null 洗掉，再谈"补齐/夹取"。
@@ -1514,6 +1545,8 @@ public static class SettingsStore
         s.Global ??= new GlobalOptions();
         s.Qbar ??= new QbarOptions();
         s.Qbar.Pinned ??= new List<QEntry>();
+        s.Qbar.Search ??= new Core.Qbar.Search.QbarSearchOptions();
+        NormalizeQbarBackend(s.Qbar.Search);
         s.Sync ??= new SyncOptions();
         s.Keys ??= new List<KeyBinding>();
         s.Search ??= new List<QEntry>();

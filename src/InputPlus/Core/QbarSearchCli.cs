@@ -18,9 +18,10 @@ namespace InputPlus.Core;
 /// 分不清是翻译歪了、规则把结果吃了、还是索引没建好 —— 这两个开关把每一层的中间结果
 /// 和每一步的耗时都摊开，排障不用猜。
 ///
-/// --qbar-bench 同时充当回归闸门：同一批查询分别走旧入口（NativeSearchIndex.Search）
-/// 和新引擎（QbarSearchEngine.Run），逐条比 top-N 顺序是否一致 —— 红线要求
-/// 「默认查询行为与改造前保持一致」，这条必须能自动验。
+/// --qbar-bench 只报数字（命中 / 候选 / 耗时），不再做"新重复一致"：
+/// 索引换内核之后旧入口已经不存在，程序内没有第二个能自比的实现。
+/// 「与改造前一致」这条红线改由 docs\\qbar\\golden 下的基线 +
+/// tools/qbar-golden-compare.ps1 承担（见 TANTIVY-MIGRATION.md）。
 /// </summary>
 internal static class QbarSearchCli
 {
@@ -56,9 +57,9 @@ internal static class QbarSearchCli
         sb.AppendLine("=== Qbar 查询调试（语义层） ===");
         sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         sb.AppendLine("输入: " + query);
-        sb.AppendLine("索引状态: " + NativeSearchIndex.Status);
-        if (NativeSearchIndex.Problem.Length > 0) sb.AppendLine("索引问题: " + NativeSearchIndex.Problem);
-        sb.AppendLine("索引规模: 文件 " + NativeSearchIndex.FileCount + " 个，目录 " + NativeSearchIndex.DirCount + " 个");
+        sb.AppendLine("索引状态: " + QbarIndex.Status);
+        if (QbarIndex.Problem.Length > 0) sb.AppendLine("索引问题: " + QbarIndex.Problem);
+        sb.AppendLine("索引规模: 文件 " + QbarIndex.FileCount + " 个，目录 " + QbarIndex.DirCount + " 个");
         sb.AppendLine("等待索引: " + waited + " ms");
         /* 引擎拿不到快照时不会填 Translation（例如索引还没建好），这时现翻一次，
          * 让调试面板始终能看到"这句话被翻成了什么"。 */
@@ -67,10 +68,10 @@ internal static class QbarSearchCli
 
         sb.AppendLine();
         sb.AppendLine("归一化: " + translation.Normalized);
-        sb.AppendLine("索引查询: " + translation.EverythingText);
+        sb.AppendLine("索引查询: " + translation.IndexText);
         sb.AppendLine("后端: " + outcome.BackendText);
-        if (QbarEverythingBackend.LastRejectedSample.Length > 0)
-            sb.AppendLine("复核样本: " + QbarEverythingBackend.LastRejectedSample);
+        if (QbarTantivyBackend.LastRejectedSample.Length > 0)
+            sb.AppendLine("复核样本: " + QbarTantivyBackend.LastRejectedSample);
         sb.AppendLine("请求: " + translation.RequestDetail);
         sb.AppendLine("上下文: " + translation.KeywordDetail);
         sb.AppendLine("分词: " + translation.Tokens);
@@ -139,69 +140,187 @@ internal static class QbarSearchCli
     }
 
     /// <summary>
-    /// --everything-status：Everything SDK 的体检。装没装、版本、索引加载没加载、
-    /// 能不能真的查出一条结果，一次说清 —— 排查"为什么搜索是空的"时第一条命令。
+    /// --index-status：文件索引的体检。条数、体积、构建进度、最近一次提交、watcher 状态、
+    /// 查询 p50/p95，一次说清 —— 排查"为什么搜索是空的 / 为什么刚建的文件搜不到"时的第一条命令。
     /// </summary>
-    public static int RunEverythingStatus(string[]? args = null)
+    public static int RunIndexStatus(string[]? args = null)
     {
         try { Console.OutputEncoding = Encoding.UTF8; } catch (IOException) { }
 
-        bool start = args != null && args.Any(a => a.Equals("--start", StringComparison.OrdinalIgnoreCase));
+        bool rebuild = args != null && args.Any(a => a.Equals("--rebuild", StringComparison.OrdinalIgnoreCase));
+
+        if (rebuild) QbarIndex.RequestRebuild();
+        long waited = EnsureIndex();
 
         var sb = new StringBuilder();
-        sb.AppendLine("=== Everything SDK 状态 ===");
+        sb.AppendLine("=== 文件索引状态（进程内 tantivy） ===");
         sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        bool available = EverythingApi.IsAvailable;   // 读它会触发 Load（含内置副本释放）
-        sb.AppendLine("内置目录: " + EverythingBundle.Folder);
-        sb.AppendLine("内置客户端: " + (File.Exists(EverythingBundle.ClientPath) ? "已释放" : "未释放"));
-        sb.AppendLine("SDK 可用: " + available);
-        sb.AppendLine("DLL: " + (EverythingApi.DllPath.Length == 0 ? "（未找到）" : EverythingApi.DllPath));
-        sb.AppendLine("DLL 来源: " + EverythingApi.SourceText);
-        sb.AppendLine("版本: " + EverythingApi.VersionText);
-        sb.AppendLine("索引已加载: " + EverythingApi.IsDbLoaded);
-        sb.AppendLine("Everything 以管理员运行: " + EverythingApi.IsAdmin);
-        sb.AppendLine("当前进程是管理员: " + (Core.ElevationHelper.IsElevated ? "是" : "否"));
-        sb.AppendLine("状态: " + EverythingApi.StatusText);
+        sb.AppendLine("原生库: " + TantivyApi.StatusText);
+        sb.AppendLine("索引目录: " + QbarIndex.IndexDir);
+        sb.AppendLine("旧快照目录: " + (Directory.Exists(QbarIndex.LegacyDir) ? "仍存在（下次建索引时删除）" : "已清理"));
+        sb.AppendLine("状态: " + QbarIndex.Status);
+        if (QbarIndex.Problem.Length > 0) sb.AppendLine("问题: " + QbarIndex.Problem);
+        /* 自愈过的话必须单独说一句：否则用户看到的是"索引已就绪"，而索引其实是空的
+         * （正在重建）—— 那会被当成"搜索功能坏了"。 */
+        if (QbarIndex.RecoveryNote.Length > 0) sb.AppendLine("问题: " + QbarIndex.RecoveryNote);
+        sb.AppendLine("正在建立: " + QbarIndex.Building);
+        sb.AppendLine("根目录: " + (QbarIndex.Roots.Count == 0 ? "（还没算）" : string.Join(" ；", QbarIndex.Roots)));
+        sb.AppendLine("等待索引: " + waited + " ms");
 
-        if (start && !EverythingBootstrap.Ready)
-        {
-            sb.AppendLine();
-            sb.AppendLine("启动内置 Everything…");
-            bool started = EverythingBootstrap.EnsureClient(8000);
-            sb.AppendLine("启动结果: " + (started ? "客户端已在运行" : "还没起来"));
-            sb.AppendLine("说明: " + EverythingBootstrap.LastDetail);
-            sb.AppendLine("索引已加载: " + EverythingApi.IsDbLoaded);
-            sb.AppendLine("Everything 以管理员运行: " + EverythingApi.IsAdmin);
-            sb.AppendLine("状态: " + EverythingApi.StatusText);
-        }
+        IndexStats stats = TantivyApi.Stats();
         sb.AppendLine();
+        sb.AppendLine("文档总数: " + stats.Docs);
+        sb.AppendLine("文件 / 目录: " + stats.Files + " / " + stats.Dirs);
+        sb.AppendLine("段数: " + stats.Segments);
+        sb.AppendLine("索引体积: " + (stats.Bytes / 1024.0 / 1024.0).ToString("0.0") + " MB（"
+                      + (stats.Docs > 0 ? (stats.Bytes / (double)stats.Docs).ToString("0") : "?") + " 字节/文档）");
+        sb.AppendLine("schema 版本: " + stats.SchemaVersion);
+        sb.AppendLine("建索引于: " + (QbarIndex.BuiltAt == DateTime.MinValue
+            ? "（还没有）"
+            : QbarIndex.BuiltAt.ToString("yyyy-MM-dd HH:mm:ss")));
+        sb.AppendLine("最近一次提交耗时: " + QbarIndex.LastCommitMs + " ms");
+        sb.AppendLine("建索引分段: " + QbarIndex.BuildTimingText);
+        sb.AppendLine("watcher: " + QbarIndex.WatcherStatus);
+        sb.AppendLine("目录快照: " + QbarIndex.StampStatus);
 
-        if (EverythingApi.IsAvailable)
+        // 查询延迟：热态跑几轮，给 p50 / p95。数字要能脚本解析，格式固定。
+        QbarQueryContext context = BuildContext();
+        var samples = new List<double>();
+        foreach (string query in new[] { "report", "说明", "doc:", "ext:pdf;docx size:>1mb" })
         {
-            var sw = Stopwatch.StartNew();
-            bool ok = EverythingApi.TrySearch("ext:exe", 5, out List<EverythingHit> hits, out string detail);
-            sw.Stop();
-            sb.AppendLine("实测查询 ext:exe：" + (ok ? "成功" : "失败") + "，用时 " +
-                          sw.Elapsed.TotalMilliseconds.ToString("0.0") + " ms，返回 " + hits.Count + " 条");
-            sb.AppendLine("详情: " + detail);
-            for (int i = 0; i < hits.Count; i++) sb.AppendLine("  " + hits[i].Path);
+            for (int i = 0; i < 8; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                QbarSearchOutcome outcome = QbarSearchEngine.Run(context, query, 40);
+                sw.Stop();
+                if (outcome.Backend != "off") samples.Add(sw.Elapsed.TotalMilliseconds);
+            }
+        }
+        samples.Sort();
+        double p50 = samples.Count == 0 ? 0 : samples[samples.Count / 2];
+        double p95 = samples.Count == 0 ? 0 : samples[(int)Math.Min(samples.Count - 1, Math.Ceiling(samples.Count * 0.95) - 1)];
+        sb.AppendLine();
+        sb.AppendLine("查询 p50: " + p50.ToString("0.0") + " ms");
+        sb.AppendLine("查询 p95: " + p95.ToString("0.0") + " ms");
+        sb.AppendLine("样本数: " + samples.Count);
 
+        sb.AppendLine();
+        sb.AppendLine("工作集: " + (Process.GetCurrentProcess().WorkingSet64 / 1024.0 / 1024.0).ToString("0.0") + " MB");
+        sb.AppendLine("专用内存: " + (Process.GetCurrentProcess().PrivateMemorySize64 / 1024.0 / 1024.0).ToString("0.0") + " MB");
+
+        if (args != null && args.Any(a => a.Equals("--increment-check", StringComparison.OrdinalIgnoreCase)))
+        {
             sb.AppendLine();
-            QbarQueryContext context = BuildContext();
-
-            /* 探针别写死 "doc:"：过滤器关键字是用户资产（有人把 doc 改成 WD），
-             * 写死的话探针会在人家的配置上显示 0 条，看着像后端坏了。
-             * 取第一个带扩展名的过滤器，用它的真实关键字探。 */
-            QbarFilterCatalog probeCatalog = QbarFilterCatalog.Create(context.Filters);
-            QbarFilter? probe = probeCatalog.All.FirstOrDefault(f => f.Enabled && !string.IsNullOrEmpty(f.Extensions));
-            string probeQuery = probe == null ? "ext:docx" : probe.Keyword + ":";
-            QbarSearchOutcome outcome = QbarSearchEngine.Run(context, probeQuery, 10);
-            sb.AppendLine("语义层 " + probeQuery + " → " + outcome.BackendText);
-            sb.AppendLine("命中 " + outcome.Hits.Count + " 条；" + outcome.TimingText);
+            sb.AppendLine(RunIncrementCheck());
         }
 
-        Write("clp-everything-status.txt", sb.ToString());
-        return EverythingApi.IsAvailable && EverythingApi.IsDbLoaded ? 0 : 1;
+        Write("clp-index-status.txt", sb.ToString());
+        return stats.Ok && stats.Files > 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 增量实测：在第一个索引根下真的建一个文件，然后**在本进程里**轮询"能不能搜到"，
+    /// 删掉之后同样轮询"是不是搜不到了"。
+    ///
+    /// 为什么必须在同一个进程里测：watcher 是进程内的线程，跨进程跑一条命令测的是
+    /// "上次退出前提交了没有"，那是另一件事。这里量的是"从落盘到可检索"的真实延迟。
+    /// </summary>
+    private static string RunIncrementCheck()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("=== 增量实测 ===");
+        if (QbarIndex.Roots.Count == 0)
+        {
+            sb.AppendLine("没有索引根，跳过");
+            return sb.ToString().TrimEnd();
+        }
+
+        string root = PickWritableRoot();
+        if (root.Length == 0)
+        {
+            sb.AppendLine("没有可写的索引根，跳过");
+            return sb.ToString().TrimEnd();
+        }
+        sb.AppendLine("落点: " + root);
+        string name = "inputplus-increment-probe-" + Guid.NewGuid().ToString("N")[..8];
+        string path = Path.Combine(root, name + ".txt");
+        try
+        {
+            File.WriteAllText(path, "probe", Encoding.UTF8);
+            var watch = Stopwatch.StartNew();
+            bool seen = PollUntil(() => CountHits(name) > 0, 5000, out long addMs);
+            sb.AppendLine("新建后可见: " + (seen ? "是" : "否") + " · 延迟 " + addMs + " ms"
+                          + (seen ? (addMs <= 2000 ? "（≤2s 达标）" : "（>2s 超标）") : ""));
+
+            File.Delete(path);
+            bool gone = PollUntil(() => CountHits(name) == 0, 5000, out long delMs);
+            sb.AppendLine("删除后不可见: " + (gone ? "是" : "否") + " · 延迟 " + delMs + " ms"
+                          + (gone ? (delMs <= 2000 ? "（≤2s 达标）" : "（>2s 超标）") : ""));
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine("增量实测失败：" + ex.Message);
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static bool PollUntil(Func<bool> condition, int timeoutMs, out long elapsedMs)
+    {
+        var watch = Stopwatch.StartNew();
+        while (watch.ElapsedMilliseconds < timeoutMs)
+        {
+            if (condition())
+            {
+                elapsedMs = watch.ElapsedMilliseconds;
+                return true;
+            }
+            Thread.Sleep(100);
+        }
+        elapsedMs = watch.ElapsedMilliseconds;
+        return condition();
+    }
+
+    /// <summary>
+    /// 找一个**真能写**的索引根。盘根（C:\）在普通权限下写不进去，
+    /// 而"增量实测"要在被监视的目录里真的建一个文件，所以优先用用户目录。
+    /// </summary>
+    private static string PickWritableRoot()
+    {
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (string root in QbarIndex.Roots)
+        {
+            if (profile.Length > 0 && QbarRoots.IsSameOrUnder(profile, root) && CanWrite(profile)) return profile;
+        }
+        foreach (string root in QbarIndex.Roots)
+        {
+            if (CanWrite(root)) return root;
+        }
+        return "";
+    }
+
+    private static bool CanWrite(string dir)
+    {
+        try
+        {
+            string probe = Path.Combine(dir, ".inputplus-write-probe-" + Guid.NewGuid().ToString("N")[..6]);
+            File.WriteAllText(probe, "1");
+            File.Delete(probe);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>按名字数命中（走的是和界面完全一样的那条链路）。</summary>
+    private static int CountHits(string name)
+    {
+        var spec = new QbarSearchSpec();
+        spec.Terms.Add(name);
+        IndexSearchResult result = QbarIndex.Search(QbarTantivyBackend.BuildQuery(spec), 5);
+        return result.Ok ? result.Hits.Count : 0;
     }
 
     public static int RunBench(string[] args)
@@ -215,18 +334,13 @@ internal static class QbarSearchCli
         var sb = new StringBuilder();
         sb.AppendLine("=== Qbar 语义层基准 ===");
         sb.AppendLine("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-        sb.AppendLine("索引状态: " + NativeSearchIndex.Status + "，文件 " + NativeSearchIndex.FileCount +
-                      " 个，目录 " + NativeSearchIndex.DirCount + " 个，等待 " + waited + " ms");
-        sb.AppendLine("构建于: " + (NativeSearchIndex.BuiltAt == DateTime.MinValue
+        sb.AppendLine("索引状态: " + QbarIndex.Status + "，文件 " + QbarIndex.FileCount +
+                      " 个，目录 " + QbarIndex.DirCount + " 个，等待 " + waited + " ms");
+        sb.AppendLine("构建于: " + (QbarIndex.BuiltAt == DateTime.MinValue
             ? "（还没有）"
-            : NativeSearchIndex.BuiltAt.ToString("yyyy-MM-dd HH:mm:ss")));
+            : QbarIndex.BuiltAt.ToString("yyyy-MM-dd HH:mm:ss")));
         sb.AppendLine("候选窗口: " + context.Options.MaxCandidates + " 条；规则数: " + context.Resolver.Count);
-        string backend = !context.Options.PreferEverything
-            ? "仅本地索引（自检/基准对照）"
-            : context.Options.EverythingOnly
-                ? "仅 Everything（拿不到就空结果，不回退）"
-                : "Everything 优先（失败回退本地索引）";
-        sb.AppendLine("后端: " + backend + " · " + EverythingApi.StatusText);
+        sb.AppendLine("后端: 进程内 tantivy 索引 · " + TantivyApi.StatusText);
         sb.AppendLine();
 
         /* ---- 1) 翻译层自身开销 ---- */
@@ -240,8 +354,8 @@ internal static class QbarSearchCli
         sb.AppendLine("翻译层: " + translateRuns + " 次平均 " + translateUs.ToString("0.00") + " us/次（预算 5000 us）");
         sb.AppendLine();
 
-        /* ---- 2) 20 条查询：端到端 + 与旧入口逐条比对 ---- */
-        sb.AppendLine("查询\t后端\t命中\t候选\t隐藏\t中位 ms\t最大 ms\t翻译 us\t旧入口比对");
+        /* ---- 2) 20 条查询：端到端 + 重复一致性 ---- */
+        sb.AppendLine("查询\t后端\t命中\t候选\t隐藏\t中位 ms\t最大 ms\t翻译 us\t重复一致");
         var totals = new List<double>();
         foreach (string query in BenchQueries)
         {
@@ -264,11 +378,11 @@ internal static class QbarSearchCli
             for (int i = 0; i < quoteRuns; i++) QbarQueryTranslator.Translate(query, catalog, now);
             quoteWatch.Stop();
 
-            sb.AppendLine(query.Replace("\t", " ") + "\t" + (last.Backend == "everything" ? "E" : last.Backend == "off" ? "X" : "N") +
+            sb.AppendLine(query.Replace("\t", " ") + "\t" + (last.Backend == "off" ? "X" : "T") +
                           "\t" + last.Hits.Count + "\t" + last.RawCount + "\t" +
                           last.HiddenCount + "\t" + median.ToString("0.0") + "\t" + max.ToString("0.0") + "\t" +
                           (quoteWatch.Elapsed.TotalMilliseconds * 1000.0 / quoteRuns).ToString("0.0") + "\t" +
-                          CompareWithLegacy(context, query, last));
+                          CompareStability(context, query, last));
         }
 
         totals.Sort();
@@ -290,71 +404,31 @@ internal static class QbarSearchCli
     }
 
     /// <summary>
-    /// 回归闸门：纯关键词查询，旧入口给出的每一条结果都必须仍然出现在新结果里。
+    /// 回归闸门：同一条查询跑两次，结果必须逐位一致。
     ///
-    /// 比的是"集合"而不是"顺序"：默认规则包会把系统目录降权，顺序本来就该变
-    /// （用例 11 明确要求），继续拿顺序当回归标准只会天天报假警。新结果比旧的多
-    /// 是正常的 —— 旧入口的候选窗口只有 40 条，新引擎按 2000 条取候选再重排。
+    /// 为什么不再比"旧入口"：索引内核换成 tantivy 之后旧入口（内存快照扫描）已经删除，
+    /// 进程内没有第二个能自比的实现。「与改造前保持一致」这条红线改由
+    /// docs\qbar\golden 的基线 + tools/qbar-golden-compare.ps1 承担；
+    /// 这里守的是另一半 —— 同一次运行里重复查询不能漂移
+    /// （索引层用 BM25 排序，一旦把 searcher 缓存/重载写错，表现为"同样的词两次结果不同"）。
     /// </summary>
-    private static string CompareWithLegacy(QbarQueryContext context, string query, QbarSearchOutcome outcome)
+    private static string CompareStability(QbarQueryContext context, string query, QbarSearchOutcome outcome)
     {
-        QbarTranslateResult? translation = outcome.Translation;
-        if (translation == null || !translation.Spec.IsPlain) return "非纯关键词，跳过";
+        if (outcome.Backend == "off") return "索引不可用，跳过";
 
-        /* 拿"规则全关"的引擎跟旧入口比顺序 —— 这才测得到翻译层和扫描层有没有走样。
-         * 默认规则包本来就会改顺序（用例 11 要求 C:\Windows 排后面），把带规则的
-         * 结果拿去跟旧入口比，测的就不是回归而是规则是否生效了。 */
-        bool rulesEnabled = context.Options.RulesEnabled;
-        QbarSearchOutcome bare;
-        context.Options.RulesEnabled = false;
-        try
+        QbarSearchOutcome again = QbarSearchEngine.Run(context, query, 40);
+        var first = outcome.Hits.Select(h => h.Path).ToList();
+        var second = again.Hits.Select(h => h.Path).ToList();
+
+        int diff = 0;
+        int shared = Math.Min(first.Count, second.Count);
+        for (int i = 0; i < shared; i++)
         {
-            bare = QbarSearchEngine.Run(context, query, 40);
+            if (!string.Equals(first[i], second[i], StringComparison.OrdinalIgnoreCase)) diff++;
         }
-        finally
-        {
-            context.Options.RulesEnabled = rulesEnabled;
-        }
+        if (first.Count != second.Count) diff += Math.Abs(first.Count - second.Count);
 
-        IReadOnlyList<FileSearchHit> legacy = NativeSearchIndex.Search(query, 40, 15000);
-        var legacyPaths = legacy.Where(h => !h.IsDir).Select(h => h.Path).ToList();
-        var barePaths = bare.Hits.Where(h => !h.IsDir).Select(h => h.Path).ToList();
-
-        /* 比"旧结果的相对顺序"而不是逐位相等：增强路径（拼音 / 子序列）会给新结果
-         * 追加旧入口根本没有的条目，逐位比就永远对不上。真正要守的是
-         * 旧入口给的每一条都还在，且它们之间的先后关系没被打乱。 */
-        var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < barePaths.Count; i++) indexOf[barePaths[i]] = i;
-
-        int missing = 0;
-        int outOfOrder = 0;
-        int cursor = -1;
-        foreach (string path in legacyPaths)
-        {
-            if (!indexOf.TryGetValue(path, out int at))
-            {
-                missing++;
-                continue;
-            }
-            if (at < cursor) outOfOrder++;
-            else cursor = at;
-        }
-
-        var rankedPaths = outcome.Hits.Where(h => !h.IsDir).Select(h => h.Path).ToList();
-        int moved = 0;
-        int rankedShared = Math.Min(barePaths.Count, rankedPaths.Count);
-        for (int i = 0; i < rankedShared; i++)
-        {
-            if (!string.Equals(barePaths[i], rankedPaths[i], StringComparison.OrdinalIgnoreCase)) moved++;
-        }
-
-        string head;
-        if (legacyPaths.Count == 0) head = "一致（0 条）";
-        else if (missing > 0) head = "缺失 " + missing + "/" + legacyPaths.Count + " 条";
-        else if (outOfOrder > 0) head = "乱序 " + outOfOrder + " 条";
-        else head = "一致（" + legacyPaths.Count + " 条）";
-
-        return moved > 0 ? head + "；规则重排 " + moved + " 条" : head;
+        return diff == 0 ? "稳定（" + first.Count + " 条）" : "两次不一致 " + diff + " 条";
     }
 
     /// <summary>2000 条候选的重排耗时：直接跑引擎（候选窗口即 2000），单独计 RankMs。</summary>
@@ -520,8 +594,16 @@ internal static class QbarSearchCli
     private static long EnsureIndex()
     {
         var watch = Stopwatch.StartNew();
-        NativeSearchIndex.Start();
-        while (NativeSearchIndex.Building && watch.Elapsed.TotalSeconds < 300) Thread.Sleep(200);
+        QbarIndex.Start();
+        /* Start() 只是拉起后台线程，"正在建立 / 正在核对快照"这两个标志要等线程真的跑起来
+         * 才置位。所以既要等 Ready，也要等 Building / Starting 都归零；
+         * 只有"什么都没在干、也没就绪"（启动失败）才给 500ms 宽限放行，别把命令行挂死。 */
+        while (watch.Elapsed.TotalSeconds < 300)
+        {
+            if (QbarIndex.Ready && !QbarIndex.Building && !QbarIndex.Starting) break;
+            if (!QbarIndex.Building && !QbarIndex.Starting && watch.ElapsedMilliseconds > 500) break;
+            Thread.Sleep(200);
+        }
         return watch.ElapsedMilliseconds;
     }
 

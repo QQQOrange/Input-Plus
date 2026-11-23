@@ -1,46 +1,60 @@
 # 构建与运行（Windows 11 x64 / .NET 10）
 
-构建需要 **.NET 10 SDK**；**运行不需要任何运行时** —— 发布产物自带。
+构建需要 **.NET 10 SDK** 和 **Rust 1.91+**（文件索引内核是 Rust cdylib）；
+**运行只需要 .NET 10 桌面运行时** —— 单文件发布里已经包含我们自己的原生库。
+
+## 1. 先编原生索引内核（ipidx.dll）
+
+```powershell
+cd src\ipidx
+cargo build --release        # 产物：target\release\ipidx.dll（约 5.5 MB）
+```
+
+- 依赖是 **vendored** 的：`third_party\tantivy`（v0.27.0），不需要联网拉仓库；
+- 首次构建约 30~60 秒（tantivy 本体），之后增量几秒；
+- 自测：`cargo test`（18 个单元测试 + 27 个夹具集成测试，覆盖中文子串 / 拼音 /
+  ext / size / date / path / 取反 / 目录 vs 文件 / 正则 / glob / 删除 / 统计）；
+- `ipidx.dll` 由主工程 csproj 以 `Content` 拷进输出目录与发布目录，
+  单文件发布时靠 `IncludeNativeLibrariesForSelfExtract` 一起打包、运行时解压加载；
+- **Release 构建缺这个 dll 会直接失败**（`EnsureIpIdxNative` 目标），
+  Debug 只警告 —— 少一个 dll 的包"能启动、搜索永远没结果"，那种错必须在构建期拦住。
+
+## 2. 再编主程序
 
 ```powershell
 # 还原 & 构建
 dotnet build src\InputPlus\InputPlus.csproj
 
-# 单文件发布（框架依赖，约 2.8 MB；运行前需装 .NET 10 桌面运行时）
-dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
+# 单文件发布（框架依赖；运行前需装 .NET 10 桌面运行时）
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows10.0.22000.0 -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
 
 # 需要更小（放弃内置自检与离屏渲染，再省约 0.5 MB）
-dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
+dotnet publish src\InputPlus\InputPlus.csproj -c Release -f net10.0-windows10.0.22000.0 -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeDiagnostics=false -o dist-lean
 ```
 
-### 一次出齐四个发布形态
+### 发布形态只有一个
 
-发版用的就是这四条（Win10/11 框架依赖、Win7 自包含，各 x64/x86）。
-**每个形态之间要先清掉 `obj` 与 `bin`** —— 不同 RID 的中间产物混在一个目录里会互相干扰。
-这一步已经封进脚本，不要手敲：
+v1.5.8.1 起只支持 **Windows 11 x64**（`net10.0-windows10.0.22000.0` / `win-x64`）。
+Win7/Win10 与 x86 的形态已经删除：Rust 侧的 tantivy 要求 1.91+ 工具链，
+两条线共用一份源码的代价已经大过收益。
 
 ```powershell
-# 出齐四个形态 + 哈希清单 + 发布说明 + manifest（约 40 秒，产物在 dist\<版本>\）
+# 出产物 + 哈希清单 + 发布说明 + manifest（产物在 dist\<版本>\）
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
-
-# 只出一个形态（改动小、只验证发布链路时用）
-powershell -ExecutionPolicy Bypass -File tools\release.ps1 -Only win10-x64
 
 # 不重新构建，只按目录里已有的 exe 重算哈希与清单（上传前复核）
 powershell -ExecutionPolicy Bypass -File tools\release.ps1 -SkipBuild
 ```
 
-产物（文件名与 GitHub Release 的资产名一致，可直接上传）：
+产物：
 
 ```
-dist\4.20.5\
-  InputPlus.exe                                    Win10/11 x64
-  InputPlus-4.20.5-x86-Win10-Win11.exe             Win10/11 x86
-  InputPlus-4.20.5-x64-Win7-SelfContained.exe      Win7 SP1 x64
-  InputPlus-4.20.5-x86-Win7-SelfContained.exe      Win7 SP1 x86
-  SHA256SUMS.txt     每行「哈希  文件名」，certutil / 7-Zip 都能校验
-  manifest.json      版本 / 大小 / 哈希 / 缺了哪个形态（CI 与上传脚本用）
-  release-notes.md   从 CHANGELOG.md 抽出的本版说明（Release 正文）
+dist\<版本>\
+  InputPlus.exe       Windows 11 x64（框架依赖）
+  SHA256SUMS.txt      每行「哈希  文件名」，certutil / 7-Zip 都能校验
+  manifest.json       版本 / 大小 / 哈希（CI 与上传脚本用）
+  release-notes.md    从 CHANGELOG.md 抽出的本版说明（Release 正文）
+```
 ```
 
 > 版本号只认 `src\InputPlus\InputPlus.csproj` 里的 `<Version>`；

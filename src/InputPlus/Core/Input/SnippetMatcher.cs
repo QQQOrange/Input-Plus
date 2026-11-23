@@ -138,8 +138,25 @@ public static class SnippetMatcher
     /// <summary>
     /// 带前台程序的匹配。<paramref name="process"/> 为空表示"不知道前台是什么"，
     /// 此时**不做限定**（fail open）：判定不了就别拦，否则片段会在所有程序里一起失效。
+    ///
+    /// 这条签名保留不动（老调用方 + 老用例都指着它），实现转给 <see cref="MatchSpan"/>。
     /// </summary>
     public static Snippet? Match(IEnumerable<Snippet>? snippets, string buffer, string? process)
+        => MatchSpan(snippets, buffer, process)?.Snippet;
+
+    /// <summary>
+    /// 与 <see cref="Match(IEnumerable{Snippet}?, string, string?)"/> **逐行等价**的匹配，
+    /// 只是额外告诉调用方"屏幕上已经打进去多少个字符"。
+    ///
+    /// 为什么需要长度：展开要做的是"删掉触发词、打上内容"。删几个字符必须等于
+    /// **屏幕上真的多出来的那几个字**，而这个数只由命中的触发词决定 ——
+    /// 让匹配把答案一起带回来，展开那段就不用再去猜。
+    ///
+    /// <see cref="SnippetMatch.ConsumedLength"/> 取的是折叠后触发词的长度。
+    /// 折叠是 1:1 的（见 <see cref="Fold(char)"/>），所以它恒等于 `Trigger.Length`，
+    /// 精确匹配时删除数与改造前完全一致 —— 这是 R3 的来源。
+    /// </summary>
+    public static SnippetMatch? MatchSpan(IEnumerable<Snippet>? snippets, string buffer, string? process)
     {
         if (snippets == null || string.IsNullOrEmpty(buffer)) return null;
 
@@ -164,7 +181,7 @@ public static class SnippetMatcher
             // 多个触发词同时命中时取最长的（更具体的优先）
             if (best == null || s.Trigger.Length > best.Trigger.Length) best = s;
         }
-        return best;
+        return best == null ? null : new SnippetMatch(best, Fold(best.Trigger).Length);
     }
 
     /// <summary>
@@ -256,3 +273,11 @@ public static class SnippetMatcher
     public static string Trim(string buffer)
         => buffer.Length <= MaxBuffer ? buffer : buffer[^MaxBuffer..];
 }
+
+/// <summary>
+/// 一次命中：哪条片段、以及屏幕上为它打了多少个字符（= 折叠后触发词的长度）。
+///
+/// 用 <c>record struct</c> 而不是 class：命中在**每次按键**上都会算一遍，
+/// 这是个只在栈上过一下的小值，不该顺手产生垃圾。
+/// </summary>
+public readonly record struct SnippetMatch(Snippet Snippet, int ConsumedLength);

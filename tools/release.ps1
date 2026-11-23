@@ -1,32 +1,25 @@
-﻿<#
+<#
 .SYNOPSIS
-    一次出齐四个发布形态，并生成可直接上传 GitHub Release 的资产。
+    出一个发布形态（Windows 11 x64），并生成可直接上传 GitHub Release 的资产。
 
 .DESCRIPTION
-    发版要交四个单文件 exe：
-      · InputPlus.exe                                  Win10/11 x64（框架依赖，约 4 MB）
-      · InputPlus-<版本>-x86-Win10-Win11.exe           Win10/11 x86（框架依赖）
-      · InputPlus-<版本>-x64-Win7-SelfContained.exe    Win7 SP1 x64（自带运行时，约 140 MB）
-      · InputPlus-<版本>-x86-Win7-SelfContained.exe    Win7 SP1 x86（自带运行时，约 130 MB）
+    发版只交一个单文件 exe（v1.6 起只支持 Windows 11 x64）：
+      · InputPlus.exe         Windows 11 x64（框架依赖，需 .NET 10 桌面运行时）
 
     为什么必须用脚本而不是手敲 dotnet publish：
-      · 四个形态的 RID / TFM 不同，**每个形态之间必须先清 obj 与 bin**，
-        否则不同 RID 的中间产物混在一起会互相干扰（BUILD.md 里记过这个坑）；
+      · 发布前要先把 Rust 侧的原生索引内核（src/ipidx）编出来，
+        否则单文件里会缺 ipidx.dll，程序能启动但文件搜索永远没结果；
       · 资产文件名、版本号、SHA-256、发布说明都要和 csproj / CHANGELOG 对齐，
         手工做迟早有一处对不上，用户下到错包很难第一时间发现。
 
     产物目录：dist/<版本>/
         InputPlus.exe
-        InputPlus-<版本>-x86-Win10-Win11.exe
-        InputPlus-<版本>-x64-Win7-SelfContained.exe
-        InputPlus-<版本>-x86-Win7-SelfContained.exe
         SHA256SUMS.txt          每行 "哈希  文件名"，可直接校验
         release-notes.md        从 CHANGELOG.md 抽出的本版说明（GitHub Release 正文）
         manifest.json           版本 / 文件 / 大小 / 哈希 / 构建时间（脚本或 CI 自检用）
 
 .PARAMETER Only
-    只构建其中几个形态，例如 -Only win10-x64,win10-x86。
-    不传则四个全做。
+    只为兼容旧命令行保留；现在只有一个形态（win11-x64）。
 
 .PARAMETER OutRoot
     输出根目录，默认仓库下的 dist。
@@ -36,13 +29,13 @@
     （用于上传前补哈希，或在 CI 里二次校验）。
 
 .PARAMETER KeepStaging
-    保留每个形态的临时发布目录（排查"exe 里缺文件"时有用）。
+    保留临时发布目录（排查"exe 里缺文件"时有用）。
 
 .EXAMPLE
     pwsh tools/release.ps1
 
 .EXAMPLE
-    pwsh tools/release.ps1 -Only win10-x64 -KeepStaging
+    pwsh tools/release.ps1 -KeepStaging
 #>
 [CmdletBinding()]
 param(
@@ -76,23 +69,12 @@ $stageRoot = Join-Path $OutRoot ('_staging-' + $version)
 $outDir = Join-Path $OutRoot $version
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 
-# 四个形态。Asset 名要与 README 的下载表、UpdateService.PickAsset 的识别规则一致。
+# 单一形态（v1.6 起只支持 Windows 11 x64）。
+# Asset 名要与 README 的下载表、UpdateService.PickAsset 的识别规则一致。
 $allShapes = @(
     [pscustomobject]@{
-        Id = 'win10-x64'; Tfm = 'net10.0-windows'; Rid = 'win-x64'; SelfContained = $false
-        Asset = 'InputPlus.exe'; Note = 'Win10/11 x64（框架依赖，需 .NET 10 桌面运行时）'
-    },
-    [pscustomobject]@{
-        Id = 'win10-x86'; Tfm = 'net10.0-windows'; Rid = 'win-x86'; SelfContained = $false
-        Asset = "InputPlus-$version-x86-Win10-Win11.exe"; Note = 'Win10/11 x86（框架依赖，需 .NET 10 桌面运行时 x86）'
-    },
-    [pscustomobject]@{
-        Id = 'win7-x64'; Tfm = 'net7.0-windows'; Rid = 'win-x64'; SelfContained = $true
-        Asset = "InputPlus-$version-x64-Win7-SelfContained.exe"; Note = 'Win7 SP1 x64（自带运行时）'
-    },
-    [pscustomobject]@{
-        Id = 'win7-x86'; Tfm = 'net7.0-windows'; Rid = 'win-x86'; SelfContained = $true
-        Asset = "InputPlus-$version-x86-Win7-SelfContained.exe"; Note = 'Win7 SP1 x86（自带运行时）'
+        Id = 'win11-x64'; Tfm = 'net10.0-windows10.0.22000.0'; Rid = 'win-x64'; SelfContained = $false
+        Asset = 'InputPlus.exe'; Note = 'Windows 11 x64（框架依赖，需 .NET 10 桌面运行时）'
     }
 )
 
@@ -122,7 +104,7 @@ $results = @()
 $failed = @()
 
 Write-Host ''
-Write-Host "Input Plus $version — 发布四个形态" -ForegroundColor Cyan
+Write-Host "Input Plus $version — 发布（Windows 11 x64）" -ForegroundColor Cyan
 Write-Host ''
 
 foreach ($shape in $shapes) {

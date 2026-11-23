@@ -219,6 +219,17 @@ public sealed class HotstringOptions
     public bool ShowNoteFirst { get; set; } = true;
 
     /// <summary>
+    /// 在 token 边界（空格 / 回车 / 输入法提交）用**控件里的真实文本**校对片段缓冲。
+    ///
+    /// 为什么需要：键盘钩子只看得到物理键。用户退格、用鼠标拖选、用输入法改字之后，
+    /// 缓冲里记的和屏幕上显示的就会不一致 —— 那时只有控件里的字说了算。
+    /// 关掉它就退回"只信钩子"的老行为（老配置里没有这个字段，默认开）。
+    ///
+    /// 代价：每次 token 边界读一次焦点控件文本，带 40ms 硬超时（见 TextMirror）。
+    /// </summary>
+    public bool VerifyWithControlText { get; set; } = true;
+
+    /// <summary>
     /// 列表里是否显示展开后的内容。
     ///
     /// 关掉后只显示备注 —— 别名可能是整段正文/密钥/口令，

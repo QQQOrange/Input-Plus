@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -76,7 +76,7 @@ internal static class QbarSettingsDump
         sb.AppendLine("--- 选项 ---");
         sb.AppendLine("  MaxCandidates=" + o.MaxCandidates + " / RulesEnabled=" + o.RulesEnabled
                       + " / BuiltinRulesEnabled=" + o.BuiltinRulesEnabled
-                      + " / PreferEverything=" + o.PreferEverything + " / EverythingOnly=" + o.EverythingOnly
+                      + " / Backend=" + o.Backend
                       + " / FuzzyWhenSparse=" + o.FuzzyWhenSparse + " / PinyinEnabled=" + o.PinyinEnabled);
 
         string text = sb.ToString();

@@ -1,4 +1,4 @@
-using System.Collections.Specialized;
+﻿using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -1125,10 +1125,10 @@ public partial class QbarWindow : Window
          * 面板是临时输入口，不该有上次查询的记忆。 */
         ResetFilterChip();
 
-        /* 顺手把内置 Everything 拉起来（后台线程，不挡面板显示）。
-         * 它要几百毫秒才响应，而用户第一次搜文件通常就在这之后 ——
+        /* 顺手把文件索引拉起来（后台线程，不挡面板显示）。
+         * 第一次建索引要几秒到几分钟，而用户第一次搜文件通常就在这之后 ——
          * 等真搜了才启动的话，第一屏必然是空的。 */
-        EverythingBootstrap.WarmupAsync();
+        QbarIndex.Start();
 
         /* 每次打开都重取窗口列表：搜索用的缓存只有几百毫秒，
          * 但用户可能刚切过窗口，这里显式作废一次，第一眼结果更贴近现场。 */
@@ -2330,7 +2330,7 @@ public partial class QbarWindow : Window
         if (_chip != null || effective.Length < 2) return;
 
         // 索引是惰性启动的：先在本线程点一下，后台线程只做纯计算
-        NativeSearchIndex.Start();
+        QbarIndex.Start();
 
         QbarQueryContext context = QbarSearchEngine.FromSettings(_host.Settings);
         int fileLimit = Math.Min(6, limit);
@@ -2533,7 +2533,7 @@ public partial class QbarWindow : Window
         var sb = new StringBuilder();
         sb.AppendLine("输入: " + (translation.Input.Length == 0 ? "(空)" : translation.Input));
         sb.AppendLine("归一化: " + translation.Normalized);
-        sb.AppendLine("索引查询: " + translation.EverythingText);
+        sb.AppendLine("索引查询: " + translation.IndexText);
         sb.AppendLine("后端: " + (outcome == null ? "（尚未查询）" : outcome.BackendText));
         sb.AppendLine("请求: " + translation.RequestDetail);
         foreach (QbarDiagEntry stage in translation.Stages)
@@ -2596,58 +2596,53 @@ public partial class QbarWindow : Window
             ShowHiddenReasons();
             return true;
         }
-        if (string.Equals(action, "qbar:everything", StringComparison.Ordinal))
+        if (string.Equals(action, "qbar:rebuild-index", StringComparison.Ordinal))
         {
-            OpenEverythingForSearch();
+            RebuildFileIndex();
             return true;
         }
         return false;
     }
 
     /// <summary>
-    /// 文件搜索结果为空且后端报告"Everything 不可用"时，那条提示行点下去就走这里。
+    /// 文件搜索结果为空且后端报告"索引不可用"时，那条提示行点下去就走这里。
     ///
-    /// 现在 Everything 是**内置**的（客户端与 SDK 都打在程序集里），所以这里不再
-    /// 依赖用户装过 Everything：先让内置客户端起来，等它有反应就自动把这次查询重跑
-    /// 一遍 —— 用户点一下就能看到结果，而不是"打开了某个程序，请自己再搜一次"。
-    /// 只有内置那份起不来（被安全软件拦掉之类）才回落到系统里已安装的 Everything。
+    /// 索引在本进程里，所以"点一下"能做的事很具体：丢掉现有索引重扫一遍。
+    /// 索引正在建的时候不重复触发（那只会把两趟扫描叠在一起更慢），
+    /// 只提示一句进度。
     /// </summary>
-    private void OpenEverythingForSearch()
+    private void RebuildFileIndex()
     {
-        _host.Notify(Loc.T("正在启动内置 Everything…"));
+        if (QbarIndex.Building)
+        {
+            _host.Notify(Loc.T("文件索引正在建立：") + QbarIndex.Status);
+            return;
+        }
+
+        _host.Notify(Loc.T("正在重建文件索引…"));
         Task.Run(() =>
         {
-            bool ok = EverythingBootstrap.EnsureClient(3000);
-            if (!ok)
-            {
-                try
-                {
-                    var info = new ProcessStartInfo("Everything.exe") { UseShellExecute = true };
-                    Process.Start(info);
-                }
-                catch (Exception ex)
-                {
-                    CoreLog.Warn("启动 Everything 失败：" + ex.Message);
-                }
-            }
+            QbarIndex.RequestRebuild();
 
-            /* 索引可能还在加载，给它几秒；期间不弹任何窗口，用户只是看到"稍等"。 */
+            /* 建索引要几十秒到几分钟（取决于盘上文件数），这里只等一小会儿；
+             * 建不完就提示"还在建"，下一次打开面板自然就有结果了。 */
             var watch = Stopwatch.StartNew();
-            while (!EverythingBootstrap.Ready && watch.ElapsedMilliseconds < 6000)
+            while (!QbarIndex.Ready && watch.ElapsedMilliseconds < 8000)
                 System.Threading.Thread.Sleep(200);
 
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (EverythingBootstrap.Ready)
+                if (QbarIndex.Ready)
                 {
-                    _host.Notify(Loc.T("Everything 已就绪，重新搜索"));
+                    _host.Notify(Loc.F("文件索引已就绪：{0} 个文件 / {1} 个目录",
+                        QbarIndex.FileCount, QbarIndex.DirCount));
                     RunQuery();
                 }
                 else
                 {
-                    _host.Notify(EverythingBootstrap.LastDetail.Length > 0
-                        ? EverythingBootstrap.LastDetail
-                        : Loc.T("Everything 还没准备好，稍等几秒再搜一次"));
+                    _host.Notify(QbarIndex.Problem.Length > 0
+                        ? QbarIndex.Problem
+                        : Loc.T("文件索引还在建立，稍后就能搜到"));
                 }
             }));
         });
@@ -2813,13 +2808,11 @@ public partial class QbarWindow : Window
     private void RefreshIndex()
     {
         QbarPinyinIndex.Invalidate();
-        if (!NativeSearchIndex.Ready && !NativeSearchIndex.Building) NativeSearchIndex.Start();
+        if (!QbarIndex.Ready && !QbarIndex.Building) QbarIndex.Start();
 
-        string status = EverythingApi.IsAvailable && EverythingApi.IsDbLoaded
-            ? Loc.F("Everything 索引已加载（{0}）", EverythingApi.VersionText)
-            : NativeSearchIndex.Ready
-                ? Loc.F("文件索引已就绪：{0} 个文件 / {1} 个目录", NativeSearchIndex.FileCount, NativeSearchIndex.DirCount)
-                : NativeSearchIndex.Building ? Loc.T("文件索引正在建立，稍后可用") : Loc.T("文件索引不可用，请检查索引目录权限");
+        string status = QbarIndex.Ready
+            ? Loc.F("文件索引已就绪：{0} 个文件 / {1} 个目录", QbarIndex.FileCount, QbarIndex.DirCount)
+            : QbarIndex.Building ? Loc.T("文件索引正在建立，稍后可用") : Loc.T("文件索引不可用，请检查索引目录权限");
         _host.Notify(status);
 
         QbarPinyinIndex.Start();

@@ -1,0 +1,24 @@
+C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\Reporting and NEL
+C:\ProgramData\Razer\RazerAppEngine\Logs\RzPowerTool-64381.log
+C:\ProgramData\Razer\RazerAppEngine\Logs\RzPowerTool-SYSTEM.log
+C:\Program Files (x86)\Windows Kits\10\Source\10.0.26100.0\ucrt\internal\report_runtime_error.cpp
+C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Reporting and NEL
+C:\ProgramData\Oray\Webview2\64381\d3c28504706dd0e860840110fa286f1c\EBWebView\Default\Network\Reporting and NEL
+C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Reporting and NEL-journal
+C:\ProgramData\Oray\Webview2\64381\d3c28504706dd0e860840110fa286f1c\EBWebView\Default\Network\Reporting and NEL-journal
+C:\ProgramData\ASUS\ROG Live Service\ArmSupportList.ini
+C:\Program Files (x86)\Windows Media Player\Media Renderer\avtransport.xml
+C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\ROG Live Service\ArmSupportList.ini
+C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\TransportSecurity
+C:\Program Files (x86)\yxq_nethelper\XYCrashReport.exe
+C:\ProgramData\Huorong\AppStore\logs\v3_HrAppStore.txt.logdat
+C:\ProgramData\Huorong\AppStore\logs\HrAppStoreHive.txt.logdat
+C:\ProgramData\Huorong\AppStore\logs\HrAppStoreOpen.txt.logdat
+C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\Network Persistent State
+C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\detectdll\checkBoardSupport.log
+C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\detectdll\checkBoardSupport_x86_var.log
+C:\ProgramData\SogouInput\shell_ext\icon\picture.multiprint.ico
+C:\ProgramData\SogouInput\shell_ext\common\pic_preview_probability_config.dat
+C:\ProgramData\Huorong\AppStore\logs\HrAppStoreNotify.txt.logdat
+C:\ProgramData\SogouInput\shell_ext\common\base\2512311142\api-ms-win-crt-private-l1-1-0.dll
+C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Network Persistent State

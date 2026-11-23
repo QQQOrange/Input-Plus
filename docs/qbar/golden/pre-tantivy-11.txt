@@ -1,0 +1,66 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:29
+输入: C:\Windows
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 212 ms
+
+归一化: C:\Windows
+索引查询: "C:\Windows"
+后端: 后端 Everything · "C:\Windows" · Everything 1.4.1 索引已加载 · 命中 2000 条（总 210735，窗口已截断） · SDK 18 ms · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: C:\Windows
+各层:
+  [normalize] C:\Windows
+  [tokenize] C:\Windows
+  [degrade] unparsed predicate C:\Windows -> plain keyword   <-- 需要留意
+  [resolveKeyword] (none)
+  [translate] "C:\Windows"
+  [native] terms=C:\Windows
+
+候选: 2000 条，展示 40 条，端到端 51.5 ms
+翻译 4.3ms · 检索 33.5ms · 重排 12.1ms · 合计 50.4ms
+本页：程序 2 · 其他 38 · 近7天 9
+
+命中:
+  [文件] C:\Windows\System32\wpbbin.exe   (分 475 / 档 0 / 1.3 MB / 2026-11-20)
+  [文件] C:\Windows\System32\AsusUpdateCheck.exe   (分 474 / 档 0 / 1.2 MB / 2026-11-20)
+  [文件] C:\Windows\PFRO.log   (分 471 / 档 0 / 332 KB / 2026-11-20)
+  [文件] C:\Windows\bootstat.dat   (分 471 / 档 0 / 66 KB / 2026-11-21)
+  [文件] C:\Windows\setupact.log   (分 471 / 档 0 / 9 KB / 2026-11-19)
+  [文件] C:\Windows\DtcInstall.log   (分 471 / 档 0 / 2026-11-13)
+  [文件] C:\Windows\WindowsUpdate.log   (分 470 / 档 0 / 2026-11-21)
+  [文件] C:\Windows\Temp\.ses   (分 464 / 档 0 / 2026-11-20)
+  [文件] C:\Windows\INF\bth.PNF   (分 464 / 档 0 / 86 KB / 2026-11-14)
+  [文件] C:\Windows\INF\cpu.PNF   (分 464 / 档 0 / 14 KB / 2026-11-14)
+  [文件] C:\Windows\INF\fdc.PNF   (分 464 / 档 0 / 6 KB / 2026-11-14)
+  [文件] C:\Windows\INF\hsp.PNF   (分 464 / 档 0 / 7 KB / 2026-11-14)
+  [文件] C:\Windows\INF\pci.PNF   (分 464 / 档 0 / 22 KB / 2026-11-14)
+  [文件] C:\Windows\INF\prm.PNF   (分 464 / 档 0 / 7 KB / 2026-11-14)
+  [文件] C:\Windows\INF\tpm.PNF   (分 464 / 档 0 / 13 KB / 2026-11-14)
+  [文件] C:\Windows\INF\usb.PNF   (分 464 / 档 0 / 65 KB / 2026-11-14)
+  [文件] C:\Windows\Tasks\SA.DAT   (分 464 / 档 0 / 2026-11-20)
+  [文件] C:\Windows\INF\1394.PNF   (分 463 / 档 0 / 18 KB / 2026-11-14)
+  [文件] C:\Windows\INF\acpi.PNF   (分 463 / 档 0 / 10 KB / 2026-11-14)
+  [文件] C:\Windows\INF\disk.PNF   (分 463 / 档 0 / 16 KB / 2026-11-14)
+  [文件] C:\Windows\INF\pmem.PNF   (分 463 / 档 0 / 7 KB / 2026-11-14)
+  [文件] C:\Windows\INF\sbp2.PNF   (分 463 / 档 0 / 7 KB / 2026-11-14)
+  [文件] C:\Windows\INF\sdxi.PNF   (分 463 / 档 0 / 9 KB / 2026-11-19)
+  [文件] C:\Windows\INF\uefi.PNF   (分 463 / 档 0 / 7 KB / 2026-11-14)
+  [文件] C:\Windows\INF\wvid.PNF   (分 463 / 档 0 / 8 KB / 2026-11-14)
+  [文件] C:\Windows\INF\cdrom.PNF   (分 463 / 档 0 / 11 KB / 2026-11-14)
+  [文件] C:\Windows\INF\hidir.PNF   (分 463 / 档 0 / 33 KB / 2026-11-14)
+  [文件] C:\Windows\INF\input.PNF   (分 463 / 档 0 / 140 KB / 2026-11-14)
+  [文件] C:\Windows\INF\iscsi.PNF   (分 463 / 档 0 / 10 KB / 2026-11-14)
+  [文件] C:\Windows\INF\kdnic.PNF   (分 463 / 档 0 / 9 KB / 2026-11-14)
+  [文件] C:\Windows\INF\mshdc.PNF   (分 463 / 档 0 / 64 KB / 2026-11-14)
+  [文件] C:\Windows\INF\oem86.PNF   (分 463 / 档 0 / 8 KB / 2026-11-15)
+  [文件] C:\Windows\INF\oem87.PNF   (分 463 / 档 0 / 9 KB / 2026-11-15)
+  [文件] C:\Windows\INF\oem88.PNF   (分 463 / 档 0 / 7 KB / 2026-11-15)
+  [文件] C:\Windows\INF\umbus.PNF   (分 463 / 档 0 / 9 KB / 2026-11-14)
+  [文件] C:\Windows\INF\wpdfs.PNF   (分 463 / 档 0 / 9 KB / 2026-11-14)
+  [文件] C:\Windows\INF\wvpci.PNF   (分 463 / 档 0 / 8 KB / 2026-11-14)
+  [文件] C:\Windows\INF\amdwps.PNF   (分 463 / 档 0 / 6 KB / 2026-11-14)
+  [文件] C:\Windows\INF\bthpan.PNF   (分 463 / 档 0 / 10 KB / 2026-11-14)
+  [文件] C:\Windows\INF\cmbatt.PNF   (分 463 / 档 0 / 9 KB / 2026-11-14)

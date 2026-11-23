@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:29
+输入: pic:
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 215 ms
+
+归一化: pic:
+索引查询: ext:ani;bmp;gif;ico;jpe;jpeg;jpg;pcx;png;psd;svg;tga;tif;tiff;webp;wmf
+后端: 后端 Everything · "ext:ani;bmp;gif;ico;jpe;jpeg;jpg;pcx;png;psd;svg;tga;tif;tiff;webp;wmf file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 259168，窗口已截断） · SDK 8 ms · 本地复核剔除 0 条
+请求: 
+上下文: filter pic -> 16 exts
+分词: pic:
+各层:
+  [normalize] pic:
+  [tokenize] pic:
+  [resolveKeyword] filter pic -> 16 exts
+  [translate] ext:ani;bmp;gif;ico;jpe;jpeg;jpg;pcx;png;psd;svg;tga;tif;tiff;webp;wmf
+  [native] ext=16 ext files-only filter=图片
+
+候选: 600 条，展示 40 条，端到端 36.3 ms
+翻译 4.4ms · 检索 21.9ms · 重排 8.6ms · 合计 35.3ms
+本页：图片 40 · 近7天 40
+
+命中:
+  [文件] C:\Users\64381\AppData\Local\Temp\update-prompt.png   (分 338 / 档 0 / 126 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ef9f8e29-f6a8-4a2a-b998-8c7e02d4ebb6.tmp.png   (分 335 / 档 0 / 21 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\351e8420-732b-4dda-8ac5-4498eabfd5e1.tmp.webp   (分 335 / 档 0 / 184 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\NotifyIconGeneratedAumid_6562170889449817217.png   (分 334 / 档 0 / 4 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\NotifyIconGeneratedAumid_14906926145466021473.png   (分 334 / 档 0 / 4 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\NotifyIconGeneratedAumid_14989390035716566033.png   (分 334 / 档 0 / 4 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154c\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154b\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154c\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154c\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-9008\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16224\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16360\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16500\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-21332\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-22872\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-32488\icons\jd.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-9008\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-9008\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16224\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16224\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16360\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16360\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16500\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-16500\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-21332\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-21332\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-22872\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-22872\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-32488\icons\mdn.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\InputPlus-selftest-32488\icons\npm.svg   (分 324 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\bing.svg   (分 323 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\csdn.svg   (分 323 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v155\icons\gist.svg   (分 323 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154b\icons\gist.svg   (分 323 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154c\icons\bing.svg   (分 323 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\ipdata-v154c\icons\csdn.svg   (分 323 / 档 0 / 2026-11-23)

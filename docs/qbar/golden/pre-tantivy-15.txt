@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:31
+输入: folder:
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 212 ms
+
+归一化: folder:
+索引查询: 
+后端: 后端 Everything · "folder:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 283578，窗口已截断） · SDK 4 ms · 本地复核剔除 0 条
+请求: 
+上下文: filter folder -> 0 exts
+分词: folder:
+各层:
+  [normalize] folder:
+  [tokenize] folder:
+  [resolveKeyword] filter folder -> 0 exts
+  [translate] (empty query)
+  [native] dirs-only filter=只看文件夹
+
+候选: 600 条，展示 40 条，端到端 29.1 ms
+翻译 4.3ms · 检索 16.5ms · 重排 6.8ms · 合计 28.1ms
+本页：文件夹 40 · 近7天 40
+
+命中:
+  [目录] C:\Users\64381\Documents\deepseek-harness\default-workspace\mft-index-demo\bin\Release\net10.0   (分 428 / 档 1 / 2026-11-23)
+  [目录] C:\Users\64381\Documents\deepseek-harness\default-workspace\mft-index-demo\obj\Release\net10.0   (分 428 / 档 1 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\logs   (分 348 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\storages   (分 347 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\dsh-claude-style   (分 346 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp   (分 340 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\dsh-claude-style\rewind   (分 340 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\HoldDrag   (分 339 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\QuickAchieve   (分 339 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop   (分 338 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\Documents\deepseek-harness\default-workspace   (分 338 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\sessions\--C-Users-64381-Documents-deepseek-harness-default-workspace--   (分 333 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\WPF   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\attachments\v1\tmp   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\AMD\DxCache   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\AMD\VkCache   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\Lenovo\Ludp   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\QuickAchieve\back   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\history   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\Documents\deepseek-harness\default-workspace\tools   (分 332 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\AMD\DxcCache   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\dsh-F1KI2U   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\dsh-QpzMrP   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\dsh-sGQIlq   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\peazip-tmp   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\1yzah0pb.cpv   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\bfjghrqn.za4   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\c2jkbnfj.gld   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\hy050jol.kd5   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\l0rqdyye.alw   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\sucryfck.szh   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\wmwnstou.oc3   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\xpqb0yyq.nbd   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\dsh-acl-locks   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\ip-fdb-provider   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\Temp\ip-fdb-recorder   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\dsh-claude-style\rewind\captures   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\LocalLow\SogouPY.users\00000002   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\.dsh\storages\session_projcache\sessions   (分 331 / 档 0 / 2026-11-23)
+  [目录] C:\Users\64381\AppData\Local\QianwenUpdater\QianwenUpdater   (分 331 / 档 0 / 2026-11-23)

@@ -9,13 +9,13 @@
        把它挪到独立程序集后，XAML 通过 assembly= 限定就能解析到，pass2 不再需要，
        构建回到单趟编译 —— 顺带也让增量构建快了一点。
 
-       两个 TFM 与主工程保持一致：net10 主线 / net7 Win7 线。 -->
+       单一 TFM：从 v1.6 起只支持 Windows 11 x64。 -->
   <PropertyGroup>
-    <TargetFrameworks>net10.0-windows;net7.0-windows</TargetFrameworks>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <LangVersion Condition="'$(TargetFramework)' != 'net7.0-windows'">latest</LangVersion>
+    <LangVersion>latest</LangVersion>
     <AssemblyName>InputPlus.Localization</AssemblyName>
     <RootNamespace>InputPlus</RootNamespace>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

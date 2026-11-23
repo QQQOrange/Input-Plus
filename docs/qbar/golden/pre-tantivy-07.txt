@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:27
+输入: date:week
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 213 ms
+
+归一化: date:week
+索引查询: dm:thisweek
+后端: 后端 Everything · "dm:2026-11-23..2026-11-29" · Everything 1.4.1 索引已加载 · 命中 600 条（总 14193，窗口已截断） · SDK 6 ms · 本地复核剔除 0 条
+请求: 
+上下文: date:week -> day 9823..9829
+分词: date:week
+各层:
+  [normalize] date:week
+  [tokenize] date:week
+  [resolveKeyword] date:week -> day 9823..9829
+  [translate] dm:thisweek
+  [native] date=2026-11-23...2026-11-29
+
+候选: 600 条，展示 40 条，端到端 34.5 ms
+翻译 5.1ms · 检索 18.9ms · 重排 8.9ms · 合计 33.5ms
+本页：文档 9 · 其他 31 · 近7天 40
+
+命中:
+  [文件] C:\Users\64381\.dsh\dsh-purge\last-cwd.txt   (分 467 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\storages\workspace.json   (分 467 / 档 1 / 14 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\task-board\ledger-v2.lock   (分 467 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\dsh-claude-style\usage.json   (分 467 / 档 1 / 55 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\logs\dsh-memory-hook-audit.json   (分 465 / 档 1 / 3 KB / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\octoclip-re\utf8.txt   (分 451 / 档 1 / 11 MB / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\tools\run-golden.ps1   (分 451 / 档 1 / 2026-11-23)
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\tools\run-selftest.ps1   (分 450 / 档 1 / 1 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\sessions\--C-Users-64381-Documents-deepseek-harness-default-workspace--\session-01f15e2a-ef47-4be8-9369-88097f33f03c\session.v4.jsonl.zstd   (分 450 / 档 1 / 134 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\sessions\--C-Users-64381-Documents-deepseek-harness-default-workspace--\session-5e6bc90e-02c7-4229-bd4b-b39a6897ec5f\session.v4.jsonl.zstd   (分 450 / 档 1 / 134 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\sessions\--C-Users-64381-Documents-deepseek-harness-default-workspace--\session-82d50e33-2138-47ec-9747-acfd6db480c7\session.v4.jsonl.zstd   (分 450 / 档 1 / 423 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\storages\session_projcache\sessions\session-01f15e2a-ef47-4be8-9369-88097f33f03c.json   (分 446 / 档 1 / 8 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\storages\session_projcache\sessions\session-5e6bc90e-02c7-4229-bd4b-b39a6897ec5f.json   (分 446 / 档 1 / 8 KB / 2026-11-23)
+  [文件] C:\Users\64381\.dsh\storages\session_projcache\sessions\session-82d50e33-2138-47ec-9747-acfd6db480c7.json   (分 446 / 档 1 / 31 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\ccba5a5986c77e43.customDestinations-ms   (分 432 / 档 1 / 3 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\QuickAchieve\log.txt   (分 340 / 档 0 / 1.7 MB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\cv_debug.log   (分 339 / 档 0 / 34 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\user_stats.json   (分 339 / 档 0 / 6 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\clp-qbar-query.txt   (分 338 / 档 0 / 5 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\dsh-purge-desktop.log   (分 338 / 档 0 / 34 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\dsh-purge-desktop.log.1   (分 338 / 档 0 / 2.1 MB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\HoldDrag\holddrag.32488.log   (分 338 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\LocalLow\SogouPY\SmartInfoConfig.ini   (分 338 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\usage_rollup.json   (分 338 / 档 0 / 431 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\last_input_device.txt   (分 338 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\recent_output_apps.json   (分 338 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\typing_nudge_state.json   (分 338 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\clp-everything-status.txt   (分 337 / 档 0 / 1 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\inputplus-attach-diag.log   (分 337 / 档 0 / 117 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\326bbdaf-f035-42d7-9266-8d77f967c638.tmp   (分 335 / 档 0 / 4 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\3e9b151d-7b54-445a-aa08-77694883860d.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\48150a27-b2c6-447a-a6ec-f9fefd2ffec8.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\577b17a1-3d65-4d22-8fc9-123902161189.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\83322e2f-3ce4-47ad-a3b7-f6d8049019e5.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\95b56cc8-f560-493b-b00c-eaaef71eb971.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\9c3d6da7-bd7b-469c-b71c-7dd01fbb1adb.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\b5d71fbe-86af-4ec2-b9c1-ad6d0a3605c7.tmp   (分 335 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Local\Temp\Microsoft.NET.Workload_31876_20261123_130136_598.log   (分 334 / 档 0 / 2026-11-23)
+  [文件] C:\Users\64381\AppData\LocalLow\SogouPY.users\00000002\env.ini   (分 332 / 档 0 / 22 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\LocalLow\SogouPY.users\00000002\statenv.ini   (分 331 / 档 0 / 7 KB / 2026-11-23)

@@ -10,11 +10,6 @@ x86/
 publish/
 dist/
 *.dll
-# 例外：内置 Everything 的两颗 SDK DLL 是**构建必需**的内嵌资源（见 csproj 的 EmbeddedResource）。
-# 被上面的 *.dll 一起忽略时，本地因为有文件照样能编，全新检出的 CI 却会
-# CSC error CS1566 找不到 Everything64.dll —— v1.4 的 build/release 就是这么红的。
-!src/InputPlus/Assets/Everything/Everything64.dll
-!src/InputPlus/Assets/Everything/Everything32.dll
 *.pdb
 *.mdb
 *.opendb
@@ -102,3 +97,13 @@ ke-work/
 clp-settings.json
 .gesture-*/
 
+
+# ---- Rust 原生索引内核（src/ipidx） ----
+# cargo 的产物目录：源码进仓库，产物不进。
+src/ipidx/target/
+third_party/tantivy/target/
+
+# ---- 自检/诊断的临时痕迹 ----
+ip-selftest-trace/
+# WPF 标记编译产生的临时工程文件（每次 build 换名字，别进仓库）
+*_wpftmp.csproj

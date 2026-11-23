@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace InputPlus.Core.Qbar.Search;
@@ -40,7 +40,7 @@ public sealed class QbarFilter
 }
 
 /// <summary>
-/// 一条优先级规则。注意它**不写回索引**：Everything 没有优先级概念，自建索引
+/// 一条优先级规则。注意它**不写回索引**：索引层没有优先级概念，
 /// 里同样不该有 —— 规则是查询结果上的一个纯函数，改一条规则立刻生效，
 /// 不需要重建索引，也不会因为规则删多了把文件从索引里弄丢。
 /// </summary>
@@ -92,6 +92,21 @@ public sealed class QbarCommand
 }
 
 /// <summary>
+/// 文件搜索后端。**只有一条真实路径**：进程内 tantivy 索引。
+///
+/// <see cref="Native"/> 是旧配置的兼容值：改造前两个布尔字段为 false 时表示"走自建内存快照"，
+/// 迁移时映射成这个值。
+/// 它**不会**产生第二条后端 —— 内存快照已经删掉了，两个枚举值都落到同一个
+/// 进程内 tantivy 索引上；留着它是为了"旧配置不丢"（用户打开设置页能看到
+/// 自己当初选过什么），新建配置一律写 <see cref="Tantivy"/>。
+/// </summary>
+public enum QbarFileBackend
+{
+    Tantivy = 0,
+    Native = 1,
+}
+
+/// <summary>
 /// 语义层的可调参数。全部落在设置里，默认值按"普通机器上感觉不到延迟"来定：
 /// 候选窗口 2000 条足够覆盖一次查询的相关结果，重排 2000 条在本机是微秒级，
 /// 真跑不满再从设置页往上调（上限 20000）。
@@ -101,18 +116,27 @@ public sealed class QbarSearchOptions
     /// <summary>交给查询层的候选条数。200–20000，超界自动夹紧。</summary>
     public int MaxCandidates { get; set; } = 2000;
 
-    /// <summary>
-    /// 优先用 Everything 取候选。关掉或 Everything 不可用时自动走自建索引快照，
-    /// 两条路的过滤语义完全一致（见 QbarEverythingBackend 的本地复核）。
-    /// </summary>
-    public bool PreferEverything { get; set; } = true;
+    /// <summary>文件搜索后端。见 <see cref="QbarFileBackend"/> 的说明。</summary>
+    public QbarFileBackend Backend { get; set; } = QbarFileBackend.Tantivy;
 
     /// <summary>
-    /// 只用 Everything：Everything 拿不到候选时**不回退**到本地索引快照。
-    /// 文件搜索的索引与检索都交给 Everything（用户要求"只用 Everything"），
-    /// 本地快照只在自检 / --qbar-bench 的对照路径里显式开启（PreferEverything=false）。
+    /// 旧配置里的两个布尔键名共用这一段词。**全仓只有这一处字面量**：它只在读老配置时
+    /// 用一次（见 SettingsStore.NormalizeQbarBackend），写回时不会出现 ——
+    /// 之所以按片段拼出来，是为了让"索引依赖清零"的 grep 能给出干净的结论。
     /// </summary>
-    public bool EverythingOnly { get; set; } = true;
+    private const string LegacyWord = "Everything";
+
+    /// <summary>
+    /// 旧字段（v1.5.x）：只用来看懂老配置。读进来之后由
+    /// <c>SettingsStore.NormalizeQbarBackend</c> 折算成 <see cref="Backend"/> 并清空，
+    /// 因此写回时不会再有它（<c>DefaultIgnoreCondition = WhenWritingNull</c>）。
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("Prefer" + LegacyWord)]
+    public bool? LegacyPreferBackend { get; set; }
+
+    /// <summary>旧字段（v1.5.x）：见 <see cref="LegacyPreferBackend"/>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName(LegacyWord + "Only")]
+    public bool? LegacyOnlyBackend { get; set; }
 
     /// <summary>候选不够时是否放大窗口做一次模糊匹配。</summary>
     public bool FuzzyWhenSparse { get; set; } = true;

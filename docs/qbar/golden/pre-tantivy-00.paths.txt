@@ -1,0 +1,40 @@
+D:\software\aDrive\Report.dll
+D:\tmp\qbar-efu\report-2026.docx
+D:\software\QianwenApp\5.2.5.305\Report.dll
+D:\software\QianwenApp\5.2.7.307\Report.dll
+D:\software\QuarkCloudDrive\7.4.5.824\Report.dll
+D:\software\QuarkCloudDrive\7.5.0.827\Report.dll
+D:\WindowsApps\B9ECED6F.ArmouryCrate_6.7.6.0_x64__qmba6cd70vzyy\GameVisual\Assets\ReportTemplate.html
+D:\Local AI\git\king of focus\src-tauri\src\report_out.rs
+C:\Users\64381\Documents\deepseek-harness\default-workspace\qbar_icons\report.py
+C:\Users\64381\WorkBuddy\2026-10-26-19-01-38\king-of-focus\src-tauri\src\report_out.rs
+D:\software\AppData\Roaming\Tencent\QQMusic\WNS\201915\data\report.data
+D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\PIL\report.py
+D:\software\QQ\versions\9.9.37-54395\resources\app\resource\icons\report_16.svg
+D:\software\QQ\versions\9.9.37-54395\resources\app\resource\icons\report_24.svg
+C:\Users\64381\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\utf8_iter-1.1.0\src\report.rs
+D:\software\AppData\Profile\WorkBuddy-sessions\2026-10-26-19-01-38\king-of-focus\src-tauri\src\report_out.rs
+C:\Users\64381\.dsh\profiles\desktop\node_modules\dsh-ops\lib\cli\report.js
+C:\Users\64381\.dsh\profiles\desktop\node_modules\dsh-ops\lib\cli\report.d.ts
+D:\software\QQ\versions\9.9.37-54395\resources\app\resource\icons\oldIcons\Report.svg
+D:\software\WPS Office\12.1.0.29161\office6\addons\knewdocs\res\personal\js\report.js
+D:\software\WPS Office\12.1.0.29690\office6\addons\knewdocs\res\personal\js\report.js
+D:\software\WPS Office\12.1.0.29161\office6\addons\knewdocs\res\personal\css\report.css
+D:\software\WPS Office\12.1.0.29690\office6\addons\knewdocs\res\personal\css\report.css
+D:\software\AppData\Roaming\kimi-desktop\daimon-share\daimon\skills\pdf\routes\reportlab.md
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\external_plugins\all-commands\commands\report.md
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\external_plugins\commands-workflow-orchestration\commands\report.md
+C:\Users\64381\.dsh\profiles\desktop\node_modules\dsh-purge-community\lib\redteam\report-replay.js
+C:\Users\64381\.dsh\profiles\desktop\node_modules\dsh-purge-community\lib\redteam\report-replay.js
+D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\PIL\__pycache__\report.cpython-313.pyc
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\plugins\security-scan\scripts\report_upload.py
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\plugins\security-scan\scripts\report_upload_hook.py
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\external_plugins\all-agents\agents\report-generator.md
+C:\Users\64381\.workbuddy\plugins\marketplaces\codebuddy-plugins-official\external_plugins\agents-specialized-domains\agents\report-generator.md
+D:\software\WeGame\bugreport.exe
+D:\software\BaiduNetdisk\BugReport.exe
+D:\game\Monster Hunter Rise\CrashReport.exe
+D:\game\Onimusha Way of the Sword\CrashReport.exe
+D:\game\steam\steamerrorreporter.exe
+D:\software\WeGame\client_reporter.exe
+D:\game\steam\steamerrorreporter64.exe

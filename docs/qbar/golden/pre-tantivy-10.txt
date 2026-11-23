@@ -1,0 +1,66 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:28
+输入: (
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 204 ms
+
+归一化: (
+索引查询: "("
+后端: 后端 Everything · ""("" · Everything 1.4.1 索引已加载 · 命中 2000 条（总 5944，窗口已截断） · SDK 18 ms · 本地复核剔除 1093 条
+复核样本: [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\Backup-codes-cz951202（谷歌备用）.txt.lnk；[文件] D:\something\xwechat_files\wxid_k63r04jh0ds421_0613\msg\file\2026-11\2026-2027学年度第一学期高一级总功课表（第14周）.xlsx；[文件] D:\something\xwechat_files\wxid_k63r04jh0ds421_0613\msg\file\2026-11\2026-2027学年度第一学期高一级总功课表（第13周）.xlsx
+请求: 
+上下文: (none)
+分词: (
+各层:
+  [normalize] (
+  [tokenize] (
+  [resolveKeyword] (none)
+  [translate] "("
+  [native] terms=(
+
+候选: 907 条，展示 40 条，端到端 52.8 ms
+翻译 3.3ms · 检索 37.8ms · 重排 10.1ms · 合计 51.8ms
+本页：文档 3 · 视频 27 · 音频 4 · 程序 6 · 近7天 3
+
+命中:
+  [文件] D:\Downloads\Video\(1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4   (分 827 / 档 1 / 30.3 MB / 2026-11-16)  ← 「(」1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) 主页.mp4.lnk   (分 805 / 档 1 / 2026-11-12)  ← 「(」1) 主页.mp4.lnk
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) 主页.mp4.lnk   (分 805 / 档 1 / 2026-11-12)  ← 「(」1) 主页.mp4.lnk
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) 的 - 搜索 _ X.mp4.lnk   (分 804 / 档 1 / 2026-11-12)  ← 「(」1) 的 - 搜索 _ X.mp4.lnk
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) 的 - 搜索 _ X.mp4.lnk   (分 804 / 档 1 / 2026-11-12)  ← 「(」1) 的 - 搜索 _ X.mp4.lnk
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4.lnk   (分 798 / 档 1 / 2026-11-16)  ← 「(」1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4.lnk
+  [文件] C:\Users\64381\AppData\Roaming\Microsoft\Windows\Recent\(1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4.lnk   (分 798 / 档 1 / 2026-11-16)  ← 「(」1) X 上的 文靜：“真正的女性魅力，从来不仅限于年轻的容颜，更源于内心的丰盈、独立的精神以及对生活的热爱。 ”.mp4.lnk
+  [文件] D:\music\蔡依林 - 我知道你很难过 (臻品母带).flac   (分 769 / 档 1 / 168.2 MB / 2026-09-06)  ← 蔡依林 - 我知道你很难过 「(」臻品母带).flac
+  [文件] D:\music\马也_Crabbit - 海屿你 (超清母带).flac   (分 769 / 档 1 / 195.7 MB / 2026-09-06)  ← 马也_Crabbit - 海屿你 「(」超清母带).flac
+  [文件] D:\music\陈楚生 & 王赫野 - 不如回家喝自来水 (Live).flac   (分 768 / 档 1 / 135.6 MB / 2026-09-11)  ← 陈楚生 & 王赫野 - 不如回家喝自来水 「(」Live).flac
+  [文件] D:\music\陈奕迅 - K歌之王 AIR (Night Version).flac   (分 768 / 档 1 / 136.2 MB / 2026-09-11)  ← 陈奕迅 - K歌之王 AIR 「(」Night Version).flac
+  [文件] D:\Desktop\2026-2027学年度第一学期高一级总功课表（第11周）(3).xlsx   (分 768 / 档 1 / 31 KB / 2026-11-10)  ← 2026-2027学年度第一学期高一级总功课表（第11周）「(」3).xlsx
+  [文件] D:\Desktop\2026-2027学年度第一学期高一级总功课表（第11周）(3).xlsx   (分 768 / 档 1 / 31 KB / 2026-11-10)  ← 2026-2027学年度第一学期高一级总功课表（第11周）「(」3).xlsx
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X.mp4   (分 762 / 档 1 / 164.6 MB / 2026-09-24)  ← 玉米棒棒 「(」@fljjx61) - X.mp4
+  [文件] D:\something\花生十三笔记合集\花生图推2-24笔记(1)_.pdf   (分 762 / 档 1 / 44.9 MB / 2026-11-07)  ← 花生图推2-24笔记「(」1)_.pdf
+  [文件] D:\video\Movies\兔酱酱 (@VINTAG2VID) - X.mp4   (分 761 / 档 1 / 69.3 MB / 2026-10-09)  ← 兔酱酱 「(」@VINTAG2VID) - X.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X.mp4   (分 761 / 档 1 / 13.9 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_2.mp4   (分 761 / 档 1 / 348.1 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_2.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_3.mp4   (分 761 / 档 1 / 369.7 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_3.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_4.mp4   (分 761 / 档 1 / 44.4 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_4.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_6.mp4   (分 761 / 档 1 / 56.8 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_6.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_7.mp4   (分 761 / 档 1 / 385.5 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_7.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_8.mp4   (分 761 / 档 1 / 52 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_8.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_9.mp4   (分 761 / 档 1 / 38.6 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_9.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_10.mp4   (分 761 / 档 1 / 192.1 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_10.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_11.mp4   (分 761 / 档 1 / 136.5 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_11.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_12.mp4   (分 761 / 档 1 / 149.4 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_12.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_14.mp4   (分 761 / 档 1 / 151.6 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_14.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) - X_15.mp4   (分 761 / 档 1 / 117.1 MB / 2026-09-09)  ← 玉米棒棒 「(」@fljjx61) - X_15.mp4
+  [文件] D:\video\Movies\兔酱酱 (@VINTAG2VID) - X_2.mp4   (分 761 / 档 1 / 738.7 MB / 2026-10-09)  ← 兔酱酱 「(」@VINTAG2VID) - X_2.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_2.mp4   (分 761 / 档 1 / 5.9 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_2.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_3.mp4   (分 761 / 档 1 / 4.2 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_3.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_4.mp4   (分 761 / 档 1 / 2 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_4.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_5.mp4   (分 761 / 档 1 / 31.9 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_5.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_6.mp4   (分 761 / 档 1 / 22.9 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_6.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_7.mp4   (分 761 / 档 1 / 16.6 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_7.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_8.mp4   (分 761 / 档 1 / 23.7 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_8.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_9.mp4   (分 761 / 档 1 / 52.3 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_9.mp4
+  [文件] D:\video\Movies\玉米棒棒 (@fljjx61) 的视频 - X.mp4   (分 761 / 档 1 / 219.7 MB / 2026-09-20)  ← 玉米棒棒 「(」@fljjx61) 的视频 - X.mp4
+  [文件] D:\video\Movies\春末的粉雾 (@DanaNoto) - X_10.mp4   (分 761 / 档 1 / 46.6 MB / 2026-09-28)  ← 春末的粉雾 「(」@DanaNoto) - X_10.mp4

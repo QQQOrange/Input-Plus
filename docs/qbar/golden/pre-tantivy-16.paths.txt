@@ -1,0 +1,40 @@
+C:\swapfile.sys
+C:\Users\64381\NTUSER.DAT
+C:\Users\64381\NTUSER.DAT
+D:\software\QianwenApp\qianwen.exe
+D:\software\QianwenApp\new_qianwen.exe
+D:\Downloads\Video\海角 - 搜索 - X_2.mp4
+D:\Downloads\Programs\Gety-x64-0.7.0-beta.exe
+D:\Downloads\Programs\REDBEAN001-lirwnchh-1.1.8+30.apk
+D:\Downloads\Programs\Kelivo_windows_1.3.6+88_setup_2.exe
+D:\Downloads\Programs\hgdj_1.7.0_261119_3_ms_671_6LzLY9Ud_20261119050442_5.apk
+D:\tmp\ipst\file-index\names.bin
+D:\tmp\everything\app\Everything.db
+D:\tmp\ipstbundle\file-index\names.bin
+D:\software\opera\140.0.6074.36\opera.pak
+D:\software\QianwenApp\5.2.5.305\icudtl.dat
+D:\software\QianwenApp\5.2.7.307\icudtl.dat
+D:\software\QianwenApp\5.2.5.305\qianwen.dll
+D:\software\QianwenApp\5.2.5.305\qoffice.dll
+D:\software\QianwenApp\5.2.7.307\qianwen.dll
+D:\software\QianwenApp\5.2.7.307\qoffice.dll
+D:\software\QianwenApp\5.2.5.305\DirectML.dll
+D:\software\QianwenApp\5.2.7.307\DirectML.dll
+D:\software\QianwenApp\5.2.5.305\resources.pak
+D:\software\QianwenApp\5.2.7.307\resources.pak
+D:\software\QianwenApp\5.2.5.305\onnxruntime.dll
+D:\software\QianwenApp\5.2.7.307\onnxruntime.dll
+D:\Downloads\Compressed\wb2api-panel-2026.11.9.1131-windows-amd64\wb2api.exe
+D:\software\opera\140.0.6074.36\opera_browser.dll
+D:\Downloads\Programs\新建文件夹\红豆短剧_1.1.8_账号池全解锁版.apk
+D:\Downloads\Programs\新建文件夹\黄果短剧_1.7.0_纯净无广_会员版.apk
+D:\Local AI\_归档\Capslox\Capslox-Free-3.1.0.0-win64.zip
+C:\Users\64381\OneDrive\桌面\2.1课件.pptx
+C:\Users\64381\OneDrive\桌面\2.2课件.pptx
+D:\Local AI\_归档\Capslox\bin\CapsloxUI.exe
+D:\software\myself\InputPlus Data\file-index\names.bin
+D:\software\myself\InputPlus Data\everything\Everything.db
+D:\software\QianwenApp\5.2.5.305\agent_host\agent_host.exe
+D:\software\QianwenApp\5.2.7.307\agent_host\agent_host.exe
+D:\Local AI\_归档\WGestures 2\run\PresentationFramework.dll
+D:\Local AI\_归档\WGestures 2\full\PresentationFramework.dll

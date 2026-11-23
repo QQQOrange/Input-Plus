@@ -1,0 +1,50 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:24
+输入: rprt
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 211 ms
+
+归一化: rprt
+索引查询: rprt
+后端: 后端 Everything · "rprt" · Everything 1.4.1 索引已加载 · 命中 0 条 · 路径补扫后 0 条 · SDK 47 ms（含路径补扫） · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: rprt
+各层:
+  [normalize] rprt
+  [tokenize] rprt
+  [resolveKeyword] (none)
+  [translate] rprt
+  [native] terms=rprt
+
+候选: 0 条，展示 24 条，端到端 86.3 ms
+翻译 3.2ms · 检索 72.7ms · 重排 3.2ms · 合计 85.2ms
+模糊匹配: 已启用
+拼音索引: 正在后台构建
+
+命中:
+  [文件] C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\Reporting and NEL   (分 114 / 档 1)
+  [文件] C:\ProgramData\Razer\RazerAppEngine\Logs\RzPowerTool-64381.log   (分 113 / 档 1)
+  [文件] C:\ProgramData\Razer\RazerAppEngine\Logs\RzPowerTool-SYSTEM.log   (分 113 / 档 1)
+  [文件] C:\Program Files (x86)\Windows Kits\10\Source\10.0.26100.0\ucrt\internal\report_runtime_error.cpp   (分 112 / 档 1)
+  [文件] C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Reporting and NEL   (分 112 / 档 1)
+  [文件] C:\ProgramData\Oray\Webview2\64381\d3c28504706dd0e860840110fa286f1c\EBWebView\Default\Network\Reporting and NEL   (分 112 / 档 1)
+  [文件] C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Reporting and NEL-journal   (分 112 / 档 1)
+  [文件] C:\ProgramData\Oray\Webview2\64381\d3c28504706dd0e860840110fa286f1c\EBWebView\Default\Network\Reporting and NEL-journal   (分 112 / 档 1)
+  [文件] C:\ProgramData\ASUS\ROG Live Service\ArmSupportList.ini   (分 110 / 档 1)
+  [文件] C:\Program Files (x86)\Windows Media Player\Media Renderer\avtransport.xml   (分 110 / 档 1)
+  [文件] C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\ROG Live Service\ArmSupportList.ini   (分 110 / 档 1)
+  [文件] C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\TransportSecurity   (分 110 / 档 1)
+  [文件] C:\Program Files (x86)\yxq_nethelper\XYCrashReport.exe   (分 109 / 档 1)
+  [文件] C:\ProgramData\Huorong\AppStore\logs\v3_HrAppStore.txt.logdat   (分 107 / 档 1)
+  [文件] C:\ProgramData\Huorong\AppStore\logs\HrAppStoreHive.txt.logdat   (分 106 / 档 1)
+  [文件] C:\ProgramData\Huorong\AppStore\logs\HrAppStoreOpen.txt.logdat   (分 106 / 档 1)
+  [文件] C:\ProgramData\SogouInput\SGCefCache\SGMyInput\CefLocalStorage\Network Persistent State   (分 106 / 档 1)
+  [文件] C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\detectdll\checkBoardSupport.log   (分 106 / 档 1)
+  [文件] C:\ProgramData\ASUS\ARMOURY CRATE Diagnosis\detectdll\checkBoardSupport_x86_var.log   (分 106 / 档 1)
+  [文件] C:\ProgramData\SogouInput\shell_ext\icon\picture.multiprint.ico   (分 106 / 档 1)
+  [文件] C:\ProgramData\SogouInput\shell_ext\common\pic_preview_probability_config.dat   (分 106 / 档 1)
+  [文件] C:\ProgramData\Huorong\AppStore\logs\HrAppStoreNotify.txt.logdat   (分 105 / 档 1)
+  [文件] C:\ProgramData\SogouInput\shell_ext\common\base\2512311142\api-ms-win-crt-private-l1-1-0.dll   (分 105 / 档 1)
+  [文件] C:\ProgramData\Oray\Webview2\64381\83aba339ec03d561a742621f3a3d162b\EBWebView\Default\Network\Network Persistent State   (分 105 / 档 1)

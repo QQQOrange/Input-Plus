@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:24
+输入: yh
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 202 ms
+
+归一化: yh
+索引查询: yh
+后端: 后端 Everything · "yh" · Everything 1.4.1 索引已加载 · 命中 921 条 · SDK 16 ms · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: yh
+各层:
+  [normalize] yh
+  [tokenize] yh
+  [resolveKeyword] (none)
+  [translate] yh
+  [native] terms=yh
+
+候选: 921 条，展示 40 条，端到端 44.4 ms
+翻译 3.3ms · 检索 29.6ms · 重排 9.9ms · 合计 43.4ms
+本页：文档 5 · 图片 3 · 视频 3 · 程序 2 · 其他 27 · 近7天 4
+
+命中:
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\apkwork\src\smali\l8\yh.smali   (分 777 / 档 1 / 17 KB / 2026-11-19)  ← 「yh」.smali
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\apkwork\src\smali\l8\yh.smali   (分 777 / 档 1 / 17 KB / 2026-11-19)  ← 「yh」.smali
+  [文件] D:\video\Movies\Ka-YHOaf0Q4nRJ_I.mp4   (分 762 / 档 1 / 92 MB / 2025-08-28)  ← Ka-「YH」Oaf0Q4nRJ_I.mp4
+  [文件] D:\video\Movies\X 上的 两脚兽：“全自动榨汁机：口出来，吞下去，舔干净 https---t.co-0IH6lSpyhI” - X.mp4   (分 757 / 档 1 / 26.5 MB / 2026-10-06)  ← X 上的 两脚兽：“全自动榨汁机：口出来，吞下去，舔干净 https---t.co-0IH6lSp「yh」I” - X.mp4
+  [文件] D:\note\data\20240307204030-hcjnvvx\20240203124214-30yh7br.sy   (分 753 / 档 1 / 25 KB / 2026-01-13)  ← 20240203124214-30「yh」7br.sy
+  [文件] D:\software\WeGame\apps\Pallas\tp_deps\WeGameOverlayHost.exe   (分 750 / 档 1 / 870 KB / 2026-09-25)  ← WeGameOverla「yH」ost.exe
+  [文件] C:\Program\Common7\ServiceHub\Hosts\ServiceHub.Host.netfx.x86\ServiceHub.IdentityHost.exe   (分 749 / 档 1 / 62 KB / 2026-11-09)  ← ServiceHub.Identit「yH」ost.exe
+  [文件] D:\Local AI\git\Quick Achieve 源代码\src\trayhost.rs   (分 747 / 档 1 / 19 KB / 2026-11-13)  ← tra「yh」ost.rs
+  [文件] D:\game\steam\steam\cached\NotifyTrayHintDialog.res   (分 745 / 档 1 / 2 KB / 2010-03-13)  ← NotifyTra「yH」intDialog.res
+  [文件] D:\software\Pure Codec\Icaros\64-bit\IcarosPropertyHandler.dll   (分 745 / 档 1 / 866 KB / 2026-06-17)  ← IcarosPropert「yH」andler.dll
+  [文件] D:\note\data\20240307212552-4h3ixtg\20240317113927-85g3lqm\20240318151609-2yh2v66.sy   (分 745 / 档 1 / 59 KB / 2026-01-13)  ← 20240318151609-2「yh」2v66.sy
+  [文件] C:\Users\64381\.workbuddy\shell-snapshots\snapshot-bash-1793517803016-kb2yhw.sh   (分 744 / 档 1 / 2 KB / 2026-11-01)  ← snapshot-bash-1793517803016-kb2「yh」w.sh
+  [文件] C:\Users\64381\OneDrive\Pictures\20251018_OHR.SilburyHill_ZH-CN6666447580_UHD_bing.jpg   (分 742 / 档 1 / 3.7 MB / 2025-10-18)  ← 20251018_OHR.Silbur「yH」ill_ZH-CN6666447580_UHD_bing.jpg
+  [文件] C:\Users\64381\OneDrive\Pictures\20251018_OHR.SilburyHill_ZH-CN6666447580_UHD_bing.jpg   (分 742 / 档 1 / 3.7 MB / 2025-10-18)  ← 20251018_OHR.Silbur「yH」ill_ZH-CN6666447580_UHD_bing.jpg
+  [文件] D:\video\Movies\X 上的 FC2PPVA：“八头身、美腿、模特般身材的 Instagram 网红奈奈美酱。被 K 以毫不留情、几乎让人格崩坏般的方式折磨，高潮过度甚至出现呼吸过度。※另有氛围感很好的色情私拍视频♡ #FC2 #FC2PPV #AV #内射 #颜射 #中出 #高清 #无码 #无修正 #素人 #口交 #白虎 https---t.co-8F4ByH5Xac” - X.mp4   (分 741 / 档 1 / 4.9 GB / 2026-10-26)  ← X 上的 FC2PPVA：“八头身、美腿、模特般身材的 Instagram 网红奈奈美酱。被 K 以毫不留情、几乎让人格崩坏般的方式折磨，高潮过度甚至出现呼吸过度。※另有氛围感很好的色情私拍视频♡ #FC2 #FC2PPV #AV #内射 #颜射 #中出 #高清 #无码 #无修正 #素人 #口交 #白虎 https---t.co-8F4B「yH」5Xac” - X.mp4
+  [文件] D:\software\eudic\dat\res\translation\chunk-HYHNANRK.js   (分 738 / 档 1 / 41 KB / 2026-10-30)  ← chunk-H「YH」NANRK.js
+  [文件] D:\note\data\20210820203241-v5goui0\20210820203248-ndubk60\20231110120420-5yqxnpq\20230215130916-wrfyhnc.sy   (分 737 / 档 1 / 7 KB / 2026-01-13)  ← 20230215130916-wrf「yh」nc.sy
+  [文件] D:\note\data\20210820203241-v5goui0\20210820203248-xt0prjh\20220617122738-z1mjvee\20220617125257-nkd4yh5.sy   (分 737 / 档 1 / 2026-01-13)  ← 20220617125257-nkd4「yh」5.sy
+  [文件] D:\note\data\20210820203241-v5goui0\20210820203248-ywmw4kj\20231110060930-emrgsgw\20231110073035-ayhumh0.sy   (分 737 / 档 1 / 25 KB / 2026-01-13)  ← 20231110073035-a「yh」umh0.sy
+  [文件] D:\note\data\20220517142732-s7ilxj8\20230206095136-bhqws47\20221102212649-0dklsoc\20221103121359-lyhsckp.sy   (分 737 / 档 1 / 7 KB / 2026-03-31)  ← 20221103121359-l「yh」sckp.sy
+  [文件] D:\note\data\20240307212552-4h3ixtg\20250919125737-7jcevas\20260103160103-em67ido\20260103160103-f2xyho3.sy   (分 737 / 档 1 / 2026-01-03)  ← 20260103160103-f2x「yh」o3.sy
+  [文件] D:\note\data\20240314183135-ko96gzs\20240314181704-wpm3dnb\20240314181524-cr5z9ha\20240314181524-vmdqryh.sy   (分 737 / 档 1 / 8 KB / 2026-01-13)  ← 20240314181524-vmdqr「yh」.sy
+  [文件] D:\note\data\20240318140150-3dxsq4l\20231217115802-ncfh2r8\20231217116518-01c1hni\20231217116587-e6yhcu7.sy   (分 737 / 档 1 / 34 KB / 2026-01-13)  ← 20231217116587-e6「yh」cu7.sy
+  [文件] D:\note\data\20240318140150-3dxsq4l\20240216140704-bpi2tuy\20240216141753-h95bm5b\20240216141755-ait1lyh.sy   (分 737 / 档 1 / 1 KB / 2026-01-13)  ← 20240216141755-ait1l「yh」.sy
+  [文件] D:\note\data\storage\petal\kmind\马发展史-20240924155924-gyh2ohz.kmind   (分 736 / 档 1 / 13 KB / 2024-11-24)  ← 马发展史-20240924155924-g「yh」2ohz.kmind
+  [文件] D:\note\data\widgets\Whiteboard\assets\mindmap-definition-fc14e90a-BryhlpVo.js   (分 736 / 档 1 / 513 KB / 2026-10-31)  ← mindmap-definition-fc14e90a-Br「yh」lpVo.js
+  [文件] D:\software\AppData\Profile\workbuddy\shell-snapshots\snapshot-bash-1793517803016-kb2yhw.sh   (分 736 / 档 1 / 2 KB / 2026-11-01)  ← snapshot-bash-1793517803016-kb2「yh」w.sh
+  [文件] C:\Program\Common7\ServiceHub\Hosts\ServiceHub.Host.netfx.x86\ServiceHub.IdentityHost.exe.config   (分 736 / 档 1 / 5 KB / 2026-11-09)  ← ServiceHub.Identit「yH」ost.exe.config
+  [文件] C:\Program\Common7\ServiceHub\Hosts\ServiceHub.Host.netfx.x86\netfx.x86.IdentityHost.servicehub.host.json   (分 735 / 档 1 / 2026-11-09)  ← netfx.x86.Identit「yH」ost.servicehub.host.json
+  [文件] C:\Program\Common7\ServiceHub\Hosts\ServiceHub.Host.netfx.x86\desktopClr.x86.IdentityHost.servicehub.host.json   (分 734 / 档 1 / 2026-11-09)  ← desktopClr.x86.Identit「yH」ost.servicehub.host.json
+  [文件] C:\Users\64381\OneDrive\Apps\Violentmonkey\vm@2-https-3a-2f-2fgithub.com-2fsyhyz1990-2finstantpage-0a网页加速器-0a   (分 732 / 档 1 / 27 KB / 2024-12-20)  ← vm@2-https-3a-2f-2fgithub.com-2fs「yh」yz1990-2finstantpage-0a网页加速器-0a
+  [文件] C:\Users\64381\OneDrive\Apps\Violentmonkey\vm@2-https-3a-2f-2fgithub.com-2fsyhyz1990-2finstantpage-0a网页加速器-0a   (分 732 / 档 1 / 27 KB / 2024-12-20)  ← vm@2-https-3a-2f-2fgithub.com-2fs「yh」yz1990-2finstantpage-0a网页加速器-0a
+  [文件] C:\Users\64381\OneDrive\Apps\Violentmonkey\vm@2-https-3a-2f-2fgithub.com-2fsyhyz1990-2fmactype-0aMactype助手-0a   (分 732 / 档 1 / 7 KB / 2025-01-14)  ← vm@2-https-3a-2f-2fgithub.com-2fs「yh」yz1990-2fmactype-0aMactype助手-0a
+  [文件] C:\Users\64381\OneDrive\Apps\Violentmonkey\vm@2-https-3a-2f-2fgithub.com-2fsyhyz1990-2fmactype-0aMactype助手-0a   (分 732 / 档 1 / 7 KB / 2025-01-14)  ← vm@2-https-3a-2f-2fgithub.com-2fs「yh」yz1990-2fmactype-0aMactype助手-0a
+  [文件] C:\Users\64381\OneDrive\Documents\方正字库\Font\FZYHJW.TTF   (分 731 / 档 1 / 6.5 MB / 2026-03-24)  ← FZ「YH」JW.TTF
+  [文件] C:\Users\64381\OneDrive\Documents\方正字库\Font\FZYHJW.TTF   (分 731 / 档 1 / 6.5 MB / 2026-03-24)  ← FZ「YH」JW.TTF
+  [文件] C:\Program\VC\Tools\MSVC\14.44.35207\include\delayhlp.cpp   (分 731 / 档 1 / 14 KB / 2026-11-09)  ← dela「yh」lp.cpp
+  [文件] D:\software\Workbuddy\resources\vendor\python\include\pyhash.h   (分 731 / 档 1 / 1 KB / 2026-10-27)  ← p「yh」ash.h
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\qbar_icons\q_yh.txt   (分 731 / 档 1 / 2026-11-21)  ← q_「yh」.txt
+  [文件] C:\Users\64381\Documents\deepseek-harness\default-workspace\qbar_icons\crop_yh.png   (分 731 / 档 1 / 1 MB / 2026-11-21)  ← crop_「yh」.png

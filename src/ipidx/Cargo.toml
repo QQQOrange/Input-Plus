@@ -1,0 +1,33 @@
+[package]
+name = "ipidx"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "Qbar 的进程内文件索引内核（tantivy），以 cdylib 形式供 InputPlus.exe P/Invoke"
+license = "MIT"
+publish = false
+
+[lib]
+name = "ipidx"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 用 vendored 路径依赖而不是 crates.io：正式产物是随 InputPlus 一起走的 ipidx.dll，
+# 构建环境可能没网；vendored 副本原样来自 tantivy v0.27.0（改动见 VENDOR.md）。
+tantivy = { path = "../../third_party/tantivy", default-features = false, features = [
+    "mmap",
+    "lz4-compression",
+    "zstd-compression",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# 不写 panic = "abort"：panic 穿过 FFI 边界会带崩 WPF 进程。
+# 每个导出函数体都 catch_unwind，默认 unwind 才是这里要的行为。

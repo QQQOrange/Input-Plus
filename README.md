@@ -74,21 +74,11 @@ dotnet --list-runtimes | findstr WindowsDesktop
 
 | 你的系统 | 下载哪个 | 运行时要求 |
 | --- | --- | --- |
-| Windows 11 / Windows 10 1809+，**64 位**（绝大多数电脑） | `InputPlus-1.2.1-win-x64.exe` | 需装 .NET 10 桌面运行时（见第 1 步） |
-| Windows 10 1809+，**32 位** | `InputPlus-1.2.1-x86-Win10-Win11.exe` | 需装 .NET 10 桌面运行时（x86） |
-| **Windows 7 SP1**，64 位 | `InputPlus-1.2.1-x64-Win7-SelfContained.exe` | **不用装任何运行时** |
-| **Windows 7 SP1**，32 位 | `InputPlus-1.2.1-x86-Win7-SelfContained.exe` | **不用装任何运行时** |
+| **Windows 11，64 位** | `InputPlus.exe` | 需装 .NET 10 桌面运行时（见第 1 步） |
 
-> 发布页文件名用 `x86 / x64 / Win7 / SelfContained` 标注，是因为 GitHub 会自动把资产文件名里的
-> 非字母数字字符（含中文）改写成点号；本地构建产物可以保留中文名，不影响使用。
-
-> **Win7 专用版说明**：.NET 10 官方不支持 Win7（最低 Win10 1809），所以 Win7 版基于
-> **.NET 7**（最后一个支持 Win7 SP1 的 .NET）单独构建，运行时打进 exe 里，
-> 体积约 140 MB（64 位）/ 约 130 MB（32 位），但拿到机器上双击就能跑。系统必须是 **SP1**。
-> Win10/11 专属特性在 Win7 上自动降级：窗口是经典方角（无云母/圆角）、
-> DPI 按 system 模式缩放、亮度横条照常工作（WMI 调光不受影响）。
->
-> 四条线共用**同一份源码**，差异只在构建目标（详见「十六、开发与构建」）。
+> **v1.5.8.1 起只支持 Windows 11 x64（22000 及以上）**。文件索引内核换成了进程内的
+> Rust/tantivy，再维护 Win7/Win10 与 32 位两条线的代价已经大过收益。
+> 需要旧平台的用户仍可从 Releases 历史里下载旧版本。
 
 运行时会自动在它旁边建两个文件夹：
 
@@ -1147,7 +1137,7 @@ Windows Hello（指纹/PIN）或设置一个短的无操作自动锁定时间。
 需要 **.NET 10 SDK**。详细说明见 [BUILD.md](BUILD.md)。
 
 ```powershell
-# 发版：一次出齐四个形态（x64/x86 × Win10/Win7）+ 哈希清单 + 发布说明
+# 发版：出产物（Windows 11 x64）+ 哈希清单 + 发布说明
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
 
 # 用法总览（自检 / 诊断 / 出图 / 界面，全部开关都在这里）
@@ -1194,7 +1184,7 @@ dist\InputPlus.exe --render docs\screenshots
 | `--svg2png` | 把内置 SVG 渲染结果另存为 PNG（图标资源回归用） |
 | `--help` | 打印上面这张表（WinExe 没有自己的控制台，会先 AttachConsole，并把用法写进数据目录 `usage.txt`） |
 
-> csproj 用 `<TargetFrameworks>net10.0-windows;net7.0-windows</TargetFrameworks>` 多目标，
+> csproj 只留一个目标框架 `<TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>`（Windows 11 x64）；
 > 两条线共用同一份源码：net7 线的 LangVersion 锁 C# 11、换 System.Management 8.0.0、
 > 用 `app-win7.manifest`（补 Win7 supportedOS GUID、去掉 PerMonitorV2）。
 > 少数 .NET 8+ 的便利 API（`JsonNode.DeepClone`、`AesGcm(byte[],int)`、

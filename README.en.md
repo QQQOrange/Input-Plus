@@ -1,4 +1,4 @@
-﻿# Input Plus
+# Input Plus
 
 > Author: **QQQOrange**
 >
@@ -73,12 +73,9 @@ file in any folder:
 | Your system | Download | Runtime |
 | --- | --- | --- |
 | Windows 11 / Windows 10 1809+, **64-bit** (most PCs) | `InputPlus.exe` | Requires the .NET 10 Desktop Runtime |
-| Windows 10 1809+, **32-bit** | `InputPlus-5.4.1-x86-Win10-Win11.exe` | Requires the .NET 10 Desktop Runtime (x86) |
-| **Windows 7 SP1**, 64-bit | `InputPlus-5.4.1-x64-Win7-SelfContained.exe` | **No runtime needed** |
-| **Windows 7 SP1**, 32-bit | `InputPlus-5.4.1-x86-Win7-SelfContained.exe` | **No runtime needed** |
 
 > GitHub rewrites non-alphanumeric characters in asset filenames to dots, hence the
-> `x86 / x64 / Win7 / SelfContained` suffixes on the release page.
+> The release ships one asset, `InputPlus.exe` (Windows 11 x64).
 
 > **About the Windows 7 build**: .NET 10 does not support Windows 7 (minimum is Win10 1809),
 > so the Win7 build targets **.NET 7** (the last release supporting Win7 SP1) with the runtime
@@ -639,7 +636,7 @@ the UAC prompt (or run it as administrator).
 **How do I uninstall?** Quit from the tray, delete the executable and the two data folders.
 Nothing is written to the registry except the optional autostart entry.
 
-**Can I use it on Windows 7?** Yes, with the self-contained Win7 build (SP1 required).
+**Can I use it on Windows 7 or 10?** No. From v1.5.8.1 only Windows 11 x64 (22000+) is supported; older releases remain in the Releases history.
 
 **Does it conflict with AutoHotkey?** Both can hook the keyboard; Caps combos are consumed by
 whichever hooks first. Disable the overlapping hotkeys in one of them.
@@ -651,7 +648,7 @@ whichever hooks first. Disable the overlapping hotkeys in one of them.
 Requires the **.NET 10 SDK**. See [BUILD.md](BUILD.md).
 
 ```powershell
-# Release all four flavours (x64/x86 × Win10/Win7) + hashes + notes
+# Release the artifacts (Windows 11 x64) + hashes + notes
 powershell -ExecutionPolicy Bypass -File tools\release.ps1
 
 # All command-line switches
@@ -683,7 +680,7 @@ dist\InputPlus.exe --render docs\screenshots
 | `--svg2png` | Dump built-in SVG icons as PNG |
 | `--help` | Print this table (writes `usage.txt` in the data folder) |
 
-The project multi-targets `net10.0-windows;net7.0-windows` from one source tree: the net7 leg
+The project targets a single framework, `net10.0-windows10.0.22000.0` (Windows 11 x64).
 locks C# 11, uses System.Management 8.0.0 and `app-win7.manifest`. A few .NET 8+ conveniences
 are written in a form both targets compile, so behaviour never diverges.
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
@@ -9,8 +9,8 @@ namespace InputPlus.Core.FileDialog;
 /// <summary>
 /// 搜索层：把浮层的关键词转成一批 <see cref="DialogSelection"/>。
 ///
-/// 复用 qbar 的文件搜索内核（Everything 或自建快照，由既有设置决定），
-/// **不新起进程、不新建索引、不读 Everything 的索引文件** —— 只调
+/// 复用 qbar 的文件搜索内核（进程内 tantivy 索引），
+/// **不新起进程、不新建索引、不读外部索引文件** —— 只调
 /// <see cref="QbarSearchEngine.Run"/> 这一个入口，索引归属与降级由它自己管。
 ///
 /// 空查询时给"最近在此类对话框里选过的项"（Recorder 里已有），

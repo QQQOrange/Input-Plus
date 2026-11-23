@@ -2,21 +2,21 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- 多目标：net10 是主线（Win10 1809+）；net7.0-windows 是 Win7 专用线
-         （.NET 10 官方不支持 Win7，最后一个支持 Win7 SP1 的是 .NET 7）。
-         两条线共用同一份源码，差异全部在条件编译/条件包里，见本文件末尾。 -->
-    <TargetFrameworks>net10.0-windows;net7.0-windows</TargetFrameworks>
+    <!-- 从 v1.6 起只支持 Windows 11 x64。
+         .NET 10 是唯一目标框架；改造前那条 net7.0-windows 的 Win7 专线已经删除
+         （Rust 侧的 tantivy 需要 1.91+ 工具链、并要求现代 Windows 的系统接口，
+          两条线共用一份源码的代价已经大过收益）。 -->
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <!-- Windows 11 的起始版本（22000 = 21H2）。低于它的机器不装、也不假装能跑。 -->
+    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <LangVersion>latest</LangVersion>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <!-- net10 用最新 C#；net7 线必须锁到 C# 11（SDK 10 的 Roslyn 默认是 C# 14，
-         里面主构造函数/params collection/field 关键字在 .NET 7 的 ref 程序集上
-         不一定编译得过，锁 11 最稳）。 -->
-    <LangVersion Condition="'$(TargetFramework)' != 'net7.0-windows'">latest</LangVersion>
     <!-- 只有一个 exe（框架依赖）。.NET 10 桌面运行时需要另行安装，
-         下载地址见 README 顶部与每次的 Release 说明。
-         不再拆"启动器 + 主程序"两个文件 —— 用户不知道该点哪个。 -->
+          下载地址见 README 顶部与每次的 Release 说明。
+          不再拆"启动器 + 主程序"两个文件 —— 用户不知道该点哪个。 -->
     <AssemblyName>InputPlus</AssemblyName>
     <RootNamespace>InputPlus</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -25,12 +25,11 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.5.8</Version>
-    <FileVersion>1.5.8.0</FileVersion>
+    <Version>1.5.8.1</Version>
+    <FileVersion>1.5.8.1</FileVersion>
     <!-- AssemblyVersion 必须跟 <Version> 一致：UpdateService.CurrentVersion 读的是
-         Assembly.GetName().Version（三段式），漏改的话"1.5.2 的包自报 1.5.1"，
-         自己会弹一次「发现新版本 1.5.2」—— 2026-11-23 v1.5.1 就踩了这一下。 -->
-    <AssemblyVersion>1.5.8.0</AssemblyVersion>
+         Assembly.GetName().Version（三段式），漏改的话发布包会自己弹一次「发现新版本」。 -->
+    <AssemblyVersion>1.5.8.1</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -60,17 +59,9 @@
          这里只关掉这条针对性建议，其它分析器规则照旧。 -->
     <NoWarn>$(NoWarn);WFO0003;WFAC010</NoWarn>
 
-    <!-- net7.0-windows 是**故意**留的 Win7 专用线（见上面多目标那段注释），
-         SDK 每次都会对它报 NETSDK1138「将来不会收到安全更新」。
-         这条警告是已知且有意接受的：Win7 线不发版给普通用户，只给老机器出应急包。
-         关掉提示，别让 2 条噪音盖住真正的警告。 -->
-    <CheckEolTargetFramework>false</CheckEolTargetFramework>
-
     <!-- 性能与体积：ReadyToRun 把 IL 预编译成原生代码，理论上省 JIT；
          但**实测在这台机器上没有收益**（本程序 5 轮交替测量：
          中位数 718ms → 716ms，差异在噪声内），而它会让单文件大 2.06 MB。
-         原因是框架依赖模式下 WPF / BCL 程序集由运行时提供（它们本来就预编译过），
-         我们自己那点 IL 的 JIT 成本在总启动时间里看不出来。
          所以这里关掉：体积减 40%，启动速度不变。 -->
     <TieredPGO>true</TieredPGO>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
@@ -88,10 +79,10 @@
     <!-- 诊断工具开关（审视报告 P1-5）。
          默认 true：发布版仍带「自检」与「离屏渲染」两个命令行入口，
          用户报「某功能不灵」时可以让他自己跑一次自检，比远程猜快得多。
-         需要最小体积时用 MSBuild 属性 IncludeDiagnostics=false 发布：
-         会从编译里移除 SelfTest.cs 与 RenderTools.cs（合计约 6.6k 行），
-         并去掉自检文案。两者都不参与运行期逻辑，行为完全一致。 -->
+         需要最小体积时用 MSBuild 属性 IncludeDiagnostics=false 发布。 -->
     <IncludeDiagnostics Condition="'$(IncludeDiagnostics)' == ''">true</IncludeDiagnostics>
+    <!-- 原生库（ipidx.dll）随单文件发布一起打包，运行时解压到临时目录再加载。
+         见 Core/Qbar/Search/TantivyApi.cs 的 DllImport("ipidx")。 -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
@@ -114,26 +105,24 @@
          清单名变成 命名空间.目录.文件 之外的样子。 -->
     <EmbeddedResource Include="Assets\gestures-builtin.json"
                       LogicalName="InputPlus.Assets.gestures-builtin.json" />
-    <!-- 内置 Everything：SDK 的 x86/x64 DLL + Everything 客户端 exe。
-         为什么连客户端一起内置：Everything 的 SDK 只是 IPC 封装，用户机器上
-         没有 Everything 进程时，搜索永远是 0 条（本机实测就是这个）。
-         详见 Core/Qbar/Search/EverythingBundle.cs 顶部的取舍说明。
-
-         ⚠ 嵌入的是 **.gz**，不是原始 PE（v1.5.2）：三份原始二进制都是完整的 PE 头，
-         直接塞进 InputPlus.dll 会让程序集"夹带可执行体"，火绒 2026-11-23 就据此
-         判成 Trojan/Bladabindi.c 并把编译中间产物删掉。压缩后程序集里没有 MZ/PE 头，
-         运行期由 EverythingBundle 解压释放（tools/pack-everything.ps1 负责生成这些 .gz）。 -->
-    <EmbeddedResource Include="Assets\Everything\Everything.exe.gz"
-                      LogicalName="InputPlus.Assets.Everything.Everything.exe.gz" />
-    <EmbeddedResource Include="Assets\Everything\Everything64.dll.gz"
-                      LogicalName="InputPlus.Assets.Everything.Everything64.dll.gz" />
-    <EmbeddedResource Include="Assets\Everything\Everything32.dll.gz"
-                      LogicalName="InputPlus.Assets.Everything.Everything32.dll.gz" />
     <!-- 界面语言包已经挪到 InputPlus.Localization 工程（Assets\Lang），
          原因见该工程 csproj 顶部：XAML 里的 {loc:T} 一旦引用**本程序集**的类型，
          WPF 就必须先编一个临时程序集再跑第二趟标记编译，那趟临时编译会和正式产物
          抢同一个中间文件，带 RID 构建时 bin 里就缺 InputPlus.dll。
          放到被引用的程序集里就没有这个问题。 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 文件索引的原生库：Rust 侧 crates（src/ipidx）编出来的 cdylib。
+         构建方式见 BUILD.md：在 src/ipidx 下执行 cargo 的 release 构建，
+         产物 target\release\ipidx.dll 会被这里拷到输出目录与发布目录。
+         单文件发布时由 IncludeNativeLibrariesForSelfExtract 一起打包。 -->
+    <Content Include="$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll"
+             Link="ipidx.dll"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Visible="false"
+             Condition="Exists('$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll')" />
   </ItemGroup>
 
   <ItemGroup>
@@ -144,23 +133,11 @@
   <ItemGroup>
     <!-- UI Automation：直接读取选区，不受 UIPI 限制 -->
     <PackageReference Include="Interop.UIAutomationClient" Version="10.16299.0" />
-    <!-- WMI：调屏幕亮度（root\wpi）。
-         net7 线只能用 8.0.0（10.x 要求 .NET 8+ 运行时）。 -->
-    <PackageReference Include="System.Management" Version="10.0.13"
-                      Condition="'$(TargetFramework)' != 'net7.0-windows'" />
-    <PackageReference Include="System.Management" Version="8.0.0"
-                      Condition="'$(TargetFramework)' == 'net7.0-windows'" />
+    <!-- WMI：调屏幕亮度（root\wpi）。 -->
+    <PackageReference Include="System.Management" Version="10.0.13" />
     <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
     <!-- Lua 脚本动作（v1.5.0）：沙盒里跑用户脚本，只暴露 ip.* 这一层软件能力 -->
     <PackageReference Include="MoonSharp" Version="2.0.0" />
-  </ItemGroup>
-
-  <!-- Win7 线用自己的清单：补 Win7 的 supportedOS GUID，并去掉 Win10 才认的
-       PerMonitorV2 / longPathAware（Win7 会忽略它们，写上只会误导排查）。
-       Win7 只支持 system-DPI-aware，靠清单里 true/pm 那行落到 system 模式。 -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net7.0-windows'">
-    <ApplicationManifest Remove="app.manifest" />
-    <ApplicationManifest Include="app-win7.manifest" />
   </ItemGroup>
 
   <!-- P1-5：精简发布形态。这两个文件只服务于自检与离屏渲染两个入口，
@@ -173,5 +150,15 @@
   <PropertyGroup Condition="'$(IncludeDiagnostics)' == 'false'">
     <DefineConstants>$(DefineConstants);NO_DIAGNOSTICS</DefineConstants>
   </PropertyGroup>
+
+  <!-- 没有原生索引库时，Release 构建直接失败：少了一个 dll 的发布包"能启动、
+       搜索永远没结果"，那种错误用户报不上来、我们也复现不了，必须在构建期拦住。
+       Debug 只报警告，方便没装 Rust 工具链的人只看 C# 侧。 -->
+  <Target Name="EnsureIpIdxNative" BeforeTargets="Build" Condition="!Exists('$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll')">
+    <Message Importance="high"
+             Text="缺少 ipidx.dll：先在 src\ipidx 下跑 cargo build --release（见 BUILD.md）。" />
+    <Error Condition="'$(Configuration)' == 'Release'"
+           Text="Release 构建需要 ipidx.dll（Rust 侧文件索引内核）。请在 src\ipidx 下执行 cargo build --release。" />
+  </Target>
 
 </Project>

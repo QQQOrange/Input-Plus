@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -238,6 +238,6 @@ internal sealed class QbarFilterCatalog
         }
     }
 
-    /// <summary>扩展名集合 → <c>ext:</c> 参数串（调试面板 / Everything 兼容串用）。</summary>
+    /// <summary>扩展名集合 → <c>ext:</c> 参数串（调试面板显示用）。</summary>
     internal static string JoinExtensions(IEnumerable<string> extensions) => string.Join(";", extensions);
 }

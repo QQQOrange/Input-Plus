@@ -1,0 +1,26 @@
+label	index	query	backend	hits	paths	file
+pre-tantivy	00	report	后端 Everything · "report" · Everything 1.4.1 索引已加载 · 命中 2000 条（总 2245，窗口已截断） · SDK 16 ms · 本地复核剔除 0 条	2000	40	00.paths.txt
+pre-tantivy	01	rprt	后端 Everything · "rprt" · Everything 1.4.1 索引已加载 · 命中 0 条 · 路径补扫后 0 条 · SDK 47 ms（含路径补扫） · 本地复核剔除 0 条	0	24	01.paths.txt
+pre-tantivy	02	yh	后端 Everything · "yh" · Everything 1.4.1 索引已加载 · 命中 921 条 · SDK 16 ms · 本地复核剔除 0 条	921	40	02.paths.txt
+pre-tantivy	03	yinhang	后端 Everything · "yinhang" · Everything 1.4.1 索引已加载 · 命中 2 条 · 路径补扫后 2 条 · SDK 47 ms（含路径补扫） · 本地复核剔除 0 条	2	26	03.paths.txt
+pre-tantivy	04	doc:	后端 Everything · "ext:c;chm;cpp;cxx;doc;docm;docx;dot;dotm;dotx;h;hpp;htm;html;hxx;ini;java;js;lua;mdb;mht;mhtml;pdf;potm;potx;ppam;pps;ppsm;ppsx;ppt;pptm;pptx;rtf;sldm;sldx;thmx;txt;vsd;wpd;wps;wri;xlam;xls;xlsb;xlsm;xlsx;xltm;xltx;xml file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 275791，窗口已截断） · SDK 11 ms · 本地复核剔除 0 条	600	40	04.paths.txt
+pre-tantivy	05	doc: 报表	后端 Everything · "报表 ext:c;chm;cpp;cxx;doc;docm;docx;dot;dotm;dotx;h;hpp;htm;html;hxx;ini;java;js;lua;mdb;mht;mhtml;pdf;potm;potx;ppam;pps;ppsm;ppsx;ppt;pptm;pptx;rtf;sldm;sldx;thmx;txt;vsd;wpd;wps;wri;xlam;xls;xlsb;xlsm;xlsx;xltm;xltx;xml file:" · Everything 1.4.1 索引已加载 · 命中 9 条 · SDK 14 ms · 本地复核剔除 0 条	9	9	05.paths.txt
+pre-tantivy	06	ext:pdf;docx size:>1mb	后端 Everything · "ext:pdf;docx file: size:>=1mb" · Everything 1.4.1 索引已加载 · 命中 600 条（总 4257，窗口已截断） · SDK 7 ms · 本地复核剔除 0 条	600	40	06.paths.txt
+pre-tantivy	07	date:week	后端 Everything · "dm:2026-11-23..2026-11-29" · Everything 1.4.1 索引已加载 · 命中 600 条（总 14193，窗口已截断） · SDK 6 ms · 本地复核剔除 0 条	600	40	07.paths.txt
+pre-tantivy	08	-ext:tmp	后端 Everything · "!ext:tmp file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 1807835，窗口已截断） · SDK 10 ms · 本地复核剔除 0 条	600	40	08.paths.txt
+pre-tantivy	09	"年度 总结"	后端 Everything · "年度 总结" · Everything 1.4.1 索引已加载 · 命中 5 条 · 路径补扫后 5 条 · SDK 53 ms（含路径补扫） · 本地复核剔除 0 条	5	5	09.paths.txt
+pre-tantivy	10	(	后端 Everything · ""("" · Everything 1.4.1 索引已加载 · 命中 2000 条（总 5944，窗口已截断） · SDK 18 ms · 本地复核剔除 1093 条	907	40	10.paths.txt
+pre-tantivy	11	C:\Windows	后端 Everything · "C:\Windows" · Everything 1.4.1 索引已加载 · 命中 2000 条（总 210735，窗口已截断） · SDK 18 ms · 本地复核剔除 0 条	2000	40	11.paths.txt
+pre-tantivy	12	pic:	后端 Everything · "ext:ani;bmp;gif;ico;jpe;jpeg;jpg;pcx;png;psd;svg;tga;tif;tiff;webp;wmf file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 259168，窗口已截断） · SDK 8 ms · 本地复核剔除 0 条	600	40	12.paths.txt
+pre-tantivy	13	video:	后端 Everything · "ext:3g2;3gp;3gp2;3gpp;asf;avi;bdmv;bik;divx;drc;f4v;flc;fli;flv;ifo;ivf;m1v;m2ts;m2v;m4v;mkv;mov;mp4;mpe;mpeg;mpg;mpv2;mts;ogm;pss;pva;qt;rm;rmvb;roq;rpm;smk;swf;vob;vp6;webm;wm;wmp;wmv file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 6780，窗口已截断） · SDK 12 ms · 本地复核剔除 0 条	600	40	13.paths.txt
+pre-tantivy	14	audio:	后端 Everything · "ext:aac;ac3;aif;aifc;aiff;amr;ape;au;cda;dts;flac;it;m3u;m4a;mid;midi;mka;mod;mp2;mp3;mpa;ogg;ogm;ra;rmi;snd;spc;umx;vgm;vgz;voc;wav;wma file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 8119，窗口已截断） · SDK 10 ms · 本地复核剔除 0 条	600	40	14.paths.txt
+pre-tantivy	15	folder:	后端 Everything · "folder:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 283578，窗口已截断） · SDK 4 ms · 本地复核剔除 0 条	600	40	15.paths.txt
+pre-tantivy	16	size:10mb..1gb	后端 Everything · "file: size:10mb..1gb" · Everything 1.4.1 索引已加载 · 命中 600 条（总 12365，窗口已截断） · SDK 6 ms · 本地复核剔除 1 条	599	40	16.paths.txt
+pre-tantivy	17	wfn:*.pdf	后端 Everything · "wfn:*.pdf" · Everything 1.4.1 索引已加载 · 命中 600 条（总 7375，窗口已截断） · SDK 7 ms · 本地复核剔除 0 条	600	40	17.paths.txt
+pre-tantivy	18	reporter	后端 Everything · "reporter" · Everything 1.4.1 索引已加载 · 命中 146 条 · SDK 12 ms · 本地复核剔除 0 条	146	40	18.paths.txt
+pre-tantivy	19	说明	后端 Everything · "说明" · Everything 1.4.1 索引已加载 · 命中 167 条 · SDK 14 ms · 本地复核剔除 0 条	167	40	19.paths.txt
+pre-tantivy	20	path:Documents	后端 Everything · "path:Documents" · Everything 1.4.1 索引已加载 · 命中 600 条（总 278460，窗口已截断） · SDK 39 ms · 本地复核剔除 0 条	600	40	20.paths.txt
+pre-tantivy	21	-path:AppData	后端 Everything · "!path:AppData" · Everything 1.4.1 索引已加载 · 命中 600 条（总 1232095，窗口已截断） · SDK 45 ms · 本地复核剔除 0 条	600	40	21.paths.txt
+pre-tantivy	22	regex:^rep.*\.docx$	后端 Everything · "^rep.*\.docx$" · Everything 1.4.1 索引已加载 · 命中 1 条 · SDK 53 ms · 本地复核剔除 0 条	1	1	22.paths.txt
+pre-tantivy	23	file: 报表	后端 Everything · "报表 file:" · Everything 1.4.1 索引已加载 · 命中 9 条 · SDK 14 ms · 本地复核剔除 0 条	9	9	23.paths.txt
+#INDEX_READY=True

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -20,7 +20,7 @@ namespace InputPlus.UI.Windows;
 /// <summary>
 /// 展开后的文件搜索窗口：左边筛选（类型 + 时间桶），右边名称/路径两列表。
 /// 数据来自同一个 <see cref="QbarSearchEngine"/>，所以翻译层、优先级规则、
-/// 双后端（Everything / 本地快照）在这里原样生效 —— 这里只是换了呈现方式，
+/// 索引后端在这里原样生效 —— 这里只是换了呈现方式，
 /// 不是另一条搜索路径。
 /// </summary>
 public partial class QbarExpandWindow : Window

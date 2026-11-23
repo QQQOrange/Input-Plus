@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -19,7 +19,7 @@ internal enum QbarPriorityLevel
 internal readonly record struct QbarPriorityDecision(QbarPriorityLevel Level, string Reason, string Scope);
 
 /// <summary>
-/// 优先级规则求解器。Everything 没有这个概念，原生索引也没有 —— 所以这一层
+/// 优先级规则求解器。索引层没有这个概念 —— 所以这一层
 /// 完全在候选结果集上跑：不写回索引，不做持久化改动，改规则立刻生效。
 ///
 /// 求值规则（必须可复现）：

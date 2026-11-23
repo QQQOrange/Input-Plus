@@ -1,0 +1,30 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:28
+输入: 年度 总结
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 211 ms
+
+归一化: 年度 总结
+索引查询: 年度 总结
+后端: 后端 Everything · "年度 总结" · Everything 1.4.1 索引已加载 · 命中 5 条 · 路径补扫后 5 条 · SDK 53 ms（含路径补扫） · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: 年度 | 总结
+各层:
+  [normalize] 年度 总结
+  [tokenize] 年度 | 总结
+  [resolveKeyword] (none)
+  [translate] 年度 总结
+  [native] terms=年度|总结
+
+候选: 5 条，展示 5 条，端到端 91.1 ms
+翻译 3.2ms · 检索 79.3ms · 重排 7.1ms · 合计 90.1ms
+本页：文档 5 · 近7天 1
+
+命中:
+  [文件] D:\tmp\qbar-efu\年度 总结.txt   (分 833 / 档 1 / 2026-11-21)  ← 「年度」 「总结」.txt
+  [文件] C:\Users\64381\OneDrive\Documents\xwechat_files\wxid_k63r04jh0ds421_0613\msg\file\2024-12\马克思主义学院2024年度工作总结.docx   (分 706 / 档 1 / 23 KB / 2024-12-13)  ← 马克思主义学院2024「年度」工作「总结」.docx
+  [文件] C:\Users\64381\OneDrive\Documents\xwechat_files\wxid_k63r04jh0ds421_0613\msg\file\2024-12\马克思主义学院2024年度工作总结.docx   (分 706 / 档 1 / 23 KB / 2024-12-13)  ← 马克思主义学院2024「年度」工作「总结」.docx
+  [文件] C:\Users\64381\OneDrive\Documents\xwechat_files\wxid_k63r04jh0ds421_0613\business\migrate\local\p\马克思主义学院2024年度工作总结.docx   (分 698 / 档 1 / 23 KB / 2024-12-13)  ← 马克思主义学院2024「年度」工作「总结」.docx
+  [文件] C:\Users\64381\OneDrive\Documents\xwechat_files\wxid_k63r04jh0ds421_0613\business\migrate\local\p\马克思主义学院2024年度工作总结.docx   (分 698 / 档 1 / 23 KB / 2024-12-13)  ← 马克思主义学院2024「年度」工作「总结」.docx

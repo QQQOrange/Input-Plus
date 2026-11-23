@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:32
+输入: reporter
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 209 ms
+
+归一化: reporter
+索引查询: reporter
+后端: 后端 Everything · "reporter" · Everything 1.4.1 索引已加载 · 命中 146 条 · SDK 12 ms · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: reporter
+各层:
+  [normalize] reporter
+  [tokenize] reporter
+  [resolveKeyword] (none)
+  [translate] reporter
+  [native] terms=reporter
+
+候选: 146 条，展示 40 条，端到端 38.5 ms
+翻译 3.2ms · 检索 25.8ms · 重排 8.0ms · 合计 37.5ms
+本页：文档 4 · 程序 8 · 其他 28 · 近7天 6
+
+命中:
+  [文件] D:\game\steam\steamerrorreporter.exe   (分 774 / 档 1 / 704 KB / 2026-11-13)  ← steamerror「reporter」.exe
+  [文件] D:\software\WeGame\client_reporter.exe   (分 774 / 档 1 / 2.2 MB / 2026-09-25)  ← client_「reporter」.exe
+  [文件] D:\game\steam\steamerrorreporter64.exe   (分 773 / 档 1 / 790 KB / 2026-11-13)  ← steamerror「reporter」64.exe
+  [文件] D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 769 / 档 1 / 1 KB / 2026-10-27)  ← 「reporter」s.py
+  [文件] D:\software\opera\140.0.6074.18\opera_crashreporter.exe   (分 766 / 档 1 / 2.2 MB / 2026-11-16)  ← opera_crash「reporter」.exe
+  [文件] D:\software\opera\140.0.6074.36\opera_crashreporter.exe   (分 766 / 档 1 / 2.2 MB / 2026-11-20)  ← opera_crash「reporter」.exe
+  [文件] D:\software\MuMuPlayer\nx_main\MuMuStatisticsReporter.exe   (分 765 / 档 1 / 2026-11-16)  ← MuMuStatistics「Reporter」.exe
+  [文件] D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 761 / 档 1 / 3 KB / 2026-10-27)  ← 「reporter」.py
+  [文件] D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-313.pyc   (分 759 / 档 1 / 3 KB / 2026-10-27)  ← 「reporter」s.cpython-313.pyc
+  [文件] D:\software\QianwenApp\5.2.5.305\efs-reporter.dll   (分 754 / 档 1 / 5.6 MB / 2026-04-08)  ← efs-「reporter」.dll
+  [文件] D:\software\QianwenApp\5.2.7.307\efs-reporter.dll   (分 754 / 档 1 / 5.6 MB / 2026-04-08)  ← efs-「reporter」.dll
+  [文件] D:\software\QuarkCloudDrive\7.4.5.824\efs-reporter.dll   (分 754 / 档 1 / 5.6 MB / 2026-04-08)  ← efs-「reporter」.dll
+  [文件] D:\software\QuarkCloudDrive\7.5.0.827\efs-reporter.dll   (分 754 / 档 1 / 5.6 MB / 2026-04-08)  ← efs-「reporter」.dll
+  [文件] D:\WindowsApps\B9ECED6F.ArmouryCrate_6.7.6.0_x64__qmba6cd70vzyy\Win32Diagnostics\ErrorReporter.zip   (分 754 / 档 1 / 1.5 MB / 2026-10-16)  ← Error「Reporter」.zip
+  [文件] C:\Users\64381\.workbuddy\binaries\python\envs\default\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 753 / 档 1 / 1 KB / 2026-10-23)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.workbuddy\binaries\python\versions\3.13.12\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 753 / 档 1 / 1 KB / 2026-10-27)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 753 / 档 1 / 1 KB / 2026-11-13)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 753 / 档 1 / 1 KB / 2026-11-13)  ← 「reporter」s.py
+  [文件] D:\software\deepseekharness\resources\runtime\primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 753 / 档 1 / 1 KB / 2026-11-13)  ← 「reporter」s.py
+  [文件] D:\software\Workbuddy\resources\vendor\python\Lib\site-packages\pip\_internal\resolution\resolvelib\__pycache__\reporter.cpython-313.pyc   (分 751 / 档 1 / 5 KB / 2026-10-27)  ← 「reporter」.cpython-313.pyc
+  [文件] D:\software\MuMuPlayer\nx_device\15.0\shell\MuMuNxCrashReporter.exe   (分 750 / 档 1 / 2026-11-16)  ← MuMuNxCrash「Reporter」.exe
+  [文件] D:\software\WPS Office\12.1.0.29161\office6\addons\kwebmarkdown\hybrid-md\weboffice-static\js\chunk\public\helpers\reporter.517ad2df.chunk.zh-CN.js   (分 750 / 档 1 / 2 KB / 2026-10-14)  ← 「reporter」.517ad2df.chunk.zh-CN.js
+  [文件] D:\software\WPS Office\12.1.0.29690\office6\addons\kwebmarkdown\hybrid-md\weboffice-static\js\chunk\public\helpers\reporter.9b14b032.chunk.zh-CN.js   (分 750 / 档 1 / 2 KB / 2026-11-13)  ← 「reporter」.9b14b032.chunk.zh-CN.js
+  [文件] D:\software\MuMuPlayer\.backup\adstrip-20261116-081637\nx_main\MuMuStatisticsReporter.exe   (分 749 / 档 1 / 19.7 MB / 2026-10-23)  ← MuMuStatistics「Reporter」.exe
+  [文件] D:\game\WeGameApps\英雄联盟\Cross\coach\agent\lol_ai_coach\Python311\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 745 / 档 1 / 1 KB / 2026-07-23)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.workbuddy\binaries\python\envs\default\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 745 / 档 1 / 3 KB / 2026-10-23)  ← 「reporter」.py
+  [文件] D:\software\AppData\Profile\workbuddy\binaries\python\envs\default\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 745 / 档 1 / 1 KB / 2026-10-23)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.workbuddy\binaries\python\versions\3.13.12\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 745 / 档 1 / 3 KB / 2026-10-27)  ← 「reporter」.py
+  [文件] D:\software\AppData\Local\OpenAI\Codex\runtimes\cua_node\1fb7137c46617d50\bin\node_modules\playwright\lib\runner\reporters.js   (分 745 / 档 1 / 5 KB / 2026-10-25)  ← 「reporter」s.js
+  [文件] D:\software\AppData\Local\OpenAI\Codex\runtimes\cua_node\1fb7137c46617d50\bin\node_modules\playwright\lib\reporters\reporterV2.js   (分 745 / 档 1 / 2 KB / 2026-10-25)  ← 「reporter」V2.js
+  [文件] D:\software\AppData\Roaming\kimi-desktop\daimon-bundle\runtime\python\cpython-3.12\Lib\site-packages\pip\_vendor\resolvelib\reporters.py   (分 745 / 档 1 / 1 KB / 2024-01-01)  ← 「reporter」s.py
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 745 / 档 1 / 3 KB / 2026-11-13)  ← 「reporter」.py
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 745 / 档 1 / 3 KB / 2026-11-13)  ← 「reporter」.py
+  [文件] D:\software\deepseekharness\resources\runtime\primary-runtime\dependencies\python\Lib\site-packages\pip\_internal\resolution\resolvelib\reporter.py   (分 745 / 档 1 / 3 KB / 2026-11-13)  ← 「reporter」.py
+  [文件] C:\Users\64381\.workbuddy\binaries\python\envs\default\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-313.pyc   (分 743 / 档 1 / 3 KB / 2026-10-23)  ← 「reporter」s.cpython-313.pyc
+  [文件] C:\Users\64381\.workbuddy\binaries\python\versions\3.13.12\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-313.pyc   (分 743 / 档 1 / 3 KB / 2026-10-27)  ← 「reporter」s.cpython-313.pyc
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-312.pyc   (分 743 / 档 1 / 3 KB / 2026-11-20)  ← 「reporter」s.cpython-312.pyc
+  [文件] C:\Users\64381\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-312.pyc   (分 743 / 档 1 / 3 KB / 2026-11-20)  ← 「reporter」s.cpython-312.pyc
+  [文件] D:\software\deepseekharness\resources\runtime\primary-runtime\dependencies\python\Lib\site-packages\pip\_vendor\resolvelib\__pycache__\reporters.cpython-312.pyc   (分 743 / 档 1 / 3 KB / 2026-11-13)  ← 「reporter」s.cpython-312.pyc
+  [文件] D:\game\steam\bin\cef\cef.win64\crash_reporter.cfg   (分 738 / 档 1 / 2026-09-02)  ← crash_「reporter」.cfg

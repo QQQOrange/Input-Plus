@@ -109,6 +109,9 @@ public sealed partial class HotkeyEngine
     /// </summary>
     private bool OnMouseButton(int vk, bool down, bool injected)
     {
+        /* 鼠标按下 = 焦点/插入符很可能已经换了地方，片段缓冲不再可信。
+         * 只标记、不清空：用户可能只是点了下别处又点回来继续打字。 */
+        if (down) _snippetBuffer.MarkUntrusted();
         try { return OnKeyEvent(vk, down, injected); }
         catch (Exception ex)
         {

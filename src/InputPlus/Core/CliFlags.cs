@@ -26,7 +26,7 @@ public static class CliFlags
         "--help", "--hooktest", "--dump-triggers", "--dump-bindings",
         "--probe-key", "--selection-test", "--gesture-probe", "--gesture-import",
         "--drag-e2e", "--drag-target", "--qbar-query", "--qbar-bench",
-        "--everything-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
+        "--index-status", "--settings-dump", "--qbar-command", "--dict", "--holddrag-config",
         "--shell-probe", "--dialogprobe", "--filedialog-e2e", "--suggestions-probe", "--scroll-probe",
         "--foreground-file", "--reveal-file", "--office-recent",
         "--gesture-overlay-diag",
@@ -48,6 +48,7 @@ public static class CliFlags
         "\n" +
         "  自检与诊断（跑完即退，不装托盘、不弹启动密码）\n" +
         "  --selftest                      跑全部自检；退出码 0 = 全过（日志在数据目录 selftest.log）\n" +
+        "  --only <片段>                    配合 --selftest：只跑用例方法名含该片段的项（例如 --only=Qbar）\n" +
          "  --diag                          环境诊断（钩子、前台会话、注入链路）；发现问题时退出码非 0\n" +
          "  --hooktest                      只装键盘钩子并自己敲两下，检查钩子是否真的能收到按键\n" +
          "  --dump-triggers                 打印解密后的触发键/层配置（排查触发键不生效时用）\n" +
@@ -83,7 +84,7 @@ public static class CliFlags
         "  --qbar-bench                    跑 20 条基准查询，输出耗时/命中/旧入口比对（写 %TEMP%\\clp-qbar-bench.txt）\n" +
         "  --settings-dump                 只读打印当前读到的设置：过滤器/命令/规则/加密与解锁状态（写 %TEMP%\\clp-settings-dump.txt）\n" +
         "  --qbar-command \"ol hello\"        只解析命令（关键字/路径/占位符展开），不执行（写 %TEMP%\\clp-qbar-command.txt）\n" +
-        "  --everything-status              检查 Everything SDK 是否可用、版本、索引与查询实测（写 %TEMP%\\clp-everything-status.txt）\n" +
+        "  --index-status                  文件索引体检：条数/体积/构建进度/最近提交/watcher/查询 p50-p95（写 %TEMP%\\clp-index-status.txt）\n" +
         "  --dict <词>                      只跑查词链路（欧路/网页词典接口 + 解析），打印释义与耗时（写 %TEMP%\\clp-qbar-dict.txt）\n" +
         "  --reveal <路径>                  按文件关联打开该文件/网址，并检查它是否到了前台\n" +
         "  --reveal-file <路径>             走一次「打开文件所在位置」：父目录 + 选中该文件（写 %TEMP%\\clp-reveal-file.txt）\n" +
@@ -119,6 +120,42 @@ public static class CliFlags
     /// <summary>参数里是否含指定开关（不区分大小写）。</summary>
     public static bool Has(IEnumerable<string>? args, string flag)
         => args != null && args.Any(a => a.Equals(flag, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// 取开关的值，两种写法都认：<c>--only=Qbar</c> 与 <c>--only Qbar</c>。
+    /// 没写值、或值被别的开关顶掉（<c>--only --selftest</c>）时返回 null。
+    ///
+    /// 为什么两种都认：脚本里 `--only=Qbar` 少一个括号不嵌套，但人在命令行里
+    /// 习惯敲空格；只支持一种迟早会被写错一次而静默跑成全量。
+    /// </summary>
+    public static string? ValueOf(IEnumerable<string>? args, string flag)
+    {
+        if (args == null) return null;
+
+        string prefix = flag + "=";
+        bool sawFlag = false;
+
+        foreach (string raw in args)
+        {
+            if (raw == null) continue;
+
+            if (raw.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string inline = raw.Substring(prefix.Length).Trim();
+                return inline.Length == 0 ? null : inline;
+            }
+
+            if (sawFlag)
+            {
+                if (raw.StartsWith("--", StringComparison.Ordinal)) return null;
+                return raw.Trim();
+            }
+
+            if (raw.Equals(flag, StringComparison.OrdinalIgnoreCase)) sawFlag = true;
+        }
+
+        return null;
+    }
 
     private static bool AnyOf(IEnumerable<string>? args, string[] flags)
         => args != null && args.Any(a => flags.Contains(a, StringComparer.OrdinalIgnoreCase));

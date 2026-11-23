@@ -139,10 +139,10 @@ internal sealed class QbarSearchOutcome
     /// </summary>
     public string Profile { get; set; } = "";
 
-    /// <summary>本次结果由谁提供："everything" / "native"（自建快照）/ "off"（只用 Everything 但它不可用，结果为 0）。</summary>
-    public string Backend { get; set; } = "native";
+    /// <summary>本次结果由谁提供："tantivy"（进程内索引）/ "off"（索引不可用，结果为 0，不静默换源）。</summary>
+    public string Backend { get; set; } = "tantivy";
 
-    /// <summary>实际发给 Everything 的查询串（走自建索引时为空）。</summary>
+    /// <summary>实际发给索引的查询描述（没走索引时为空）。</summary>
     public string BackendQuery { get; set; } = "";
 
     /// <summary>后端的一句话说明：可用性、命中数、被本地复核剔除多少条。</summary>
@@ -153,12 +153,22 @@ internal sealed class QbarSearchOutcome
     public bool PinyinUsed { get; set; }
     public bool PinyinPending { get; set; }
 
-    /// <summary>本页统计：类型桶计数。只在候选窗口内数，绝不为此另发一次查询。</summary>
+    /// <summary>分面计数。口径由 <see cref="FacetsAreGlobal"/> 决定：全库（索引直出）或本页。</summary>
     public List<(string Label, int Count)> Facets { get; } = new List<(string Label, int Count)>();
+
+    /// <summary>
+    /// 这批分面是"全库命中"还是"本页"口径。
+    ///
+    /// true = 来自索引一次收集（MultiCollector），覆盖**每一次查询的全部命中**，
+    /// 与"本页 40 条"无关，所以文案得写「全部：」。
+    /// false = 老的按本页统计（索引没给分面时退回，文案写「本页：」）。
+    /// 两种口径的数字都真实，但绝不能互相冒名 —— 用户会把「全部」当成"眼前这些"。
+    /// </summary>
+    public bool FacetsAreGlobal { get; set; }
 
     public int HiddenCount => HiddenIgnored + HiddenDoNotIndex + HiddenLow;
 
-    /// <summary>分面摘要（"本页"口径）。界面直接显示这一行，不自己拼。</summary>
+    /// <summary>分面摘要。前缀跟着 <see cref="FacetsAreGlobal"/> 走，界面直接显示这一行。</summary>
     public string FacetSummary()
     {
         var parts = new List<string>();
@@ -168,7 +178,7 @@ internal sealed class QbarSearchOutcome
             if (count <= 0) continue;
             parts.Add(label + " " + count);
         }
-        return parts.Count == 0 ? "" : "本页：" + string.Join(" · ", parts);
+        return parts.Count == 0 ? "" : (FacetsAreGlobal ? "全部：" : "本页：") + string.Join(" · ", parts);
     }
 
     public string TimingText =>
@@ -180,12 +190,7 @@ internal sealed class QbarSearchOutcome
     {
         get
         {
-            string head = Backend switch
-            {
-                "everything" => "Everything",
-                "off" => "Everything（不可用，未回退本地快照）",
-                _ => "本地索引",
-            };
+            string head = Backend == "off" ? "索引（不可用，未回退内存快照）" : "进程内索引";
             string query = BackendQuery.Length == 0 ? "" : " · \"" + BackendQuery + "\"";
             string detail = BackendDetail.Length == 0 ? "" : " · " + BackendDetail;
             return "后端 " + head + query + detail;
@@ -194,8 +199,8 @@ internal sealed class QbarSearchOutcome
 }
 
 /// <summary>
-/// 语义层的主入口：输入文本 → 翻译 → 原生索引 → 优先级剔除 → 本地重排 → 高亮。
-/// 这一层不许碰 UI，也不许碰 Everything —— 它只是"把用户的话变成一次结构化查询"。
+/// 语义层的主入口：输入文本 → 翻译 → 索引取候选 → 优先级剔除 → 本地重排 → 高亮。
+/// 这一层不许碰 UI，也不许直接碰索引实现 —— 它只是"把用户的话变成一次结构化查询"。
 /// </summary>
 internal static class QbarSearchEngine
 {
@@ -246,51 +251,24 @@ internal static class QbarSearchEngine
 
         var search = Stopwatch.StartNew();
 
-        /* 后端选择：Everything 能用就用它（索引由 Everything 维护，覆盖面比自建快照大），
-         * 任何一步不成立就退回自建快照。注意 TryRun 返回 true 但 0 条是**有效结果**，
-         * 不是失败——不能再补一次本地查询，否则"Everything 里没有"会被伪装成"本地有"。 */
+        /* 单一后端：进程内 tantivy 索引。索引没就绪就**明确提示、结果为 0**，
+         * 不静默换源 —— 改造前有一条"降级到内存快照"的备用路，两个索引的覆盖面
+         * 差一个量级，静默降级会让用户以为"文件不存在"（旧 DECISIONS D25 的教训）。
+         * TryRun 返回 true 但 0 条是**有效结果**，不是失败。 */
         IReadOnlyList<FileSearchHit> raw = Array.Empty<FileSearchHit>();
-        bool usedEverything = false;
-        if (context.Options.PreferEverything)
+        bool usedBackend = QbarTantivyBackend.TryRun(
+            spec, window, out List<FileSearchHit> indexHits, out string indexQuery, out string backendDetail);
+        if (usedBackend)
         {
-            usedEverything = QbarEverythingBackend.TryRun(
-                spec, window, out List<FileSearchHit> everythingHits, out string everythingQuery, out string backendDetail);
-            if (usedEverything)
-            {
-                raw = everythingHits;
-                outcome.Backend = "everything";
-                outcome.BackendQuery = everythingQuery;
-            }
-            outcome.BackendDetail = backendDetail;
+            raw = indexHits;
+            outcome.Backend = "tantivy";
+            outcome.BackendQuery = indexQuery;
         }
-
-        if (!usedEverything)
+        else
         {
-            /* 只用 Everything：拿不到候选就返回空，让界面显示"Everything 没就绪"，
-             * 而不是悄悄换成本地快照 —— 两个索引的覆盖面差一个量级，静默降级会让
-             * 用户以为"文件不存在"。本地快照只在显式 PreferEverything=false 时用
-             * （自检、--qbar-bench 的对照，见 DECISIONS D25）。 */
-            /* 正则例外：Everything 1.4 走不了正则（见 QbarEverythingBackend.TryRun 的说明），
-             * 这一类查询本来就该由本地快照回答，标签也要如实写成本地索引，
-             * 不能挂一句"Everything 不可用"让用户去修一个没坏的东西。 */
-            bool localRegex = spec.RegexText.Length > 0;
-            if (context.Options.PreferEverything && context.Options.EverythingOnly && !localRegex)
-            {
-                outcome.Backend = "off";
-                if (outcome.BackendDetail.Length == 0)
-                    outcome.BackendDetail = "Everything 不可用（客户端没运行或索引未加载），按设置不回退本地快照";
-            }
-            else
-            {
-                raw = NativeSearchIndex.SearchSpec(spec, window, context.Options.QueryTimeoutMs);
-                outcome.Backend = "native";
-                if (outcome.BackendDetail.Length == 0)
-                    outcome.BackendDetail = context.Options.PreferEverything
-                        ? "Everything 不可用，已降级到本地索引"
-                        : "已在设置里关闭 Everything 后端";
-                if (localRegex) outcome.BackendDetail = "正则查询由本地快照执行（Everything 只有全局正则开关）";
-            }
+            outcome.Backend = "off";
         }
+        outcome.BackendDetail = backendDetail;
         outcome.SearchMs = search.Elapsed.TotalMilliseconds;
         outcome.RawCount = raw.Count;
 
@@ -364,7 +342,7 @@ internal static class QbarSearchEngine
             outcome.Hits.Add(view);
         }
 
-        BuildFacets(outcome);
+        BuildFacets(outcome, QbarTantivyBackend.LastIndexFacets);
 
         if (profile != null)
         {
@@ -374,10 +352,10 @@ internal static class QbarSearchEngine
         }
 
         outcome.RankMs = rank.Elapsed.TotalMilliseconds;
-        /* 增强（拼音 / 子序列）候选来自**本地快照**，而 Everything 模式下主结果来自**
-         * Everything 的索引**。两者不同源，所以只要 Everything 这条路走不通（Backend="off"），
-         * 就一条增强都不能补 —— 否则界面上会出现"后端不可用"却列着 24 条本地命中的怪状，
-         * 用户没法判断这些文件到底在不在 Everything 的索引里。 */
+        /* 增强（拼音 / 子序列）候选来自索引里另外两个入口，而主结果来自主查询。
+         * 两者同源（同一份索引），但索引不可用（Backend="off"）时一律不补 ——
+         * 否则界面上会出现"后端不可用"却列着一批命中的怪状，
+         * 用户没法判断这些文件到底在不在索引里。 */
         if (outcome.Backend.Length > 0 && outcome.Backend != "off")
             TryEnhance(context, translation, text, outcome);
         outcome.TotalMs = total.Elapsed.TotalMilliseconds;
@@ -390,8 +368,16 @@ internal static class QbarSearchEngine
     /// 数出来的是"库里有几个"而不是"这里有几个"，和眼前的列表对不上就是骗人。
     /// 所以界面上必须标"本页"。
     /// </summary>
-    private static void BuildFacets(QbarSearchOutcome outcome)
+    private static void BuildFacets(QbarSearchOutcome outcome, List<(string Label, int Count)>? indexFacets)
     {
+        /* 索引一次收集就给全了（覆盖本次查询的全部命中）→ 直接用，标成「全部：」。
+         * 老索引 / 索引没给分面时退回按本页数（文案「本页：」），两种都不许算错。 */
+        if (indexFacets != null && indexFacets.Count > 0)
+        {
+            outcome.Facets.AddRange(indexFacets);
+            outcome.FacetsAreGlobal = true;
+            return;
+        }
         if (outcome.Hits.Count == 0) return;
 
         var doc = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -463,7 +449,7 @@ internal static class QbarSearchEngine
     {
         if (hit.Name.Length == 0) return;
 
-        /* Everything 已经给了精确区间就别再猜一遍：它按自己的匹配规则（含正则、通配符、
+        /* 索引层不给命中区间（一律 null），高亮这里按关键词自己算。
            MatchPath）算出真正命中的字符，我们按关键词子串硬找会在这些查询里标错位置。 */
         if (hit.Highlights.Count > 0) return;
 
@@ -557,8 +543,23 @@ internal static class QbarSearchEngine
 
             if (outcome.Hits.Count < options.FuzzyThreshold)
             {
-                IReadOnlyList<FileSearchHit> fuzzy =
-                    NativeSearchIndex.FuzzyScan(text, 400000, 24, Math.Min(120, options.QueryTimeoutMs));
+                /* 模糊兜底：索引用「每个字符都出现」把候选捞出来（子序列的必要条件，
+                 * 所以不漏），这里再判真子序列并打分。编辑距离 1 的近似命中
+                 * （索引标 fz=2）直接收下并标注"近似"。 */
+                List<IndexHit> fuzzyRaw = QbarTantivyBackend.Fuzzy(text, 24, translation.Spec);
+                var fuzzy = new List<FileSearchHit>(fuzzyRaw.Count);
+                foreach (IndexHit raw in fuzzyRaw)
+                {
+                    bool isDir = raw.IsDir == 1;
+                    int sizeKb = raw.Size <= 0 ? 0 : (int)Math.Min(raw.Size / 1024L, int.MaxValue);
+                    string name = System.IO.Path.GetFileName(raw.Path);
+                    int score = raw.Fuzzy == 2
+                        ? 120
+                        : QbarNameScore.Subsequence(name, text);
+                    if (score <= 0) continue;
+                    fuzzy.Add(new FileSearchHit(raw.Path, isDir, score, sizeKb, raw.Day, null));
+                }
+                fuzzy.Sort((a, b) => b.Score.CompareTo(a.Score));
                 if (fuzzy.Count > 0)
                 {
                     outcome.FuzzyUsed = true;

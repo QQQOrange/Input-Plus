@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
 
@@ -89,7 +89,7 @@ internal static class QbarProviders
 
         /* 内核不可用时 MatchFiles 会带一条“文件搜索不可用”的提示（Payload 为空）。
          * 如果应用/书签/设置已经命中了，这条提示只会把列表撑乱——
-         * 用户看着“显示设置”下面挂一条“找不到 Everything”，并不知道这是
+         * 用户看着“显示设置”下面挂一条“找不到文件索引”，并不知道这是
          * 给文件搜索用的。只在完全没有其它结果时才展示它。 */
         foreach (var r in MatchFiles(settings, q, limit, fileOutcome, skipFiles))
         {
@@ -177,9 +177,9 @@ internal static class QbarProviders
     /// <summary>
     /// 文件搜索：Input Plus 自己的索引（见 <see cref="NativeSearchIndex"/>）。
     ///
-    /// 以前这里挂的是 Everything（进程内 SDK 优先、es.exe 兜底）。实际用起来有两个问题：
-    /// 一是系统里本来就装着 Everything 的机器上，它会直接用那一份 —— 用户看到的
-    /// 就是"搜个文件把 Everything 叫出来了"；二是没装的机器上等于没有文件搜索。
+    /// 以前这里挂的是一个进程外的索引程序（SDK 优先、命令行兜底）。实际用起来有两个问题：
+    /// 一是机器上本来就装着它的，会直接用那一份 —— 用户看到的就是"搜个文件把别的程序叫出来了"；
+    /// 二是没装的机器上等于没有文件搜索。
     /// 现在索引与查询都在本进程里，不启动任何外部程序。
     /// </summary>
     private static IEnumerable<QbarResult> MatchFiles(AppSettings settings, string text, int limit,
@@ -188,8 +188,8 @@ internal static class QbarProviders
         if (skipFiles) yield break;
         if (text.Length < 2) yield break;
 
-        /* 幂等：有缓存时这里只是一次字段检查，没有才在后台开始扫盘（绝不阻塞这次输入）。 */
-        NativeSearchIndex.Start();
+        /* 幂等：有缓存时这里只是一次字段检查，没有才在后台开始建索引（绝不阻塞这次输入）。 */
+        QbarIndex.Start();
 
         /* prepared 来自界面层的后台线程；为 null 说明这次是自检/命令行工具，
          * 就地同步跑一遍（那些场景没有 UI 线程可卡）。 */
@@ -213,17 +213,17 @@ internal static class QbarProviders
 
         if (hits.Count > 0) yield break;
 
-        /* Everything 没就绪：0 条不代表"没有这个文件"，而是"没人能回答"。
-         * 必须给一条能点的提示 —— 否则 Everything 没开着的时候，用户搜什么都是空的，
+        /* 索引没就绪：0 条不代表"没有这个文件"，而是"没人能回答"。
+         * 必须给一条能点的提示 —— 否则索引还在建的时候，用户搜什么都是空的，
          * 只会以为搜索坏了、或者以为文件被删了。 */
         if (string.Equals(outcome.Backend, "off", StringComparison.Ordinal))
         {
             yield return new QbarResult(QbarKind.Command,
-                Loc.T("文件搜索的引擎还没启动"),
-                Loc.T("点这里启动内置 Everything（就在本软件里，不用另装）"), "文件", "everything")
+                Loc.T("文件索引还没就绪"),
+                Loc.T("点这里重建文件索引（索引在本程序里，不需要另装任何东西）"), "文件", "reindex")
             {
                 Score = 27,
-                Action = "qbar:everything",
+                Action = "qbar:rebuild-index",
             };
             yield break;
         }
@@ -255,18 +255,14 @@ internal static class QbarProviders
         /* 一条都没有分两种：索引答了"真没有"，或者索引还没就绪。后者必须说一句，
          * 否则用户会一直以为自己记错了文件名。每个进程只提一次，
          * 别让每敲一个字符都冒一条同样的提示。 */
-        /* Everything 就绪时不需要这条提示：它自己维护索引，自建快照只是后备。
-         * 否则会出现"搜索明明有结果，底下却挂着一条索引没就绪"的自相矛盾。 */
-        bool everythingReady = EverythingApi.IsAvailable && EverythingApi.IsDbLoaded;
-        string problem = NativeSearchIndex.Problem;
-        bool notReady = !NativeSearchIndex.Ready || NativeSearchIndex.Building;
-        if (everythingReady && problem.Length == 0) yield break;
+        string problem = QbarIndex.Problem;
+        bool notReady = !QbarIndex.Ready || QbarIndex.Building;
         if (problem.Length == 0 && !notReady) yield break;
         if (_fileHintShown) yield break;
 
         _fileHintShown = true;
         yield return new QbarResult(QbarKind.Command, "文件索引还没就绪",
-            problem.Length > 0 ? problem : NativeSearchIndex.Status, "文件", "", null) { Score = 27 };
+            problem.Length > 0 ? problem : QbarIndex.Status, "文件", "", null) { Score = 27 };
     }
 
     private static List<AppItem> Apps()

@@ -1,0 +1,53 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:25
+输入: yinhang
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 205 ms
+
+归一化: yinhang
+索引查询: yinhang
+后端: 后端 Everything · "yinhang" · Everything 1.4.1 索引已加载 · 命中 2 条 · 路径补扫后 2 条 · SDK 47 ms（含路径补扫） · 本地复核剔除 0 条
+请求: 
+上下文: (none)
+分词: yinhang
+各层:
+  [normalize] yinhang
+  [tokenize] yinhang
+  [resolveKeyword] (none)
+  [translate] yinhang
+  [native] terms=yinhang
+
+候选: 2 条，展示 26 条，端到端 97.9 ms
+翻译 3.1ms · 检索 73.7ms · 重排 7.3ms · 合计 96.8ms
+模糊匹配: 已启用
+拼音索引: 正在后台构建
+本页：图片 2
+
+命中:
+  [文件] D:\note\data\plugins\siyuan-toolbar-customizer\assets\icons\Colourful_one\yinhangka.svg   (分 793 / 档 1 / 1 KB / 2026-11-15)  ← 「yinhang」ka.svg
+  [文件] D:\note\data\plugins\siyuan-toolbar-customizer\assets\icons\Colourful_three\yinhangjigou.svg   (分 792 / 档 1 / 2 KB / 2026-11-15)  ← 「yinhang」jigou.svg
+  [文件] C:\Users\64381\OneDrive\视频\Daily Easy English Expression\Daily Easy English Expression 0649 - to hang in the balance.mp4   (分 226 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Easy English Expression\Daily Easy English Expression 0521 - heading VS going.mp4   (分 221 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 202_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 203_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 204_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 205_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 206_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 207_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 208_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 209_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 210_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 211_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 212_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 213_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 214_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 215_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 216_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 217_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 218_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 219_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 220_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 221_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 222_ The Challenge.mp4   (分 220 / 档 1)
+  [文件] C:\Users\64381\OneDrive\视频\Daily Dictation\Daily English Dictation 223_ The Challenge.mp4   (分 220 / 档 1)

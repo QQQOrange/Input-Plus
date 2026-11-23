@@ -90,7 +90,20 @@ public sealed partial class HotkeyEngine : IDisposable
     /// <summary>已经触发过双击、需要吞掉抬起事件的键。</summary>
 
     /* ---- 文本片段：累计纯文本输入，命中触发词就展开 ---- */
-    private readonly System.Text.StringBuilder _snippetBuffer = new();
+    /* 这里以前是一个只会追加的 StringBuilder：退格、方向键、任何认不出的键
+     * 都只能清空它，于是"打错 → 退格改对"永远匹配不上。
+     * 现在换成可回退的缓冲（见 SnippetBuffer）：退格真的删尾巴，
+     * 认不出的编辑只标记"不可信"，内容留着等回读校对。 */
+    private readonly SnippetBuffer _snippetBuffer = new();
+
+    /// <summary>最近一次收到输入法提交键（VK_PROCESSKEY 0xE5）的时刻。</summary>
+    private long _snippetImeTick;
+
+    /// <summary>本 token 边界内"已经回读过控件文本"的代际号（-1 = 还没读过）。</summary>
+    private int _mirrorLatchGen = -1;
+
+    /// <summary>自检用：本次自检里回读控件文本的次数（空配置必须为 0）。</summary>
+    internal int TextMirrorReadsForTest { get; private set; }
 
 
     /// <summary>自检用：替换时钟，避免依赖真实等待。</summary>
@@ -848,9 +861,31 @@ public sealed partial class HotkeyEngine : IDisposable
 
     /// <summary>
     /// 仅供自检：已经命中的文本片段数（命中后不一定真的注入文字 ——
-    /// 焦点不可编辑时会跳过，所以这里只统计"匹配到"这件事）。
+    /// 焦点不可编辑、或者排队期间用户又打了字时会跳过，所以这里只统计
+    /// "真的走到展开那一步"这件事）。
     /// </summary>
     internal int SnippetMatchesForTest { get; private set; }
+
+    /// <summary>仅供自检：真正按出去的 Backspace 次数（用来证明"没删正文"）。</summary>
+    internal int SnippetDeletesForTest { get; private set; }
+
+    /// <summary>仅供自检：直接看/改片段缓冲，模拟"排队期间用户又打了字"。</summary>
+    internal SnippetBuffer SnippetBufferForTest => _snippetBuffer;
+
+    /// <summary>
+    /// 仅供自检：替换"焦点能否接受文字"的判定。
+    ///
+    /// UIA 在没有交互桌面的环境里取不到东西，默认实现只能"按允许处理" ——
+    /// 自检要能构造"焦点在按钮上"这个确切场景，就得能替掉它。
+    /// 不设的时候行为与改造前完全一样（就是 <see cref="Text.EditableTarget.AllowsTextInput"/>）。
+    /// </summary>
+    internal Func<bool> EditableForTest { get; set; } = Text.EditableTarget.AllowsTextInput;
+
+    /// <summary>
+    /// 仅供自检：接管动作队列的投递，把"已排队、未执行"这段窗口留出来。
+    /// 不设时正常投给 <c>_queue</c>。
+    /// </summary>
+    internal Func<Action, bool>? QueueForTest { get; set; }
 
     /// <summary>仅供自检：当前还有几个改键目标键处于"按下未松"的记账里。</summary>
     internal int PendingRemapsForTest

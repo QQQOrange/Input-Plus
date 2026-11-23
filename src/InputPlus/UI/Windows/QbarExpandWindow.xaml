@@ -1,4 +1,4 @@
-<Window x:Class="InputPlus.UI.Windows.QbarExpandWindow"
+﻿<Window x:Class="InputPlus.UI.Windows.QbarExpandWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
@@ -191,7 +191,7 @@
                                                        Visibility="Collapsed" SnapsToDevicePixels="True" />
                                             </Grid>
                                             <!-- 不绑 Text，改由附加属性把命中段铺成 Inlines：
-                                                 加亮区间来自搜索引擎（Everything 的 SDK 高亮或本地匹配），
+                                                 加亮区间来自搜索引擎（索引层给的高亮或本地匹配），
                                                  数据层只给偏移，界面层决定怎么画。 -->
                                             <TextBlock Grid.Column="1" FontSize="13"
                                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"

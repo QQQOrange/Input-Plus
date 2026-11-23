@@ -311,7 +311,7 @@
                     <TextBlock x:Name="FooterHint" Grid.Column="0" Text="{loc:T '↑↓ 选择    Enter 执行    Tab 补全    Esc 关闭'}"
                                FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}"
                                TextTrimming="CharacterEllipsis" />
-                    <!-- 分面计数：只统计当前候选窗口，所以文案里明写"本页" -->
+                    <!-- 分面计数：口径由 FacetsAreGlobal 决定（索引直出 = 全部命中 →「全部：」，退回按页 →「本页：」），文案由 FacetSummary 统一生成 -->
                     <TextBlock x:Name="FacetText" Grid.Column="1" Visibility="Collapsed" Margin="12,0,0,0"
                                FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}"
                                TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" />

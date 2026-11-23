@@ -241,10 +241,10 @@ public partial class App : Application
         }
 
         /* `--dump-macros`：只读打印宏步骤，排查"宏播放没效果"。 */
-        /* --everything-status：只看 Everything SDK 的可用性并实测一次查询，不建自建索引。 */
-        if (Core.CliFlags.Has(e.Args, "--everything-status"))
+        /* --index-status：只看文件索引的状态、规模、watcher 与查询延迟。 */
+        if (Core.CliFlags.Has(e.Args, "--index-status"))
         {
-            Environment.Exit(Core.QbarSearchCli.RunEverythingStatus(e.Args));
+            Environment.Exit(Core.QbarSearchCli.RunIndexStatus(e.Args));
             return;
         }
 
@@ -483,6 +483,9 @@ public partial class App : Application
             int code;
             try
             {
+                /* 子集过滤：`--selftest --only=Qbar` 只跑用例方法名含该片段的项。
+                 * 全量行为不受影响（不带 --only 时过滤串为空）。 */
+                SelfTest.Configure(CliFlags.ValueOf(e.Args, "--only"));
                 code = SelfTest.Run();
             }
             catch (Exception ex)
@@ -874,7 +877,10 @@ public partial class App : Application
         /* 文件搜索的索引在这里就叫起来：Start 幂等，真正的扫盘跑在 BelowNormal
          * 后台线程上，不挡启动那几百毫秒。Qbar 第一次搜文件时也会调一次。
          * 失败（数据目录不可写之类）只记一条警告 —— 文件搜索缺席，别的功能照常。 */
-        try { Core.Qbar.NativeSearchIndex.Start(); }
+        /* 索引层没有界面依赖：缺 ipidx.dll 这种"用户看不见但功能全没了"的情况，
+         * 由这里把既有的 Toast 出口挂进去，让它能弹一条一次性提示。 */
+        Core.Qbar.QbarIndex.NotifySink ??= Host.Notify;
+        try { Core.Qbar.QbarIndex.Start(); }
         catch (Exception ex) { CoreLog.Warn("文件索引启动失败：" + ex.Message); }
 
         // 离屏渲染（文档 / 回归用），渲染完直接退出
@@ -1096,7 +1102,7 @@ public partial class App : Application
 
         /* 索引线程是后台线程，让它自己收尾更干净：把已经扫到的部分落盘，
          * 下次启动就不用从头来。给不了时间也无所谓 —— 下次自己重建。 */
-        try { Core.Qbar.NativeSearchIndex.Stop(); } catch { }
+        try { Core.Qbar.QbarIndex.Stop(); } catch { }
 
         try { Host?.Dispose(); } catch { }   /* 预期内：清理动作，失败无副作用 */
 

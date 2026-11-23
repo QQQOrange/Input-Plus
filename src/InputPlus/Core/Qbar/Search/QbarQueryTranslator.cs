@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -22,7 +22,7 @@ internal readonly record struct QbarToken(string Text, QbarTokenKind Kind, bool 
 /// <summary>
 /// 翻译出来的"结构化查询"。索引层只认这个结构，不认识用户语法 ——
 /// 语法是交互层的事，索引是数据的事，中间这一层塌了的话，
-/// 以后想换索引（或者真的接回 Everything）就得把语法解析再写一遍。
+/// 以后想换索引就得把语法解析再写一遍。
 /// </summary>
 internal sealed class QbarSearchSpec
 {
@@ -107,7 +107,7 @@ internal sealed class QbarTranslateResult
     internal string Normalized { get; set; } = "";
     internal string Tokens { get; set; } = "";
     internal string KeywordDetail { get; set; } = "";
-    internal string EverythingText { get; set; } = "";
+    internal string IndexText { get; set; } = "";
     internal string RequestDetail { get; set; } = "";
     internal QbarSearchSpec Spec { get; } = new QbarSearchSpec();
     internal List<QbarDiagEntry> Stages { get; } = new List<QbarDiagEntry>();
@@ -147,7 +147,7 @@ internal static class QbarQueryTranslator
         result.Stage("tokenize", result.Tokens.Length == 0 ? "(no token)" : result.Tokens);
 
         var keywordNotes = new List<string>();
-        var everything = new List<string>();
+        var display = new List<string>();
         QbarSearchSpec spec = result.Spec;
 
         foreach (QbarToken token in tokens)
@@ -160,29 +160,29 @@ internal static class QbarQueryTranslator
                 if (token.Negated)
                 {
                     spec.NegTerms.Add(text);
-                    everything.Add("!" + QuoteForEverything(text));
+                    display.Add("!" + QuoteForDisplay(text));
                 }
                 else
                 {
                     spec.Phrases.Add(text);
-                    everything.Add(QuoteForEverything(text));
+                    display.Add(QuoteForDisplay(text));
                 }
                 continue;
             }
 
             if (TrySplitPredicate(text, out string key, out string value))
             {
-                if (!ApplyPredicate(spec, catalog, key, value, token.Negated, keywordNotes, everything, result, now))
+                if (!ApplyPredicate(spec, catalog, key, value, token.Negated, keywordNotes, display, result, now))
                 {
                     /* 解析不了的 token 不整条丢弃：降级成普通关键词并在调试面板标黄。
                      * 用户打错一个冒号就"什么都搜不到"是最难解释的一类 bug。 */
-                    AddTerm(spec, text, token.Negated, everything, quote: true);
+                    AddTerm(spec, text, token.Negated, display, quote: true);
                     result.Stage("degrade", "unparsed predicate " + text + " -> plain keyword", warn: true);
                 }
                 continue;
             }
 
-            AddTerm(spec, text, token.Negated, everything, quote: NeedsQuoting(text));
+            AddTerm(spec, text, token.Negated, display, quote: NeedsQuoting(text));
         }
 
         result.KeywordDetail = keywordNotes.Count == 0 ? "(none)" : string.Join("; ", keywordNotes);
@@ -193,24 +193,24 @@ internal static class QbarQueryTranslator
             result.Stage("content", "index has no content, content: ignored", warn: true);
         }
 
-        string query = string.Join(" ", everything);
-        result.EverythingText = query;
+        string query = string.Join(" ", display);
+        result.IndexText = query;
         result.Stage("translate", query.Length == 0 ? "(empty query)" : query);
         result.Stage("native", spec.Describe().Length == 0 ? "(no structure)" : spec.Describe());
         return result;
     }
 
-    private static void AddTerm(QbarSearchSpec spec, string text, bool negated, List<string> everything, bool quote)
+    private static void AddTerm(QbarSearchSpec spec, string text, bool negated, List<string> display, bool quote)
     {
         if (negated)
         {
             spec.NegTerms.Add(text);
-            everything.Add("!" + (quote ? QuoteForEverything(text) : text));
+            display.Add("!" + (quote ? QuoteForDisplay(text) : text));
         }
         else
         {
             spec.Terms.Add(text);
-            everything.Add(quote ? QuoteForEverything(text) : text);
+            display.Add(quote ? QuoteForDisplay(text) : text);
         }
     }
 
@@ -219,7 +219,7 @@ internal static class QbarQueryTranslator
     /// </summary>
     private static bool ApplyPredicate(
         QbarSearchSpec spec, QbarFilterCatalog catalog, string key, string value, bool negated,
-        List<string> notes, List<string> everything, QbarTranslateResult result, DateTime now)
+        List<string> notes, List<string> display, QbarTranslateResult result, DateTime now)
     {
         string lower = key.ToLowerInvariant();
 
@@ -233,13 +233,13 @@ internal static class QbarQueryTranslator
                 if (negated)
                 {
                     foreach (string ext in set) spec.NegExtensions.Add(ext);
-                    everything.Add("!ext:" + QbarFilterCatalog.JoinExtensions(set));
+                    display.Add("!ext:" + QbarFilterCatalog.JoinExtensions(set));
                     notes.Add("!ext:" + set.Count);
                 }
                 else
                 {
                     foreach (string ext in set) spec.Extensions.Add(ext);
-                    everything.Add("ext:" + QbarFilterCatalog.JoinExtensions(set));
+                    display.Add("ext:" + QbarFilterCatalog.JoinExtensions(set));
                     notes.Add("ext:" + set.Count);
                 }
                 return true;
@@ -251,7 +251,7 @@ internal static class QbarQueryTranslator
                 if (negated) return false;
                 if (min >= 0) spec.MinSize = Math.Max(spec.MinSize, min);
                 if (max >= 0) spec.MaxSize = spec.MaxSize < 0 ? max : Math.Min(spec.MaxSize, max);
-                everything.Add("size:" + canonical);
+                display.Add("size:" + canonical);
                 notes.Add("size:" + canonical);
                 return true;
             }
@@ -263,7 +263,7 @@ internal static class QbarQueryTranslator
                 if (negated) return false;
                 if (min >= 0) spec.MinDay = Math.Max(spec.MinDay, min);
                 if (max >= 0) spec.MaxDay = spec.MaxDay < 0 ? max : Math.Min(spec.MaxDay, max);
-                everything.Add("dm:" + ToEverythingDate(value));
+                display.Add("dm:" + ToDisplayDate(value));
                 notes.Add("date:" + value + " -> day " + spec.MinDay + ".." + spec.MaxDay);
                 return true;
             }
@@ -273,7 +273,7 @@ internal static class QbarQueryTranslator
             {
                 if (string.IsNullOrWhiteSpace(value) || negated) return false;
                 spec.Glob = value.Trim();
-                everything.Add("wfn:" + spec.Glob);
+                display.Add("wfn:" + spec.Glob);
                 notes.Add("wfn:" + spec.Glob);
                 return true;
             }
@@ -282,7 +282,7 @@ internal static class QbarQueryTranslator
             {
                 if (string.IsNullOrWhiteSpace(value) || negated) return false;
                 spec.RegexText = value;
-                everything.Add("regex:" + spec.RegexText);
+                display.Add("regex:" + spec.RegexText);
                 notes.Add("regex:" + spec.RegexText);
                 return true;
             }
@@ -291,10 +291,10 @@ internal static class QbarQueryTranslator
             {
                 if (negated) return false;
                 spec.ContentRequested = true;
-                /* 内容检索两条后端都做不到：Everything 没建内容索引（开了也慢到不可用），
+                /* 内容检索目前做不到：索引里没有正文（真建了也慢到不可用），
                  * 本地快照只有文件名。与其"接受这个词但什么都不筛"（用户会以为全盘都匹配），
                  * 不如按文件名检索并在调试面板标黄说明。 */
-                AddTerm(spec, value, false, everything, quote: NeedsQuoting(value));
+                AddTerm(spec, value, false, display, quote: NeedsQuoting(value));
                 notes.Add("content: 无内容索引，已按文件名检索");
                 return true;
             }
@@ -306,12 +306,12 @@ internal static class QbarQueryTranslator
                 if (negated)
                 {
                     spec.NegPathPins.Add(value);
-                    everything.Add("!path:" + QuoteForEverything(value));
+                    display.Add("!path:" + QuoteForDisplay(value));
                 }
                 else
                 {
                     spec.PathPins.Add(value);
-                    everything.Add("path:" + QuoteForEverything(value));
+                    display.Add("path:" + QuoteForDisplay(value));
                 }
                 notes.Add("path:" + value);
                 return true;
@@ -340,7 +340,7 @@ internal static class QbarQueryTranslator
         foreach (string ext in exts) spec.Extensions.Add(ext);
         if (exts.Count > 0 && !negated)
         {
-            everything.Add("ext:" + QbarFilterCatalog.JoinExtensions(exts));
+            display.Add("ext:" + QbarFilterCatalog.JoinExtensions(exts));
         }
 
         if (filter.SearchForFolders && !filter.SearchForFiles) spec.FoldersOnly = true;
@@ -353,7 +353,7 @@ internal static class QbarQueryTranslator
                 string trimmed = folder.Trim();
                 if (trimmed.Length == 0) continue;
                 spec.PathPins.Add(trimmed);
-                everything.Add("path:" + QuoteForEverything(trimmed));
+                display.Add("path:" + QuoteForDisplay(trimmed));
             }
         }
 
@@ -362,7 +362,7 @@ internal static class QbarQueryTranslator
         {
             if (fmin >= 0) spec.MinDay = Math.Max(spec.MinDay, fmin);
             if (fmax >= 0) spec.MaxDay = spec.MaxDay < 0 ? fmax : Math.Min(spec.MaxDay, fmax);
-            everything.Add("dm:" + ToEverythingDate(filter.DateModifiedRange));
+            display.Add("dm:" + ToDisplayDate(filter.DateModifiedRange));
         }
 
         notes.Add("filter " + filter.Keyword + " -> " + exts.Count + " exts");
@@ -377,13 +377,13 @@ internal static class QbarQueryTranslator
             foreach (string ext in inner.Spec.Extensions) spec.Extensions.Add(ext);
             if (inner.Spec.MinSize >= 0) spec.MinSize = Math.Max(spec.MinSize, inner.Spec.MinSize);
             if (inner.Spec.MaxSize >= 0) spec.MaxSize = spec.MaxSize < 0 ? inner.Spec.MaxSize : Math.Min(spec.MaxSize, inner.Spec.MaxSize);
-            if (inner.EverythingText.Length > 0) everything.Add("(" + inner.EverythingText + ")");
+            if (inner.IndexText.Length > 0) display.Add("(" + inner.IndexText + ")");
         }
 
         /* "doc:报表" 这种把关键字和关键词粘在一起的写法：冒号后面的值当普通词。 */
         if (!string.IsNullOrWhiteSpace(value))
         {
-            AddTerm(spec, value.Trim(), false, everything, NeedsQuoting(value));
+            AddTerm(spec, value.Trim(), false, display, NeedsQuoting(value));
         }
 
         return true;
@@ -419,8 +419,8 @@ internal static class QbarQueryTranslator
         return true;
     }
 
-    /// <summary>Listary 的日期写法 → Everything 的 dm: 写法。老写法原样保留，翻译串要能直接对照。</summary>
-    internal static string ToEverythingDate(string value)
+    /// <summary>Listary 的日期写法 → 展示用的 dm: 写法。老写法原样保留，翻译串要能直接对照。</summary>
+    internal static string ToDisplayDate(string value)
     {
         switch (value.Trim().ToLowerInvariant())
         {
@@ -598,7 +598,7 @@ internal static class QbarQueryTranslator
     }
 
     /// <summary>
-    /// Everything 特殊字符。这些字符在"普通关键词"里必须加引号，
+    /// 展示串的特殊字符。这些字符在"普通关键词"里必须加引号，
     /// 否则用户输入一个左括号就会被当成语法片段，查不到任何东西。
     /// </summary>
     internal static bool NeedsQuoting(string text)
@@ -625,7 +625,7 @@ internal static class QbarQueryTranslator
         return false;
     }
 
-    internal static string QuoteForEverything(string text)
+    internal static string QuoteForDisplay(string text)
     {
         var sb = new StringBuilder(text.Length + 2);
         sb.Append('"');
@@ -646,7 +646,7 @@ internal static class QbarQueryTranslator
         sb.AppendLine("normalized : " + result.Normalized);
         sb.AppendLine("tokens     : " + result.Tokens);
         sb.AppendLine("keywords   : " + result.KeywordDetail);
-        sb.AppendLine("query      : " + result.EverythingText);
+        sb.AppendLine("query      : " + result.IndexText);
         sb.AppendLine("native     : " + result.Spec.Describe());
         return sb.ToString();
     }

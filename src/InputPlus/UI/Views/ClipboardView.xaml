@@ -62,6 +62,13 @@
                                 Margin="4,0,0,0" Foreground="{DynamicResource Brush.Danger}"
                                 AutomationProperties.Name="{loc:T '清空'}"
                                 ToolTip="{loc:T '清空这一格'}" />
+                        <!-- 加入别名：与历史列表行内的那颗按钮同一个入口。
+                             这里不绑 IsEnabled（会牵动 Refresh 的绑定逻辑）：
+                             格子空的时候点一下只提示"这一格是空的"。 -->
+                        <Button Content="&#xE710;" Style="{StaticResource Button.Icon}" Click="OnAddSlot1ToAlias"
+                                Margin="4,0,0,0"
+                                AutomationProperties.Name="{loc:T '加入别名'}"
+                                ToolTip="{loc:T '把这一格的内容存成别名'}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -82,6 +89,11 @@
                                 Margin="4,0,0,0" Foreground="{DynamicResource Brush.Danger}"
                                 AutomationProperties.Name="{loc:T '清空'}"
                                 ToolTip="{loc:T '清空这一格'}" />
+                        <!-- 同剪贴板 1：空格子点一下只提示，不做 IsEnabled 绑定。 -->
+                        <Button Content="&#xE710;" Style="{StaticResource Button.Icon}" Click="OnAddSlot2ToAlias"
+                                Margin="4,0,0,0"
+                                AutomationProperties.Name="{loc:T '加入别名'}"
+                                ToolTip="{loc:T '把这一格的内容存成别名'}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -103,11 +115,39 @@
                 <ListBox Grid.Row="1" x:Name="HistoryList" Background="Transparent" BorderThickness="0"
                          ItemContainerStyle="{StaticResource RowItem}" Margin="0,10,0,0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         MouseDoubleClick="OnHistoryDoubleClick">
+                         MouseDoubleClick="OnHistoryDoubleClick"
+                         PreviewMouseRightButtonDown="OnHistoryRightButtonDown"
+                         ContextMenuOpening="OnHistoryContextOpening">
+                    <!-- 右键菜单：只加两个入口，原来的双击复制保持不变。 -->
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="{loc:T '加入别名'}" Click="OnAddHistoryToAlias" />
+                            <MenuItem Header="{loc:T '复制到系统剪贴板'}" Click="OnCopyHistoryToSystem" />
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding Preview}" TextTrimming="CharacterEllipsis"
-                                       Foreground="{DynamicResource Brush.TextSecondary}" />
+                            <!-- 预览 + 行内「加入别名」。
+                                 预览保持 CharacterEllipsis、`*` 列自动收缩；
+                                 按钮做成 28×28（图标按钮的手感尺寸），但用负上下边距
+                                 抵消掉它比一行字多出来的高度 —— 行高与改造前一致，
+                                 ItemContainerStyle 一个字节都不用动。 -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Preview}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource Brush.TextSecondary}" />
+                                <Button Grid.Column="1" Content="&#xE710;" Style="{StaticResource Button.Icon}"
+                                        Width="28" Height="28" Margin="4,-6,0,-6"
+                                        VerticalAlignment="Center" Focusable="False" IsTabStop="False"
+                                        Click="OnAddToAlias"
+                                        PreviewMouseDoubleClick="OnAddAliasDoubleClickGuard"
+                                        AutomationProperties.Name="{loc:T '加入别名'}"
+                                        ToolTip="{loc:T '加入别名：把这条内容存成别名'}" />
+                            </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>

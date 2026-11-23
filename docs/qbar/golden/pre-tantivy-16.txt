@@ -1,0 +1,66 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:31
+输入: size:10mb..1gb
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 203 ms
+
+归一化: size:10mb..1gb
+索引查询: size:10mb..1gb
+后端: 后端 Everything · "file: size:10mb..1gb" · Everything 1.4.1 索引已加载 · 命中 600 条（总 12365，窗口已截断） · SDK 6 ms · 本地复核剔除 1 条
+复核样本: [文件] D:\software\MuMuPlayer\nx_main\log\remote_lib\log_20261119132852284_25252.1.slog
+请求: 
+上下文: size:10mb..1gb
+分词: size:10mb..1gb
+各层:
+  [normalize] size:10mb..1gb
+  [tokenize] size:10mb..1gb
+  [resolveKeyword] size:10mb..1gb
+  [translate] size:10mb..1gb
+  [native] size=10485760..1073741824
+
+候选: 599 条，展示 40 条，端到端 33.6 ms
+翻译 4.6ms · 检索 18.7ms · 重排 8.7ms · 合计 32.6ms
+本页：文档 2 · 视频 1 · 程序 8 · 其他 29 · 近7天 40
+
+命中:
+  [文件] C:\swapfile.sys   (分 499 / 档 1 / 16 MB / 2026-11-20)
+  [文件] C:\Users\64381\NTUSER.DAT   (分 483 / 档 1 / 30.5 MB / 2026-11-20)
+  [文件] C:\Users\64381\NTUSER.DAT   (分 483 / 档 1 / 31.5 MB / 2026-11-23)
+  [文件] D:\software\QianwenApp\qianwen.exe   (分 483 / 档 1 / 13 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\new_qianwen.exe   (分 483 / 档 1 / 13 MB / 2026-11-19)
+  [文件] D:\Downloads\Video\海角 - 搜索 - X_2.mp4   (分 482 / 档 1 / 17.5 MB / 2026-11-16)
+  [文件] D:\Downloads\Programs\Gety-x64-0.7.0-beta.exe   (分 482 / 档 1 / 77.9 MB / 2026-11-21)
+  [文件] D:\Downloads\Programs\REDBEAN001-lirwnchh-1.1.8+30.apk   (分 480 / 档 1 / 124.7 MB / 2026-11-19)
+  [文件] D:\Downloads\Programs\Kelivo_windows_1.3.6+88_setup_2.exe   (分 480 / 档 1 / 29.1 MB / 2026-11-18)
+  [文件] D:\Downloads\Programs\hgdj_1.7.0_261119_3_ms_671_6LzLY9Ud_20261119050442_5.apk   (分 477 / 档 1 / 24.2 MB / 2026-11-19)
+  [文件] D:\tmp\ipst\file-index\names.bin   (分 475 / 档 1 / 13.2 MB / 2026-11-21)
+  [文件] D:\tmp\everything\app\Everything.db   (分 475 / 档 1 / 60.8 MB / 2026-11-21)
+  [文件] D:\tmp\ipstbundle\file-index\names.bin   (分 475 / 档 1 / 13.2 MB / 2026-11-21)
+  [文件] D:\software\opera\140.0.6074.36\opera.pak   (分 475 / 档 1 / 26.4 MB / 2026-11-20)
+  [文件] D:\software\QianwenApp\5.2.5.305\icudtl.dat   (分 475 / 档 1 / 10.3 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\icudtl.dat   (分 475 / 档 1 / 10.3 MB / 2026-11-19)
+  [文件] D:\software\QianwenApp\5.2.5.305\qianwen.dll   (分 475 / 档 1 / 317.1 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.5.305\qoffice.dll   (分 475 / 档 1 / 80.4 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\qianwen.dll   (分 475 / 档 1 / 317.2 MB / 2026-11-19)
+  [文件] D:\software\QianwenApp\5.2.7.307\qoffice.dll   (分 475 / 档 1 / 80.4 MB / 2026-11-19)
+  [文件] D:\software\QianwenApp\5.2.5.305\DirectML.dll   (分 475 / 档 1 / 17.7 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\DirectML.dll   (分 475 / 档 1 / 17.7 MB / 2026-11-19)
+  [文件] D:\software\QianwenApp\5.2.5.305\resources.pak   (分 475 / 档 1 / 42.3 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\resources.pak   (分 475 / 档 1 / 43 MB / 2026-11-19)
+  [文件] D:\software\QianwenApp\5.2.5.305\onnxruntime.dll   (分 475 / 档 1 / 21.7 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\onnxruntime.dll   (分 475 / 档 1 / 21.7 MB / 2026-11-19)
+  [文件] D:\Downloads\Compressed\wb2api-panel-2026.11.9.1131-windows-amd64\wb2api.exe   (分 475 / 档 1 / 14.7 MB / 2026-11-17)
+  [文件] D:\software\opera\140.0.6074.36\opera_browser.dll   (分 474 / 档 1 / 246.3 MB / 2026-11-20)
+  [文件] D:\Downloads\Programs\新建文件夹\红豆短剧_1.1.8_账号池全解锁版.apk   (分 474 / 档 1 / 102.2 MB / 2026-11-19)
+  [文件] D:\Downloads\Programs\新建文件夹\黄果短剧_1.7.0_纯净无广_会员版.apk   (分 474 / 档 1 / 25 MB / 2026-11-19)
+  [文件] D:\Local AI\_归档\Capslox\Capslox-Free-3.1.0.0-win64.zip   (分 473 / 档 1 / 52.9 MB / 2026-11-18)
+  [文件] C:\Users\64381\OneDrive\桌面\2.1课件.pptx   (分 467 / 档 1 / 51 MB / 2026-11-22)
+  [文件] C:\Users\64381\OneDrive\桌面\2.2课件.pptx   (分 467 / 档 1 / 79.3 MB / 2026-11-22)
+  [文件] D:\Local AI\_归档\Capslox\bin\CapsloxUI.exe   (分 467 / 档 1 / 49.3 MB / 2026-11-18)
+  [文件] D:\software\myself\InputPlus Data\file-index\names.bin   (分 467 / 档 1 / 13.2 MB / 2026-11-21)
+  [文件] D:\software\myself\InputPlus Data\everything\Everything.db   (分 467 / 档 1 / 81.2 MB / 2026-11-20)
+  [文件] D:\software\QianwenApp\5.2.5.305\agent_host\agent_host.exe   (分 467 / 档 1 / 80.8 MB / 2026-11-17)
+  [文件] D:\software\QianwenApp\5.2.7.307\agent_host\agent_host.exe   (分 467 / 档 1 / 80.8 MB / 2026-11-19)
+  [文件] D:\Local AI\_归档\WGestures 2\run\PresentationFramework.dll   (分 465 / 档 1 / 15.5 MB / 2026-11-18)
+  [文件] D:\Local AI\_归档\WGestures 2\full\PresentationFramework.dll   (分 465 / 档 1 / 15.5 MB / 2026-11-18)

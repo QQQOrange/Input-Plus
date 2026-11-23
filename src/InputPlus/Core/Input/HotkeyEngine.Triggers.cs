@@ -533,24 +533,32 @@ public sealed partial class HotkeyEngine
 
 
     /// <summary>
-    /// 文本片段：把这次按键折算成字符、累计到缓冲区，命中就展开。
+    /// 文本片段：把这次按键折算成**文本事件**喂给缓冲，命中就展开。
     ///
-    /// **保守实现**的两条底线：
-    ///   · 认不出的键（方向键、功能键、非 US 布局字符）一律**清零**缓冲区，
-    ///     宁可丢掉一次展开，也不要跨键拼出假触发词；
-    ///   · 只在"不按任何修饰键"的纯文本输入时累计。
+    /// 与旧实现的三处关键差别（都是为了"打错 → 退格改对 → 仍然能触发"）：
+    ///   · 退格/删除让缓冲**回退**，不再清空；
+    ///   · 方向键只移动插入符，不清缓冲；
+    ///   · 认不出、或不被前台收到的编辑只把缓冲标成"不可信"，内容留着，
+    ///     等下一次 token 边界回读控件真实文本来重新对齐。
+    ///
+    /// 保守的那条底线没变：被引擎吞掉的键（触发键/手势/替换层/改键/层内）
+    /// 仍然不参与拼接 —— 只是从"清空"改成了"标记不可信"。
     /// </summary>
     /// <returns>true = 这次按键已被片段展开消费，调用方应吞掉它。</returns>
     private bool ObserveSnippet(AppSettings s, int vk)
     {
+        /* ① 一条别名都没配：立刻返回。
+         *
+         * 这一段在**每个按键**上都会跑，是"打字不涩"的前提：
+         * 不读控件文本、不分配、不问设备。 */
         var all = s.Global.Snippets;
         if (all == null || all.Count == 0)
         {
-            _snippetBuffer.Clear();
+            _snippetBuffer.Reset();
             return false;
         }
 
-        /* 前缀可以配好几个（`;` `/` `、` 都行），比较时全角/半角等价
+        /* ② 前缀过滤。前缀可以配好几个（`;` `/` `、` 都行），比较时全角/半角等价
          * —— 触发词按屏上字符写，缓冲区按物理键记，折叠之后才对得上。 */
         var opt = s.Hotstring ?? new HotstringOptions();
         var prefixes = opt.EffectivePrefixes;
@@ -560,78 +568,229 @@ public sealed partial class HotkeyEngine
 
         if (list.Count == 0)
         {
-            _snippetBuffer.Clear();
+            _snippetBuffer.Reset();
             return false;
         }
 
-        /* ---- 中文别名 ----
+        /* 记下"输入法刚提交过"的时刻，供下面的组字判定用。 */
+        if (vk == 0xE5) _snippetImeTick = Environment.TickCount64;
+
+        /* ③ 输入法组字保护（新增）。
+         *
+         * 组字状态下的退格删的是**拼音**，屏幕上少掉的是一个字母、而不是一个汉字，
+         * 把它当成"删掉屏幕上的一个字"会让缓冲和屏幕立刻错位（甚至删掉触发词的一部分）。
+         * 这种情况退格原样交给输入法，缓冲只标记不可信，等提交后再回读对齐。 */
+        if (vk is 0x08 or 0x2E && IsImeComposing(vk))
+        {
+            _snippetBuffer.MarkUntrusted();
+            return false;
+        }
+
+        /* ---- ④ 镜像回读（权威判据） ----
          *
          * 输入法组字对键盘钩子是隐形的：钩子只看得到物理键（拼音字母），
          * 「中文」这两个字要等输入法提交才落进编辑框。所以配置里存在非 ASCII
          * 触发词时，在"文字已经落进控件"的那几个键上（空格 / 回车 / 输入法提交
          * 0xE5）把焦点控件的尾巴读回来，用真实文本匹配。
          *
-         * 读不到（自绘控件、权限更高的窗口）就沿用按键缓冲区 —— 英文别名
-         * 完全不受影响，也不会因为某个程序不响应 WM_GETTEXT 就卡住打字。 */
-        if (vk is 0x20 or 0x0D or 0xE5 && HasNonAsciiTrigger(list))
+         * 现在这条路径放宽到四种情况（见 ShouldReadMirror）：缓冲不可信、
+         * 刚被清空过、有中文触发词、以及「用控件文本校验」开着且缓冲非空。
+         * 放宽的意义是**纠错**：缓冲到底对不对，只有控件里的字说了算。
+         *
+         * 读不到（自绘控件、权限更高的窗口）就维持原状，走原来的精确匹配 ——
+         * 不能因为某个程序不响应 WM_GETTEXT 就把打字卡住。 */
+        if (vk is 0x20 or 0x0D or 0xE5 && ShouldReadMirror(list, opt))
         {
-            if (TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string mirror) && mirror.Length > 0)
+            /* 每个 token 边界最多读一次：同一个缓冲状态重复读只是白等 40ms 超时。 */
+            int genBefore = _snippetBuffer.Generation;
+            if (_mirrorLatchGen != genBefore)
             {
-                _snippetBuffer.Clear();
-                _snippetBuffer.Append(SnippetMatcher.Trim(mirror));
+                _mirrorLatchGen = genBefore;
+                TextMirrorReadsForTest++;
+                if (TextMirror.TryReadTail(SnippetMatcher.MaxBuffer, out string mirror) && mirror.Length > 0)
+                    ApplyMirror(list, SnippetMatcher.Trim(mirror));
             }
         }
 
-        /* 空格触发：打完触发词**再按空格**才替换（默认）。 */
+        /* ⑤ 空格触发：打完触发词**再按空格**才替换（默认）。 */
         if (opt.ExpandOnSpace && vk == 0x20)
         {
-            string typed = _snippetBuffer.ToString();
-            var ready = SnippetMatcher.Match(list, typed, ForegroundProcess);
+            var ready = SnippetMatcher.MatchSpan(list, _snippetBuffer.Snapshot(), ForegroundProcess);
             if (ready == null)
             {
-                _snippetBuffer.Clear();
+                /* 空格是硬边界：这句话到此为止，下一个 token 从零开始。
+                 * 以前这里只是清空，现在同样是清空 —— 但清空之后
+                 * 下次判定会先回读控件文本，所以"屏幕上有、缓冲里没有"也不会漏。 */
+                _snippetBuffer.Reset();
                 return false;               // 没命中 → 空格照常输入
             }
 
-            ExpandSnippet(ready);
+            ExpandSnippet(ready.Value);
             return true;                    // 通知调用方把这次空格吞掉
         }
 
-        char? ch = AsciiCharOf(vk, _shiftDown);
-        if (ch == null)
+        /* ⑥ 其它终止符（回车 / 输入法提交）：只标一个 token 边界，不写缓冲。
+         *
+         * 这里**不展开** —— 改造前的结论就是"只有可打印字符和（空格模式下的）
+         * 空格会触发"，保持不变。挂起中的展开会因为没有新字符而由计时器收尾，
+         * 或者因为这里复位了缓冲而作废（两种结果都与改造前一致）。 */
+        if (vk is 0x20 or 0x0D or 0xE5)
         {
-            _snippetBuffer.Clear();      // 非文本键：断开
+            _snippetBuffer.Apply(TextEventKind.Terminator);
+            _snippetBuffer.Reset();
             return false;
         }
 
-        _snippetBuffer.Append(ch.Value);
-        if (_snippetBuffer.Length > SnippetMatcher.MaxBuffer)
+        /* ⑦ 编辑键：删就真的删，移就只移 —— 都不清空缓冲。 */
+        if (vk == 0x08) { _snippetBuffer.Apply(TextEventKind.DeleteBack); return false; }
+        if (vk == 0x2E) { _snippetBuffer.Apply(TextEventKind.DeleteForward); return false; }
+
+        switch (vk)
         {
-            string trimmed = SnippetMatcher.Trim(_snippetBuffer.ToString());
-            _snippetBuffer.Clear();
-            _snippetBuffer.Append(trimmed);
+            case 0x25: _snippetBuffer.Apply(TextEventKind.CaretLeft); return false;
+            case 0x27: _snippetBuffer.Apply(TextEventKind.CaretRight); return false;
+            case 0x24: _snippetBuffer.Apply(TextEventKind.CaretHome); return false;
+            case 0x23: _snippetBuffer.Apply(TextEventKind.CaretEnd); return false;
         }
 
-        var hit = SnippetMatcher.Match(list, _snippetBuffer.ToString(), ForegroundProcess);
+        /* ⑧ 可打印字符。 */
+        char? ch = AsciiCharOf(vk, _shiftDown);
+        if (ch == null)
+        {
+            /* 认不出的键（Esc / Tab / 上下方向键 / 功能键 / 非 US 布局字符）：
+             * 缓冲可能已经对不上屏幕，但**不清空** —— 下次 token 边界回读校对。
+             * 这一条正是"删到空、再退格、再打对"能命中的原因。 */
+            _snippetBuffer.MarkUntrusted();
+            return false;
+        }
+
+        _snippetBuffer.Apply(TextEventKind.Insert, ch.Value);
+
+        /* 空格触发模式：命中先攒着，等空格；不在这里展开。 */
+        if (opt.ExpandOnSpace) return false;
+
+        var typed = _snippetBuffer.Snapshot();
+        var hit = SnippetMatcher.MatchSpan(list, typed, ForegroundProcess);
         if (hit == null) return false;
 
         /* 有更长的候选（例如配了 ;m 和 ;mail，现在命中 ;m）就先别展开：
          * 等 120ms，用户接着打 'a' 就说明他要的是 ;mail。
          * 没有更长的候选时立刻展开 —— 常规场景保持"打完就变"的手感。 */
-        /* 空格触发模式：命中先攒着，等空格；不在这里展开。 */
-        if (opt.ExpandOnSpace) return false;
-
-        if (SnippetMatcher.HasLongerCandidate(list, _snippetBuffer.ToString(), ForegroundProcess))
+        if (SnippetMatcher.HasLongerCandidate(list, typed, ForegroundProcess))
         {
             _snippetPending = hit;
             _snippetPendingAt = DateTime.Now;
-            _snippetPendingBuffer = _snippetBuffer.ToString();
+            _snippetPendingGen = _snippetBuffer.Generation;
             return false;
         }
 
-        ExpandSnippet(hit);
+        ExpandSnippet(hit.Value);
         return false;
     }
+
+    /// <summary>
+    /// 把回读到的控件文本落到缓冲上。
+    ///
+    /// **两种用途，语气完全不同**：
+    ///   · 缓冲已经不可信 / 是空的 / 配置里有中文触发词 → 这次读到的就是**权威**，
+    ///     直接覆盖（中文别名只能走这条路，改造前就是这样）；
+    ///   · 缓冲可信且非空 → 这次读到的只是**校验**：必须和我们记的尾巴对得上才采纳。
+    ///
+    /// 为什么校验要"对得上"才采纳：控件的 WM_GETTEXT 并不总是我们以为的那个文本框。
+    /// 控制台、终端、部分自绘/富文本控件返回的是一大段与输入行无关的文本 ——
+    /// 无条件采纳会把一份**本来是对的**缓冲冲掉，结果是"改造前能展开的别名突然不展开了"。
+    /// 对不上就当这次没读到，维持改造前的行为（失败即降级）。
+    /// </summary>
+    private void ApplyMirror(List<Snippet> list, string mirror)
+    {
+        bool authoritative = !_snippetBuffer.Trusted
+                             || _snippetBuffer.Length == 0
+                             || HasNonAsciiTrigger(list);
+        if (authoritative)
+        {
+            _snippetBuffer.ReplaceWith(mirror, trusted: true);
+            return;
+        }
+
+        string typed = _snippetBuffer.Snapshot();
+        if (SnippetMatcher.Fold(mirror).EndsWith(SnippetMatcher.Fold(typed), StringComparison.Ordinal))
+            _snippetBuffer.ReplaceWith(mirror, trusted: true);
+    }
+
+    /// <summary>缓冲空了多久之后就值得回读一次控件文本（毫秒）。</summary>
+    private const int MirrorStaleMs = 1500;
+
+    /// <summary>
+    /// B5：这次 token 边界该不该回读控件里的真实文本。
+    ///
+    /// 四条任选其一（顺序即优先级，都是"能读到就一定比猜准"的情形）：
+    ///   ① 缓冲已经不可信（发生过建模不了的编辑）；
+    ///   ② 缓冲是空的、但刚刚有过编辑（用户可能整段删了重打）；
+    ///   ③ 候选里有非 ASCII 触发词 —— 中文别名只能靠控件文本，
+    ///      这是改造前就有的行为，必须保留；
+    ///   ④ 「用控件文本校验」开着且缓冲非空（新设置，默认开）。
+    /// </summary>
+    private bool ShouldReadMirror(List<Snippet> list, HotstringOptions opt)
+    {
+        if (!_snippetBuffer.Trusted) return true;
+
+        if (_snippetBuffer.Length == 0
+            && Environment.TickCount64 - _snippetBuffer.LastChangeTick <= MirrorStaleMs) return true;
+
+        if (HasNonAsciiTrigger(list)) return true;
+
+        if (opt.VerifyWithControlText && _snippetBuffer.Length > 0) return true;
+
+        return false;
+    }
+
+    /// <summary>现在是不是"输入法正在组字"（B3③ 的判定顺序）。</summary>
+    private bool IsImeComposing(int vk)
+    {
+        if (vk == 0xE5) return true;                  // 这次按键本身就是输入法提交键
+
+        if (ImeHasCompositionString()) return true;    // 输入上下文里确实有组字串
+
+        return Environment.TickCount64 - _snippetImeTick <= 300;   // 刚提交过，退格很可能还在改拼音
+    }
+
+    /// <summary>问 IMM32：前台窗口的输入上下文里有没有组字串。</summary>
+    private static bool ImeHasCompositionString()
+    {
+        IntPtr hwnd = IntPtr.Zero;
+        IntPtr imc = IntPtr.Zero;
+        try
+        {
+            hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return false;
+
+            imc = ImmGetContext(hwnd);
+            if (imc == IntPtr.Zero) return false;      // TSF-only 窗口拿不到上下文，按"没在组字"处理
+
+            return ImmGetCompositionStringW(imc, GcsCompStr, null, 0) > 0;
+        }
+        catch
+        {
+            /* 预期内：探针，拿不到就按"没在组字"处理（退格照旧记进缓冲）。 */
+            return false;
+        }
+        finally
+        {
+            if (imc != IntPtr.Zero && hwnd != IntPtr.Zero)
+            {
+                try { ImmReleaseContext(hwnd, imc); } catch { /* 释放失败不影响判定 */ }
+            }
+        }
+    }
+
+    /// <summary>IMM32：GCS_COMPSTR（"取组字串"）。</summary>
+    private const int GcsCompStr = 0x0008;
+
+    /* NativeMethods 里没有这一个，而白名单不允许动那个文件 ——
+     * 就地声明在 partial 类里，效果完全一样。 */
+    [System.Runtime.InteropServices.DllImport("imm32.dll")]
+    private static extern int ImmGetCompositionStringW(IntPtr hIMC, int dwIndex, byte[]? lpBuf, int dwBufLen);
+
 
     /// <summary>这批候选里有没有非 ASCII 触发词（中文/日文/全角符号）。</summary>
     private static bool HasNonAsciiTrigger(List<Snippet> list)

@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:30
+输入: audio:
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 209 ms
+
+归一化: audio:
+索引查询: ext:aac;ac3;aif;aifc;aiff;amr;ape;au;cda;dts;flac;it;m3u;m4a;mid;midi;mka;mod;mp2;mp3;mpa;ogg;ogm;ra;rmi;snd;spc;umx;vgm;vgz;voc;wav;wma
+后端: 后端 Everything · "ext:aac;ac3;aif;aifc;aiff;amr;ape;au;cda;dts;flac;it;m3u;m4a;mid;midi;mka;mod;mp2;mp3;mpa;ogg;ogm;ra;rmi;snd;spc;umx;vgm;vgz;voc;wav;wma file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 8119，窗口已截断） · SDK 10 ms · 本地复核剔除 0 条
+请求: 
+上下文: filter audio -> 33 exts
+分词: audio:
+各层:
+  [normalize] audio:
+  [tokenize] audio:
+  [resolveKeyword] filter audio -> 33 exts
+  [translate] ext:aac;ac3;aif;aifc;aiff;amr;ape;au;cda;dts;flac;it;m3u;m4a;mid;midi;mka;mod;mp2;mp3;mpa;ogg;ogm;ra;rmi;snd;spc;umx;vgm;vgz;voc;wav;wma
+  [native] ext=33 ext files-only filter=音频
+
+候选: 600 条，展示 40 条，端到端 38.5 ms
+翻译 4.8ms · 检索 23.2ms · 重排 9.0ms · 合计 37.5ms
+本页：音频 40 · 近7天 40
+
+命中:
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_temp\013e3d88-0263-44d0-954b-c0455112f356.wav   (分 327 / 档 0 / 35 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_temp\bee2948c-b2c6-4ae2-aa0b-9c07e1a2ff14.wav   (分 327 / 档 0 / 32 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_temp\ca652226-a57b-4a2c-b058-166c74a00a6b.wav   (分 327 / 档 0 / 32 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_temp\dcf96a78-f895-405d-aa02-f14dffd528ce.wav   (分 327 / 档 0 / 115 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\000a05bf-a964-475e-ade0-a82dc3fd8815.wav   (分 327 / 档 0 / 85 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\00796d05-2f1e-4b78-bc6d-50de5433c054.wav   (分 327 / 档 0 / 572 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\017c3cd8-7047-4b59-b989-f629d76b61a3.wav   (分 327 / 档 0 / 26 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\01ae5068-824d-4121-b89a-8073e98ab5bc.wav   (分 327 / 档 0 / 338 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\02358428-9e32-452a-add1-fdad257487af.wav   (分 327 / 档 0 / 158 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\02bb2dc2-49e9-4cc4-8c9c-4d134410d260.wav   (分 327 / 档 0 / 45 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\02cc6bdd-b243-4d7e-b91b-8a12cc2b827d.wav   (分 327 / 档 0 / 224 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\04c7c5d3-9713-4d60-b26c-4d08190bbc17.wav   (分 327 / 档 0 / 408 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0521f031-8f46-46bb-99b0-30a7f81fb481.wav   (分 327 / 档 0 / 246 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\056554a4-74d8-4144-98d8-92c2ffc0c354.wav   (分 327 / 档 0 / 218 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\06653ac5-2b54-4e10-a17b-1fd16b38dfb8.wav   (分 327 / 档 0 / 361 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0687a776-821e-4162-9e2d-23739c56b685.wav   (分 327 / 档 0 / 270 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\06e97d29-62c2-483d-9799-3554a8440c54.wav   (分 327 / 档 0 / 240 KB / 2026-11-21)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\07089923-42b6-4032-be30-ab57c1098542.wav   (分 327 / 档 0 / 167 KB / 2026-11-21)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\071e32cf-fab0-47ed-b4fb-60c4aac4cf0b.wav   (分 327 / 档 0 / 27 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0762ec9c-7934-4046-adb4-4b2d1527b080.wav   (分 327 / 档 0 / 4 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\07660b3f-f33c-475b-818b-992f66f52bf0.wav   (分 327 / 档 0 / 536 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\07f89f02-01b6-45b9-8171-1d65835b7492.wav   (分 327 / 档 0 / 124 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\08009779-8609-45c1-9c47-02120125ec92.wav   (分 327 / 档 0 / 788 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\08d1ee20-18e5-4087-9910-09a386051868.wav   (分 327 / 档 0 / 136 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\09ef5a88-8895-4d5e-82f0-4969fd72c2eb.wav   (分 327 / 档 0 / 87 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0a3e478a-00f4-4998-84fa-a93717bf9dfd.wav   (分 327 / 档 0 / 343 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0a502446-583c-42dd-ab81-440e4244b74e.wav   (分 327 / 档 0 / 311 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0afb92f3-92e2-4d4a-9aa0-8ca656d4f447.wav   (分 327 / 档 0 / 94 KB / 2026-11-21)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0b0cc3e6-6bd5-4d2f-85a0-595a63cf8b34.wav   (分 327 / 档 0 / 991 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0b46d791-2deb-4a94-910e-68f592bd93a1.wav   (分 327 / 档 0 / 145 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0b4c54bf-3804-47a2-be8c-c70fcde6ea5d.wav   (分 327 / 档 0 / 171 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0b9faeac-566b-4b77-b103-7fa4015ef889.wav   (分 327 / 档 0 / 232 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0be82682-64fd-4c57-b8ec-5b74d6c8e8bb.wav   (分 327 / 档 0 / 204 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0cacb80a-fb87-4590-9b6f-f97ef40391cc.wav   (分 327 / 档 0 / 225 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0db4b3f0-adc2-4baa-ab95-73c0e3168a80.wav   (分 327 / 档 0 / 78 KB / 2026-11-23)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0e4aa79f-079a-4113-82d1-6fec056611ee.wav   (分 327 / 档 0 / 89 KB / 2026-11-21)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0e606326-e8a2-475d-96aa-1494649162c8.wav   (分 327 / 档 0 / 429 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0eca86bd-5d2f-40a6-9ad4-a67a6e9961be.wav   (分 327 / 档 0 / 154 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\0f35fa0e-8643-44e0-82ea-820cbfd7bb1b.wav   (分 327 / 档 0 / 455 KB / 2026-11-22)
+  [文件] C:\Users\64381\AppData\Roaming\com.lazytyper.desktop\audio_history\1016e6f5-6ac5-4864-83f7-f9cd9ded03ed.wav   (分 327 / 档 0 / 75 KB / 2026-11-23)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
@@ -49,7 +49,7 @@ internal static class QbarTitleHighlight
         => (IReadOnlyList<QbarTitleSegment>?)element.GetValue(SegmentsProperty);
 
     /// <summary>
-    /// 把"名字 + 命中区间"切成段。区间是搜索引擎给的偏移量（现在 Everything 也会
+    /// 把"名字 + 命中区间"切成段。区间是搜索引擎给的偏移量（后端会
     /// 通过 SDK 返回它自己算的精确命中位置），这里只切不拼字符串 ——
     /// 在数据层插标记会把带 &lt; &amp; 的文件名弄坏，也会让复制出来的名字变脏。
     /// </summary>

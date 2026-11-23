@@ -13,12 +13,14 @@ public sealed partial class HotkeyEngine
     /// <summary>等长候选时的等待窗口。</summary>
     public const int SnippetWaitMs = 120;
 
-    private Snippet? _snippetPending;
+    private SnippetMatch? _snippetPending;
     private DateTime _snippetPendingAt;
-    private string _snippetPendingBuffer = "";
+
+    /// <summary>挂起那一刻的缓冲代际号：变了就说明用户又动了手，这次展开作废。</summary>
+    private int _snippetPendingGen;
 
     /// <summary>
-    /// 定时器每 tick 调一次：等待窗口过了、而且缓冲没再增长（说明用户没继续打），
+    /// 定时器每 tick 调一次：等待窗口过了、而且缓冲没再变（说明用户没继续打），
     /// 就把刚才挂起的那条片段展开。
     /// </summary>
     internal void FlushPendingSnippet()
@@ -30,21 +32,27 @@ public sealed partial class HotkeyEngine
         _snippetPending = null;
 
         /* 缓冲变了 = 用户在继续打（或换了键），交给后面新的匹配。
-         * 这里在界面线程读、钩子线程写，理论上可能撞上 —— StringBuilder 不保证线程安全，
-         * 所以整段兜住：读不出来就当"没命中"，绝不能把异常抛到计时器里。 */
-        string now;
-        try { now = _snippetBuffer.ToString(); }
-        catch { return; }
-
-        if (!string.Equals(now, _snippetPendingBuffer, StringComparison.Ordinal)) return;
-        ExpandSnippet(pending);
+         *
+         * 这里以前是"把缓冲读出来、跟挂起时的字符串比一遍"。改成比代际号：
+         * 一个整数就够，不必为了比较再拷一次字符串（钩子线程和这里会抢同一份内容）。 */
+        if (_snippetBuffer.Generation != _snippetPendingGen) return;
+        ExpandSnippet(pending.Value);
     }
 
     /// <summary>真正执行展开（删触发词 + 打内容）。</summary>
-    private void ExpandSnippet(Snippet hit)
+    private void ExpandSnippet(SnippetMatch match)
     {
-        SnippetMatchesForTest++;
-        _snippetBuffer.Clear();
+        var hit = match.Snippet;
+
+        /* 复位**之后**立刻取代际号：这是"展开这一瞬间的屏幕状态"。
+         * 排队执行时如果已经不是这个号，说明用户在这几毫秒里又打了字，
+         * 那这一次展开就作废 —— 宁可少展开一次，也不能去删用户刚打的正文。
+         *
+         * 比的是**内容代际号**（ContentGeneration），不是总代际号：
+         * 空格自己的抬起事件会把缓冲标成不可信，那只是记账、屏幕上没变一个字，
+         * 不该把刚排好的这次展开冲掉。 */
+        _snippetBuffer.Reset();
+        int expected = _snippetBuffer.ContentGeneration;
         _snippetPending = null;
 
         /* 使用统计：只在内存里加，落盘交给调用方（AppHost 的防抖保存）。 */
@@ -56,23 +64,33 @@ public sealed partial class HotkeyEngine
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "记录别名使用次数"); }
 
-        int deleteCount = hit.Trigger.Length;
+        /* 删几个字符由**命中的触发词**决定，不由缓冲长度决定：
+         *   · 精确匹配时 ConsumedLength == Trigger.Length，删除数与改造前逐字一致；
+         *   · 缓冲不可信、回读又失败时也走这个数（失败模式矩阵的要求）。 */
+        int deleteCount = match.ConsumedLength;
         string text = hit.Text ?? "";
 
         /* 触发词已经打进前台了，所以要先删掉再输入。
          * 投递到动作队列：钩子里做 IO/发送会拖慢每一次按键。 */
-        _queue.Post(() =>
+        PostForTest(() =>
         {
             try
             {
+                if (_snippetBuffer.ContentGeneration != expected) return;
+
+                /* 计数紧跟"代际号没变"这一句：被作废的展开不算命中，
+                 * 否则自检里"缓冲变了就不展开"这条用例观察不到区别。 */
+                SnippetMatchesForTest++;
+
                 /* 焦点不在可编辑控件上就放弃展开：
                  * 否则 Backspace 会去删别的东西、内容会打到别处。
                  * 判断放在队列里（STA），不能放钩子里。 */
-                if (!Text.EditableTarget.AllowsTextInput()) return;
+                if (!EditableForTest()) return;
 
                 for (int i = 0; i < deleteCount; i++)
                 {
                     InputSender.Tap(0x08);          // Backspace
+                    SnippetDeletesForTest++;
                     System.Threading.Thread.Sleep(6);
                 }
                 InputSender.Text(text);
@@ -95,6 +113,14 @@ public sealed partial class HotkeyEngine
             }
             catch (Exception ex) { CoreLog.Warn("片段展开失败：" + ex.Message); }
         });
+    }
+
+    /// <summary>动作队列投递：自检可以接管，用来在"已排队、未执行"这段窗口里插一脚。</summary>
+    private void PostForTest(Action action)
+    {
+        var hook = QueueForTest;
+        if (hook != null) { hook(action); return; }
+        _queue.Post(action);
     }
 
     /// <summary>

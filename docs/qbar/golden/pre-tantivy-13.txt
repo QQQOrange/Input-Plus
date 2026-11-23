@@ -1,0 +1,65 @@
+=== Qbar 查询调试（语义层） ===
+时间: 2026-11-23 13:03:30
+输入: video:
+索引状态: 文件索引就绪：41.5 万个文件、7 万个目录
+索引规模: 文件 415365 个，目录 69792 个
+等待索引: 214 ms
+
+归一化: video:
+索引查询: ext:3g2;3gp;3gp2;3gpp;asf;avi;bdmv;bik;divx;drc;f4v;flc;fli;flv;ifo;ivf;m1v;m2ts;m2v;m4v;mkv;mov;mp4;mpe;mpeg;mpg;mpv2;mts;ogm;pss;pva;qt;rm;rmvb;roq;rpm;smk;swf;vob;vp6;webm;wm;wmp;wmv
+后端: 后端 Everything · "ext:3g2;3gp;3gp2;3gpp;asf;avi;bdmv;bik;divx;drc;f4v;flc;fli;flv;ifo;ivf;m1v;m2ts;m2v;m4v;mkv;mov;mp4;mpe;mpeg;mpg;mpv2;mts;ogm;pss;pva;qt;rm;rmvb;roq;rpm;smk;swf;vob;vp6;webm;wm;wmp;wmv file:" · Everything 1.4.1 索引已加载 · 命中 600 条（总 6780，窗口已截断） · SDK 12 ms · 本地复核剔除 0 条
+请求: 
+上下文: filter video -> 44 exts
+分词: video:
+各层:
+  [normalize] video:
+  [tokenize] video:
+  [resolveKeyword] filter video -> 44 exts
+  [translate] ext:3g2;3gp;3gp2;3gpp;asf;avi;bdmv;bik;divx;drc;f4v;flc;fli;flv;ifo;ivf;m1v;m2ts;m2v;m4v;mkv;mov;mp4;mpe;mpeg;mpg;mpv2;mts;ogm;pss;pva;qt;rm;rmvb;roq;rpm;smk;swf;vob;vp6;webm;wm;wmp;wmv
+  [native] ext=44 ext files-only filter=视频
+
+候选: 600 条，展示 40 条，端到端 43.7 ms
+翻译 4.6ms · 检索 28.9ms · 重排 8.7ms · 合计 42.7ms
+本页：视频 40 · 近7天 40
+
+命中:
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\index.d.mts   (分 435 / 档 1 / 12 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\fp\flow.d.mts   (分 427 / 档 1 / 13 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\fp\pipe.d.mts   (分 427 / 档 1 / 12 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\map.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\fp\index.d.mts   (分 427 / 档 1 / 4 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\some.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\sum.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\find.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\some.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\every.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\index.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\keyBy.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\lerp.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\mean.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\every.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\index.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\keyBy.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\filter.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\reduce.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\clamp.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\index.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\range.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\round.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\sumBy.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\filter.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\set\reduce.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\string\pad.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\util\defer.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\util\index.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\util\queue.d.mts   (分 427 / 档 1 / 2 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\countBy.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\findKey.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\forEach.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\map\mapKeys.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\meanBy.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\median.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\math\random.d.mts   (分 427 / 档 1 / 1 KB / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\object\omit.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\object\pick.d.mts   (分 427 / 档 1 / 2026-11-22)
+  [文件] C:\Users\64381\.dsh\profiles\desktop\node_modules\es-toolkit\dist\server\exec.d.mts   (分 427 / 档 1 / 2 KB / 2026-11-22)

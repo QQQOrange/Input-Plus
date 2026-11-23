@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -1323,14 +1323,15 @@ public static partial class SelfTest
     }
 
     /// <summary>
-    /// 文件搜索只有一个内核：Input Plus 自己的索引（Core/Qbar/NativeSearchIndex.cs）。
+    /// 文件搜索只有一个内核：进程内 tantivy 索引（Core/Qbar/QbarIndex.cs）。
     ///
-    /// 这里验的是"接线对不对"，不是"索引全不全" —— 扫到哪一步取决于数据目录里
-    /// 已经落盘的快照，自检不该跟着它翻车，更不该顺手拉起一次扫盘。
+    /// 这里验的是"接线对不对"，不是"索引全不全" —— 扫到哪一步取决于数据目录里的
+    /// 索引状态，自检不该跟着它翻车，更不该顺手拉起一次扫盘（自检进程里 Start()
+    /// 是空实现，见 QbarIndex.IsSelfTestProcess）。
     /// </summary>
     private static void TestQbarNativeIndex()
     {
-        string dir = Core.Qbar.NativeSearchIndex.IndexDir ?? "";
+        string dir = Core.Qbar.QbarIndex.IndexDir ?? "";
         Check("文件索引目录落在数据目录下",
             dir.Length > 0 && dir.StartsWith(AppPaths.DataDir, StringComparison.OrdinalIgnoreCase), dir);
 
@@ -1338,13 +1339,16 @@ public static partial class SelfTest
          * 自检的数据目录是一次性的，所以这里必然走"还没有索引"那条路。 */
         string probe = "zz-inputplus-selftest-" + Guid.NewGuid().ToString("N");
         int count = -1;
-        try { count = Core.Qbar.NativeSearchIndex.Search(probe, 5, 300).Count; }
-        catch (Exception ex) { Check("文件索引查询不抛异常", false, ex.GetType().Name + ": " + ex.Message); }
-        if (count >= 0)
+        try
         {
+            var spec = new Core.Qbar.Search.QbarSearchSpec();
+            spec.Terms.Add(probe);
+            count = Math.Max(0, Core.Qbar.QbarIndex.Search(
+                Core.Qbar.Search.QbarTantivyBackend.BuildQuery(spec), 5).Total);
             Check("文件索引查询不抛异常", true, probe);
             Check("不相干的词搜不到东西", count == 0, count.ToString());
         }
+        catch (Exception ex) { Check("文件索引查询不抛异常", false, ex.GetType().Name + ": " + ex.Message); }
 
         /* 用户报的旧行为：Qbar 会先自己扫桌面/文档，并给一条"稍后再输入一次"的占位。
          * 那条路已经拆了，不许再回来。 */
