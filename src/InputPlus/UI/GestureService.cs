@@ -290,6 +290,15 @@ public sealed partial class GestureService : IDisposable
         _linger = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
         _fade = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
 
+        /* 轨迹采样定时器（8ms）同样必须建在界面线程上 —— 懒建的版本第一次是在
+         * 钩子线程上建的，那个线程没跑 Dispatcher 队列，于是永远不采样，
+         * 一笔只有两个点，手势永远匹配不上。详细见 StartPoll 的注释。 */
+        _poll = new DispatcherTimer(DispatcherPriority.Send, dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(8),
+        };
+        _poll.Tick += OnPoll;
+
         /* 附加菜单的键盘唤出：设置一变就重注册（用户改完组合键立刻生效），
          * 启动时先按当前设置注册一次。 */
         _host.SettingsChanged += ApplyMiddleHotkey;
@@ -321,6 +330,10 @@ public sealed partial class GestureService : IDisposable
         try
         {
             if (_gestureHook is { MouseHookInstalled: false }) _gestureHook.Restart();
+            /* Attach() 那一次如果抛了（线程创建被拒、桌面切换失败），_gestureHook 会一直是 null，
+             * 上面那条模式匹配对 null 不成立 —— 自愈入口于是空转，手势和平滑滚动从此静默全失效，
+             * 界面上还显示"已开启"。这里补上"没建起来就重建"。 */
+            else if (_gestureHook == null) Attach();
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "重装手势鼠标钩子"); }
     }
@@ -333,6 +346,7 @@ public sealed partial class GestureService : IDisposable
             _gestureHook.GestureButtonEvent += OnButton;
             _gestureHook.GestureWheelEvent += OnWheel;
             _gestureHook.KeySeen += OnKeySeen;
+            _gestureHook.MouseMoveEvent += OnHookMouseMove;
             _gestureHook.Start(mouseOnly: true);
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "安装手势鼠标钩子"); }
@@ -1248,6 +1262,17 @@ public sealed partial class GestureService : IDisposable
             return false;
         }
 
+        /* 「{作用目标} 完全不触发手势」这条开关必须和按键那条路一致：起手时判过
+         * triggers.IsBlocked（见 OnButton），滚轮这条路以前漏了 ——
+         * 同一个程序里右键划一笔没反应、滚一格却照旧执行动作（角落/贴边滚轮同此一条入口）。 */
+        var wheelSpecials = SpecialTargetsAt();
+        if (new GestureTriggerMap(settings.GestureOptions)
+                .IsBlocked(app, wheelSpecials.Desktop, wheelSpecials.Taskbar))
+        {
+            if (IsTracking) ResetActive();
+            return false;
+        }
+
         bool active;
         int vk;
         string activeApp;
@@ -1775,6 +1800,18 @@ public sealed partial class GestureService : IDisposable
     {
         try
         {
+            /* 滚轮会话没有超时就永远结束不了：它的结束条件只有"那颗键抬起"，而这条
+             * WM_*BUTTONUP 在 UAC 安全桌面 / 锁屏 / 钩子重装缝隙里会丢。丢了之后
+             * 会话一直活着 —— 之后每滚一格都执行一次动作，界面上什么也看不出来。
+             * 这里按"按住超过 60 秒"当抬手丢了处理（正常按住不放几乎到不了）。 */
+            if (_wheelSession.Expired(Environment.TickCount64))
+            {
+                AttachDiag("guard: 滚轮会话超时（抬手丢了），收掉这一路");
+                _wheelSession.Reset();
+                _wheelPressSwallowedVk = 0;
+                Interlocked.Exchange(ref _swallowUpVk, 0);
+            }
+
             if (IsTracking)
             {
                 /* 按下重新被吞掉之后，`GetAsyncKeyState` 查不出真实状态（系统队列里根本没有这次按下），
@@ -1794,7 +1831,15 @@ public sealed partial class GestureService : IDisposable
                     bool wheelFired = _wheelSession.Fired;
                     ResetActive();
                     if (wheelFired) AttachDiag("  -> 滚轮会话：动作已经执行过，不补发点击");
-                    else if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, vk);
+                    else if (stillDown)
+                    {
+                        /* ResetActive 刚刚把两个锁存都清了。只写「抬起要补发」是不够的：
+                         * 消费它的那条路（OnButton 的 _swallowUpVk 分支）要求 _swallowUpVk
+                         * 也等于这颗键，否则这次抬起原样漏给前台 —— 前台收到一个没有配对的
+                         * MouseUp，被吞掉的按下永远回不来。两个一起写。 */
+                        Interlocked.Exchange(ref _replayClickOnUpVk, vk);
+                        Interlocked.Exchange(ref _swallowUpVk, vk);
+                    }
                     else if (!IsMenuButton(vk)) QueueReplayTap(vk, countAsTap: false);
                 }
                 return;
@@ -1829,15 +1874,52 @@ public sealed partial class GestureService : IDisposable
 
     private void StartPoll(GestureOptions opts)
     {
-        _poll ??= new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(8) };
-        _poll.Tick -= OnPoll;
-        _poll.Tick += OnPoll;
+        /* 轨迹采样定时器**必须绑在界面线程的 Dispatcher 上**。
+         *
+         * 以前这里是懒建：`_poll ??= new DispatcherTimer(...)`。第一次起笔是从
+         * **钩子线程**（KeyboardHook 的消息泵）进来的，`Dispatcher.CurrentDispatcher`
+         * 于是拿到那个线程的 Dispatcher —— 那里只有一个 Win32 GetMessage 循环，
+         * 没人跑 Dispatcher 队列，8ms 的定时器**永远不响**。
+         * 结果：一笔只采到"起点 + 松手点"两个点（实测 点数=2 长度=532），
+         * 而 DrawnStroke 要求 ≥3 点 → 永远「手势未命中（偏差 1.000）」，
+         * 用户看到的就是"鼠标手势全失效"。构造函数里已经按界面线程建好，
+         * 这里只兜底（且绝不在钩子线程上新建）。 */
+        if (_poll == null)
+        {
+            var ui = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+            _poll = new DispatcherTimer(DispatcherPriority.Send, ui) { Interval = TimeSpan.FromMilliseconds(8) };
+            _poll.Tick += OnPoll;
+        }
         _poll.Start();
     }
 
-    private void OnPoll(object? sender, EventArgs e)
+    /// <summary>
+    /// 钩子线程上来的鼠标移动：直接记进当前这一笔。
+    ///
+    /// 轨迹采样以前只靠 8ms 的 DispatcherTimer，实测在扫索引/重扫期间被饿到
+    /// "一笔只采到 2 个点"，而 DrawnStroke 要求 ≥3 点 —— 用户看到的就是
+    /// "手势全失效（偏差 1.000）"。钩子本身消息驱动，每来一条移动就记一点，
+    /// 跟定时器彻底解耦。口径和轮询一致：2px 一处。
+    /// </summary>
+    private void OnHookMouseMove(int x, int y)
     {
-        bool stale;
+        try
+        {
+            lock (_gate)
+            {
+                if (!_active) return;
+                double dx = x - _last.X, dy = y - _last.Y;
+                if (dx * dx + dy * dy < 4) return;
+                _points.Add(new GestureMath.Pt(x, y));
+                _last = new GestureMath.Pt(x, y);
+                _lastMoveAt = Environment.TickCount64;
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "钩子轨迹采样"); }
+    }
+
+    private void OnPoll(object? sender, EventArgs e)
+    {        bool stale;
         lock (_gate)
         {
             /* 不能用 GetAsyncKeyState 判断“键还按着没有”：手势起点键的
@@ -1868,7 +1950,13 @@ public sealed partial class GestureService : IDisposable
             }
             else if (lostVk != 0)
             {
-                if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, lostVk);
+                if (stillDown)
+                {
+                    /* 同 OnOverlayGuard 那条兜底：ResetActive 已把两个锁存清空，
+                     * 必须把 _swallowUpVk 一起写回去，抬起才会被配对吞掉并补发点击。 */
+                    Interlocked.Exchange(ref _replayClickOnUpVk, lostVk);
+                    Interlocked.Exchange(ref _swallowUpVk, lostVk);
+                }
                 /* 抬起真的丢了（键已经松了）：中键不能只是"没反应" —— 菜单没接手就补发一次，
                  * 和右键走同一条兜底（v1.5）。 */
                 else if (!menuTook) QueueReplayTap(lostVk, countAsTap: false);
@@ -2249,7 +2337,9 @@ public sealed partial class GestureService : IDisposable
             /* 未识别 = 屏幕上什么都不留。WG2 的手势结束处理只有两句
              * （A/T.cs:115-119）：A_f3.D() 把轨迹整条清空、e() 收红点并停计时。
              * 没有「未识别」字样，也没有"灰线多留一会儿" —— 那两样是我们自己加的。 */
-            if (extent >= opts.MinMove) CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
+            if (extent >= opts.MinMove)
+                CoreLog.Info($"手势未命中（偏差 {score:0.000}）点数={points.Count} 长度={extent:0} "
+                             + $"起=({points[0].X:0},{points[0].Y:0}) 末=({points[points.Count - 1].X:0},{points[points.Count - 1].Y:0})");
             HideOverlay(0);
         }
     }
@@ -2450,6 +2540,12 @@ public sealed partial class GestureService : IDisposable
          * 以前这里把它漏掉了 —— 某颗键**只配了贴边手势**时，按下根本不开笔，
          * 那条手势永远轮不到 PickEdge，等于配了不生效。 */
         "edge" => true,
+        /* 「多步手势」（Kind=steps）必须也开一笔：它是靠"按住键、分段停顿"记步骤，
+         * 松手时拿 _stepsDrawn 和 Steps 逐项比（见 PickSteps）。
+         * 以前这里没有这一条，switch 直接落到 _ => false —— 候选被过滤空、
+         * _multiExpected 永远为 false、PickSteps 永远不执行：
+         * 界面上能选能存、真按下去毫无反应，HasSteps / CloseStepLocked 全是死代码。 */
+        "steps" => true,
         _ => false
     };
 

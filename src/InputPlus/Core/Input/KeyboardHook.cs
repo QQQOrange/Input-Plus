@@ -107,6 +107,16 @@ public sealed class KeyboardHook : IDisposable
     public Action<int, bool, bool>? KeySeen;
 
     /// <summary>
+    /// 原始鼠标移动：(屏幕 X, 屏幕 Y)。
+    ///
+    /// 为什么要有：手势的轨迹采样原先只靠一个 8ms 的 DispatcherTimer，实测在整盘扫索引
+    /// 期间它被饿到"一笔只采到 2 个点"，而 DrawnStroke 要求 ≥3 点 —— 表现就是
+    /// "鼠标手势全失效（偏差 1.000）"。钩子本身是消息驱动的，每来一条移动就记一点，
+    /// 不依赖任何定时器。只在鼠标钩子装上时有效。
+    /// </summary>
+    public Action<int, int>? MouseMoveEvent;
+
+    /// <summary>
     /// 平滑滚动的前置滚轮回调：(原始 delta, injected, 是否水平) → 是否吞掉。
     ///
     /// 位置在手势之后、<see cref="WheelEvent"/> / 改键之前：手势优先，其次是
@@ -127,7 +137,8 @@ public sealed class KeyboardHook : IDisposable
     /// 不能只看 _running 这个“意愿”标志 —— 钩子句柄为 0 时说明安装失败或被系统摘掉，
     /// 此时 _running 仍是 true，自愈监控会一直以为一切正常。
     /// </summary>
-    public bool IsRunning => _running && _hook != IntPtr.Zero;
+    public bool IsRunning => _running
+        && (_mouseOnly ? _mouseHook != IntPtr.Zero : _hook != IntPtr.Zero);
 
     /// <summary>钩子最近一次异常/失效的时间，用于自愈监控。</summary>
     public DateTime LastErrorTime { get; private set; } = DateTime.MinValue;
@@ -409,7 +420,8 @@ public sealed class KeyboardHook : IDisposable
     private IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         // 探针：确认钩子宿主到底有没有收到这次鼠标事件（排查"按住拖拽收不到鼠标"）。
-        if (wParam.ToInt64() != 512)
+        // 探针关着时连字符串都不拼 —— 这是鼠标钩子回调里，每次点击/滚轮都会走到的位置。
+        if (wParam.ToInt64() != 512 && Modules.HoldDrag.HookProbe.Enabled)
         {
             Modules.HoldDrag.HookProbe.W("HOST-MS nCode=" + nCode + " msg=" + wParam.ToInt64());
         }
@@ -417,7 +429,13 @@ public sealed class KeyboardHook : IDisposable
         try
         {
             int msg = (int)wParam;
-            if (msg == WM_MOUSEWHEEL)
+            if (msg == 512 && MouseMoveEvent is { } onMove)
+            {
+                /* 纯鼠标移动：手势要靠它采样。先做这一条，下面那些按键分支都不沾它。 */
+                var md = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                onMove(md.pt.X, md.pt.Y);
+            }
+            else if (msg == WM_MOUSEWHEEL)
             {
                 var data = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
                 Interlocked.Increment(ref _wheelEvents);
@@ -483,7 +501,8 @@ public sealed class KeyboardHook : IDisposable
                  * 丢掉"右键菜单"这类基本操作）。 */
                 if (GestureButtonEvent is { } gestureButton && gestureButton(vk, down, injected))
                 {
-                    Modules.HoldDrag.HookProbe.W("HOST-MS 被手势吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
+                    if (Modules.HoldDrag.HookProbe.Enabled)
+                        Modules.HoldDrag.HookProbe.W("HOST-MS 被手势吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
                     return new IntPtr(1);
                 }
 
@@ -502,7 +521,8 @@ public sealed class KeyboardHook : IDisposable
                 {
                     if (handler(vk, down, injected))
                     {
-                        Modules.HoldDrag.HookProbe.W("HOST-MS 被改键吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
+                        if (Modules.HoldDrag.HookProbe.Enabled)
+                            Modules.HoldDrag.HookProbe.W("HOST-MS 被改键吞掉 vk=" + vk + " down=" + down + " injected=" + injected);
                         return new IntPtr(1);
                     }
                 }
@@ -620,12 +640,21 @@ public sealed class KeyboardHook : IDisposable
             CoreLog.Error($"键盘钩子重装失败，错误码 {Marshal.GetLastWin32Error()}");
         }
 
+        /* 实验开关 CLP_NO_MOUSE_HOOK=1 时 Start 不装鼠标钩子；看门狗也必须认这个开关，
+         * 否则 5 秒后的第一次重装就把它装回去了，排查"键盘钩子被摘"的实验结论被悄悄推翻。 */
+        if (Environment.GetEnvironmentVariable("CLP_NO_MOUSE_HOOK") == "1") return;
+
         var freshMouse = SetWindowsHookEx(WH_MOUSE_LL, _mouseProc!, GetModuleHandle(null), 0);
         if (freshMouse != IntPtr.Zero)
         {
             var oldMouse = _mouseHook;
             _mouseHook = freshMouse;
             if (oldMouse != IntPtr.Zero) UnhookWindowsHookEx(oldMouse);
+        }
+        else
+        {
+            LastErrorTime = DateTime.Now;
+            CoreLog.Error($"鼠标钩子重装失败，错误码 {Marshal.GetLastWin32Error()}");
         }
     }
 
@@ -704,7 +733,7 @@ public sealed class KeyboardHook : IDisposable
     /// </summary>
     public bool Ping(int timeoutMs = 400)
     {
-        if (!_running || _hook == IntPtr.Zero) return false;
+        if (!IsRunning) return false;
         if (_uiThreadMode) return true;      // 界面线程在跑，钩子回调就有人处理
         if (_threadId == 0) return false;
         long before = Interlocked.Read(ref _pingAcks);
