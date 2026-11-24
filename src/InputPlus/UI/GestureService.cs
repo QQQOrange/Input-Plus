@@ -39,6 +39,9 @@ public sealed partial class GestureService : IDisposable
     private GestureOverlayWindow? _overlay;
     private DispatcherTimer? _poll;
 
+    /// <summary>钩子移动回调被调用的累计次数（诊断"手势采样为什么是 2 个点"用）。</summary>
+    private long _moveEventCount;
+
     /// <summary>覆盖层看门狗（见 <see cref="OnOverlayGuard"/>）：100ms 兜一次底。</summary>
     private DispatcherTimer? _overlayGuard;
     private DispatcherTimer? _linger;
@@ -1903,6 +1906,7 @@ public sealed partial class GestureService : IDisposable
     /// </summary>
     private void OnHookMouseMove(int x, int y)
     {
+        Interlocked.Increment(ref _moveEventCount);
         try
         {
             lock (_gate)
@@ -2338,7 +2342,7 @@ public sealed partial class GestureService : IDisposable
              * （A/T.cs:115-119）：A_f3.D() 把轨迹整条清空、e() 收红点并停计时。
              * 没有「未识别」字样，也没有"灰线多留一会儿" —— 那两样是我们自己加的。 */
             if (extent >= opts.MinMove)
-                CoreLog.Info($"手势未命中（偏差 {score:0.000}）点数={points.Count} 长度={extent:0} "
+                CoreLog.Info($"手势未命中（偏差 {score:0.000}）点数={points.Count} 长度={extent:0} 钩子移动={_moveEventCount} "
                              + $"起=({points[0].X:0},{points[0].Y:0}) 末=({points[points.Count - 1].X:0},{points[points.Count - 1].Y:0})");
             HideOverlay(0);
         }
