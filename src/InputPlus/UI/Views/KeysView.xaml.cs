@@ -285,19 +285,48 @@ public partial class KeysView : UserControl
     /// <summary>
     /// 把键盘设成当前档位的大小。
     ///
-    /// 这里**不再读可用空间**：档位是多少就是多少。窗口比它宽，多出来的
-    /// 空间是键盘两侧的居中留白；窗口比它窄（屏幕本身装不下），外层
-    /// ScrollViewer 出横向滚动条，键帽一个像素都不缩。
+    /// 用户要求"选大时页面要完全适配键盘、不能出现左右拖的横条"：可用宽度比档位
+    /// 窄时按比例缩到刚好装下（Viewbox 是 Uniform，宽高等比，键帽不会变形）；
+    /// 窗口够宽时就是档位本身的尺寸。
     /// </summary>
     internal void ApplyKeyboardSize()
     {
         var preset = EffectivePreset;
-        double w = WidthOf(preset);
-        double h = HeightOf(preset);
+        var (w, h) = FitToWidth(WidthOf(preset), HeightOf(preset), KeyboardScroll?.ActualWidth ?? 0);
 
         KeyboardPanel.Width = w;
         KeyboardPanel.Height = h;
         SizeText.Text = $"{w:0} × {h:0}";
+    }
+
+    /// <summary>
+    /// 可用宽度比档位窄时按等比缩到刚好装下；够宽就保持档位原尺寸。
+    /// 抽成纯函数是为了自检能直接断言（窗口宽度在自检里造不出来）。
+    /// </summary>
+    internal static (double Width, double Height) FitToWidth(double wantWidth, double wantHeight, double available)
+    {
+        if (wantWidth <= 0 || available <= 40 || available >= wantWidth)
+            return (wantWidth, wantHeight);
+
+        double scale = available / wantWidth;
+        return (Math.Floor(wantWidth * scale), Math.Floor(wantHeight * scale));
+    }
+
+    /// <summary>键盘区宽度变了（窗口缩放 / 页面滚动条出现）→ 重新按可用宽度适配。</summary>
+    private void OnKeyboardViewportChanged(object sender, SizeChangedEventArgs e) => ApplyKeyboardSize();
+
+    /// <summary>
+    /// 鼠标停在键盘上时滚轮也要能滚整页。
+    ///
+    /// KeyboardScroll 纵向是关的（它只负责横向，横向条现在也去掉了），
+    /// ScrollViewer 会把滚轮当成"滚我自己"吃掉 —— 页面就完全滚不动。
+    /// 这里把滚轮转给外层 PageScroll，按 1/3 走（和系统一次滚三行的手感一致）。
+    /// </summary>
+    private void OnKeyboardWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (PageScroll == null || e.Handled) return;
+        PageScroll.ScrollToVerticalOffset(PageScroll.VerticalOffset - e.Delta / 3.0);
+        e.Handled = true;
     }
 
     /// <summary>

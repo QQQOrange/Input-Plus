@@ -964,12 +964,15 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		long windowLong = Native.GetWindowLong(num2, Native.GWL_STYLE);
 		// 一处有意偏离 hooks.c:1520-1545：原版只认黑名单，而我们的进程里有设置窗、拖拽提示、
 		// 各种 HUD/浮层 —— 它们铺在屏幕上，按住触发键想拖别的窗口时极易先把自家窗口拖走（实测发生：
-		// 主窗口被拖到 -426,0，界面全乱）。自家窗口永远不是拖拽目标。
+		// 主窗口被拖到 -426,0，界面全乱）。
+		// 但用户明确要求"按住拖拽也要能在 Input Plus 自己的窗口上用"：所以只放行**主窗口**
+		// （在 OwnWindowRegistry 里登记过的那一个），菜单/HUD/浮层照旧跳过。
 		uint ownPid;
 		Native.GetWindowThreadProcessId(num2, out ownPid);
-		if (ownPid == (uint)Environment.ProcessId && !DragOwnWindowForTest)
+		if (ownPid == (uint)Environment.ProcessId && !DragOwnWindowForTest
+			&& !InputPlus.Core.HoldDrag.OwnWindowRegistry.IsAllowed(num2))
 		{
-			HookProbe.W("BeginDrag：是本进程自己的窗口，跳过 hwnd=0x" + num2.ToString("X"));
+			HookProbe.W("BeginDrag：是本进程的浮层/菜单窗口，跳过 hwnd=0x" + num2.ToString("X"));
 			return false;
 		}
 		// 黑名单（进程名 / 窗口标题 | 窗口类名），语义与 hooks.c 的 blacklisted 一致。

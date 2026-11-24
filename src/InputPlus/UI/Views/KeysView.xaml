@@ -261,18 +261,23 @@
                     <!--
                         ② 键盘本体。
 
-                        纵向滚动**故意关掉**：一层 ScrollViewer 里同时能横能纵，
-                        一旦横向滚动条冒出来（占 17 DIP 高），内容就又高出 17 DIP，
-                        纵向滚动条跟着出现、再吃掉 17 DIP 宽 —— 于是横向的又不够了，
-                        窗口边缘拖动时会看到两条滚动条互相触发着闪。
-                        纵向交给外面整页那个 PageScroll，这里只管横向。
+                        纵向滚动**故意关掉**：纵向交给外面整页那个 PageScroll。
+                        横向滚动条也去掉了（用户要求）：选"大"时页面要完全适配键盘，
+                        而不是在键盘下面冒一条可以左右拖的横条。可用宽度不够时
+                        ApplyKeyboardSize 会按比例把键盘缩到刚好装下（Viewbox 等比缩放）。
+
+                        PreviewMouseWheel 把滚轮转给整页：ScrollViewer 会先把滚轮
+                        当成"滚我自己"吃掉，纵向又是关的 —— 不转发的话鼠标停在键盘上
+                        整页就滚不动（用户实测）。
                     -->
                     <ScrollViewer Grid.Row="1" x:Name="KeyboardScroll"
-                                  HorizontalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Disabled"
                                   CanContentScroll="False"
                                   Focusable="False"
-                                  PanningMode="HorizontalOnly">
+                                  PanningMode="HorizontalOnly"
+                                  PreviewMouseWheel="OnKeyboardWheel"
+                                  SizeChanged="OnKeyboardViewportChanged">
                         <!--
                             Viewbox 只做一件事：把 1058×330 的设计图按档位放大/缩小。
                             它自己的 Width/Height 由 ApplyKeyboardSize 按档位写死，

@@ -132,6 +132,7 @@ public static partial class SelfTest
 
         Section("按住拖拽");
         T(nameof(TestHoldDrag), TestHoldDrag);
+        T(nameof(TestHoldDragOwnWindow), TestHoldDragOwnWindow);
 
         Section("搜索引擎");
         T(nameof(TestSearchEngines), TestSearchEngines);
@@ -290,6 +291,7 @@ public static partial class SelfTest
         Section("界面文案");
         T(nameof(TestUiText), TestUiText);
         T(nameof(TestThemeMetrics), TestThemeMetrics);
+        T(nameof(TestKeyboardFit), TestKeyboardFit);
 
         Section("界面语言");
         T(nameof(TestLocalization), TestLocalization);

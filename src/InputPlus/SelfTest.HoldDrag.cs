@@ -42,6 +42,37 @@ public static partial class SelfTest
         }
     }
 
+    /// <summary>
+    /// 「按住拖拽也要能在 Input Plus 自己的窗口上用」。
+    ///
+    /// 但只放行**登记过的主窗口**：附加菜单 / OSD / Toast 这些自家浮层铺在屏幕上，
+    /// 被误拖走会让界面乱掉（历史事故：主窗口被拖到 -426,0）。
+    /// </summary>
+    private static void TestHoldDragOwnWindow()
+    {
+        Core.HoldDrag.OwnWindowRegistry.ClearForTest();
+
+        IntPtr main = new(0x1234);
+        IntPtr menu = new(0x5678);
+
+        Check("拖拽白名单：没登记就不是可拖窗口",
+            !Core.HoldDrag.OwnWindowRegistry.IsAllowed(main));
+
+        Core.HoldDrag.OwnWindowRegistry.Register(main);
+        Check("拖拽白名单：登记后允许拖本程序窗口",
+            Core.HoldDrag.OwnWindowRegistry.IsAllowed(main));
+        Check("拖拽白名单：没登记的自家浮层仍然跳过",
+            !Core.HoldDrag.OwnWindowRegistry.IsAllowed(menu));
+
+        Core.HoldDrag.OwnWindowRegistry.Unregister(main);
+        Check("拖拽白名单：注销后不再允许",
+            !Core.HoldDrag.OwnWindowRegistry.IsAllowed(main));
+        Check("拖拽白名单：空句柄永远不允许",
+            !Core.HoldDrag.OwnWindowRegistry.IsAllowed(IntPtr.Zero));
+
+        Core.HoldDrag.OwnWindowRegistry.ClearForTest();
+    }
+
     private static void TestHoldDragCore()
     {
         var fresh = new AppSettings();

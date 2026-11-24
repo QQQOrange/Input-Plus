@@ -604,6 +604,26 @@ public static partial class SelfTest
             UI.Views.KeysView.WindowFixedWidth, expected);
     }
 
+    /// <summary>
+    /// 键盘"大"档不再出横向滚动条：可用宽度不够时按等比缩到刚好装下。
+    /// 用户原话是"调到大之后键盘下面出现一条可以左右拖的横条，页面应该完全适配键盘"。
+    /// </summary>
+    private static void TestKeyboardFit()
+    {
+        var same = UI.Views.KeysView.FitToWidth(1058, 330, 1200);
+        CheckEqual("键盘适配：窗口够宽时保持档位原尺寸", $"{same.Width:0}x{same.Height:0}", "1058x330");
+
+        var narrow = UI.Views.KeysView.FitToWidth(1058, 330, 900);
+        Check("键盘适配：不够宽时按比例缩小", narrow.Width <= 900 && narrow.Width > 850,
+            $"{narrow.Width:0}x{narrow.Height:0}");
+        Check("键盘适配：宽高等比（比例不变）",
+            Math.Abs((narrow.Height / narrow.Width) - (330.0 / 1058.0)) < 0.01,
+            $"{narrow.Height / narrow.Width:0.###}");
+
+        var unmeasured = UI.Views.KeysView.FitToWidth(1058, 330, 0);
+        CheckEqual("键盘适配：还没排版时不缩放", $"{unmeasured.Width:0}", "1058");
+    }
+
     private static void TestUiText()
     {
         CheckEqual("成功文案：已 + 动词", UiText.Done("恢复默认设置"), "已恢复默认设置");
@@ -1415,13 +1435,18 @@ public static partial class SelfTest
                     $"panelW={bandW:0}");
             }
 
-            // ④ 窗口小于档位需求 → 键盘一个像素都不缩，改由滚动条兜底
+            /* ④ 窗口小于档位需求 → 键盘按比例缩到刚好装下，**不出横向滚动条**。
+             *
+             * v1.6.1 改的语义（用户要求）：以前是"一个像素都不缩，靠横向滚动条兜底"，
+             * 实际用起来就是"选了大档，键盘下面多一条左右拖的横条"。 */
             UI.Views.KeysView.RenderPresetOverrideForTest = "xlarge";
             var tight = view.KeyboardScaleForTest(900, 600);
-            Check("窗口装不下时键盘保持档位大小、不缩",
-                Math.Abs(tight.Scale - 1.15) < 0.001, $"scale={tight.Scale:0.000}");
-            Check("窗口装不下时改用横向滚动", tight.NeedsScrollX,
+            Check("窗口装不下时键盘按比例缩小（不再保持档位原尺寸）",
+                tight.Scale < 1.15 && tight.Scale > 0.5, $"scale={tight.Scale:0.000}");
+            Check("窗口装不下时不再出现横向滚动条", !tight.NeedsScrollX,
                 $"panelW={tight.KeyWidth * declared / 4.0:0}");
+            Check("窗口装不下时缩完不超出可用宽度",
+                tight.KeyWidth * declared / 4.0 <= 950, $"panelW={tight.KeyWidth * declared / 4.0:0}");
 
             /* ⑤ 页面最小尺寸 = 键盘宽 + 卡片两侧的固定宽度。
              *

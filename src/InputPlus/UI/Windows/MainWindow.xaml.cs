@@ -90,6 +90,10 @@ public partial class MainWindow : Window
         _host.SettingsChanged -= UpdateStatus;
         if (ReferenceEquals(Instance, this)) Instance = null;
 
+        /* 注销"允许按住拖拽"的窗口登记：窗口没了，HWND 可能被复用。 */
+        try { Core.HoldDrag.OwnWindowRegistry.Unregister(new WindowInteropHelper(this).Handle); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "注销拖拽窗口"); }
+
         // 页面里也有订阅了宿主事件的（例如「同步与备份」），
         // 走 Unloaded 让它们自己退订 —— 关闭窗口时 WPF 不保证会发 Unloaded，
         // 所以这里显式通知一次。
@@ -106,6 +110,12 @@ public partial class MainWindow : Window
         WindowChrome.ApplyShell(this, ThemeManager.Current == ThemeManager.Mode.Dark ||
                                       (ThemeManager.Current == ThemeManager.Mode.System && ThemeManager.IsDarkSystem));
         WindowChrome.EnableRounded(this);
+
+        /* 按住拖拽也要能在本程序自己的窗口上用：把主窗口登记进白名单。
+         * 其余自家窗口（附加菜单 / OSD / Toast / 手势覆盖层）不登记，照旧跳过 ——
+         * 它们铺在屏幕上，被误拖走会让界面乱掉。 */
+        try { Core.HoldDrag.OwnWindowRegistry.Register(new WindowInteropHelper(this).Handle); }
+        catch (Exception ex) { CoreLog.Swallow(ex, "登记拖拽窗口"); }
         UpdateStatus();
         ClampToWorkArea();
         // 首次运行且没有指定页面时，自动停在“快速上手”

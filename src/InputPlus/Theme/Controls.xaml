@@ -13,18 +13,15 @@
     <sys:Double x:Key="ScrollBarWidth">7</sys:Double>
 
     <!-- ============ 全局圆角 ============
-         只留这几档，别再写零散数值（以前同一个界面里 4/5/6/7/9/10/11/12/14/16 混着用，
-         看着就是"每块圆得都不一样"）：
-           Card    14 —— 卡片、弹层、面板
-           Control  9 —— 按钮、输入框、列表行、键帽
-           Small    6 —— 小标签、徽章、胶囊小按钮
-           Tiny     3 —— 滚动条、细条、16px 小色块
+         用户要求"所有地方圆角一致"：可见圆角统一成 12（取窗口外框与内层卡片两个弧度的中间值）。
+         四个键保留只是为了语义清楚，值必须相同；别再写零散数值：
+           Card / Control / Small / Tiny 全部 = 12 —— 全站只有这一个可见圆角
            Pill   999 —— 圆形（靠 CornerRadius 自动夹成胶囊/圆点）
          例外只允许两种：0（直角窗口边缘）和四角不等的不对称圆角（贴合对话框用的）。 -->
-    <CornerRadius x:Key="Radius.Card">14</CornerRadius>
-    <CornerRadius x:Key="Radius.Control">9</CornerRadius>
-    <CornerRadius x:Key="Radius.Small">6</CornerRadius>
-    <CornerRadius x:Key="Radius.Tiny">3</CornerRadius>
+    <CornerRadius x:Key="Radius.Card">12</CornerRadius>
+    <CornerRadius x:Key="Radius.Control">12</CornerRadius>
+    <CornerRadius x:Key="Radius.Small">12</CornerRadius>
+    <CornerRadius x:Key="Radius.Tiny">12</CornerRadius>
     <CornerRadius x:Key="Radius.Pill">999</CornerRadius>
 
     <!-- ============ 文本 ============ -->

@@ -13,16 +13,16 @@ namespace InputPlus.UI;
 internal static class ThemeMetrics
 {
     /// <summary>卡片 / 弹层 / 面板的圆角。</summary>
-    internal const double RadiusCard = 14;
+    internal const double RadiusCard = 12;
 
     /// <summary>按钮 / 输入框 / 列表行 / 键帽的圆角。</summary>
-    internal const double RadiusControl = 9;
+    internal const double RadiusControl = 12;
 
     /// <summary>小标签 / 徽章的圆角。</summary>
-    internal const double RadiusSmall = 6;
+    internal const double RadiusSmall = 12;
 
     /// <summary>滚动条 / 细条 / 16px 小色块的圆角。</summary>
-    internal const double RadiusTiny = 3;
+    internal const double RadiusTiny = 12;
 
     /// <summary>圆形（CornerRadius 会自动夹成胶囊）。</summary>
     internal const double RadiusPill = 999;

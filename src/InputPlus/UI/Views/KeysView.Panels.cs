@@ -428,6 +428,9 @@ public partial class KeysView : UserControl
     /// </summary>
     private void OnPageScrollSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        /* 页面宽度变了 → 键盘也要重新按可用宽度适配（选"大"时不再出横向滚动条）。 */
+        ApplyKeyboardSize();
+
         double width = e.NewSize.Width;
         bool compact = width > 0 && width < CompactBreakpoint;
         if (_editorCompact == compact) return;

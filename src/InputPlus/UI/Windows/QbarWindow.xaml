@@ -38,9 +38,9 @@
                 <!-- 毛玻璃底衬。BackdropFill 垫"抓到的背后屏幕 + 模糊"，TintFill 是主题色的一层薄纱；
                      两块都铺满整个面板、不吃鼠标，原来的输入行/结果列表仍在上面，层级不变。
                      没有模糊图时 BackdropFill 是空的，看起来就跟以前一样是纯色面板。 -->
-                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12.5"
+                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12"
                         IsHitTestVisible="False" />
-                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12.5"
+                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="12"
                         IsHitTestVisible="False" Background="{DynamicResource Brush.OverlayCard}" />
 
                 <!-- 输入行：标签 + 输入框 -->
