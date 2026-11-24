@@ -45,8 +45,30 @@ public sealed partial class GestureService : IDisposable
     /// <summary>钩子线程攒下的原始移动点（无锁队列：钩子只入队，界面线程只出队）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<GestureMath.Pt> _hookPoints = new();
 
-    /// <summary>界面线程从钩子取走的点数（诊断"采样为什么只有两个点"用）。</summary>
+    /// <summary>钩子移动回调被调用的累计次数（诊断"手势采样为什么只有两个点"用）。</summary>
     private long _moveEventCount;
+
+    /// <summary>
+    /// 全局鼠标按下：中键/附加菜单开着、而点在菜单外面 → 收起。
+    ///
+    /// 不能只靠 `Window.Deactivated`：菜单是 Topmost 自绘窗口，唤出那一刻我们进程不是前台，
+    /// `ForceForeground` 有可能失败（前台锁定 / 安全软件）。失败时窗口永远拿不到焦点，
+    /// Deactivated 也就永远不触发 —— 用户点了桌面别处，菜单赖着不走。
+    /// 钩子回调里的 MouseDownEvent 是"真人按下"的唯一可靠来源（注入的已被过滤）。
+    /// </summary>
+    private void OnGlobalMouseDown(int x, int y, int msg)
+    {
+        try
+        {
+            var win = _middleMenu;
+            if (win == null || !win.IsVisible) return;
+            var tl = win.PointToScreen(new Point(0, 0));
+            var br = win.PointToScreen(new Point(win.ActualWidth, win.ActualHeight));
+            if (x >= tl.X && x <= br.X && y >= tl.Y && y <= br.Y) return;
+            Ui(() => { try { win.Close(); } catch { } });
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：点外面收起"); }
+    }
 
     /// <summary>上次实时识别时的点数与时刻（节流用：见 OnPoll 里的 previewDue）。</summary>
     private int _lastPreviewPoints;
@@ -360,6 +382,7 @@ public sealed partial class GestureService : IDisposable
             _gestureHook.GestureWheelEvent += OnWheel;
             _gestureHook.KeySeen += OnKeySeen;
             _gestureHook.MouseMoveEvent += OnHookMouseMove;
+            _gestureHook.MouseDownEvent += OnGlobalMouseDown;
             _gestureHook.Start(mouseOnly: true);
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "安装手势鼠标钩子"); }
