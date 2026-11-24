@@ -29,5 +29,9 @@ serde_json = "1"
 opt-level = 3
 lto = true
 codegen-units = 1
+# 剥掉符号表：这个 dll 会以单文件形式随 InputPlus.exe 发出去，
+# 带符号的 Windows cdylib 里有一大截是链接器符号 / DWARF，运行时完全用不到。
+# 导出符号（ipidx_*）保留，P/Invoke 不受影响；代价是 Rust 侧 panic 的栈回溯只有地址。
+strip = "symbols"
 # 不写 panic = "abort"：panic 穿过 FFI 边界会带崩 WPF 进程。
 # 每个导出函数体都 catch_unwind，默认 unwind 才是这里要的行为。

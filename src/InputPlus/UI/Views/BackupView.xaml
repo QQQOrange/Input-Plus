@@ -53,7 +53,7 @@
                                Margin="0,14,0,6" />
                     <PasswordBox x:Name="BackupPassBox" Style="{StaticResource PasswordBox.Base}"
                                  PasswordChanged="OnBackupPassChanged" />
-                    <Border x:Name="NoPasswordWarning" Margin="0,8,0,0" Padding="10,7" CornerRadius="{DynamicResource Radius.Control}"
+                    <Border x:Name="NoPasswordWarning" Margin="0,8,0,0" Padding="10,7" CornerRadius="{DynamicResource Radius.All}"
                             Background="{DynamicResource Brush.DangerSoft}" BorderBrush="{DynamicResource Brush.DangerBorder}" BorderThickness="1"
                             Visibility="Collapsed">
                         <TextBlock TextWrapping="Wrap" FontSize="12"
@@ -62,7 +62,7 @@
                     </Border>
 
                     <!-- 本地加密状态：设了密码之后磁盘上就不再留明文用户数据 -->
-                    <Border x:Name="VaultStatusBar" Margin="0,8,0,0" Padding="10,7" CornerRadius="{DynamicResource Radius.Control}"
+                    <Border x:Name="VaultStatusBar" Margin="0,8,0,0" Padding="10,7" CornerRadius="{DynamicResource Radius.All}"
                             Background="{DynamicResource Brush.SuccessSoft}" BorderBrush="{DynamicResource Brush.SuccessBorder}" BorderThickness="1"
                             Visibility="Collapsed">
                         <TextBlock x:Name="VaultStatusText" TextWrapping="Wrap" FontSize="12"
@@ -156,7 +156,7 @@
                         <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
                                    Text="{loc:T '备份就放在软件旁边的「InputPlus Back」文件夹里，拷走整个文件夹就带走了软件和全部备份。'}" />
 
-                        <Border Margin="0,12,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border Margin="0,12,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                             <StackPanel>
@@ -170,7 +170,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                             <StackPanel>
@@ -268,7 +268,7 @@
                                     <TextBlock Text="{loc:T '加密导出'}" Style="{StaticResource Text.Body}"
                                                VerticalAlignment="Center" />
                                     <Border x:Name="ExportStateBadge" Margin="8,0,0,0" Padding="7,1"
-                                            CornerRadius="{DynamicResource Radius.Small}" VerticalAlignment="Center"
+                                            CornerRadius="{DynamicResource Radius.All}" VerticalAlignment="Center"
                                             Background="{DynamicResource Brush.SuccessSoft}">
                                         <TextBlock x:Name="ExportStateText" Text="{loc:T '已加密'}" FontSize="11.5"
                                                    FontWeight="SemiBold"
@@ -297,7 +297,7 @@
                         <ItemsControl x:Name="GroupList" Margin="0,8,0,0">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                                    <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                             Background="{DynamicResource Brush.SurfaceAlt}"
                                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                                         <Grid>
@@ -314,7 +314,7 @@
                                                                Foreground="{DynamicResource Brush.TextPrimary}" />
                                                     <!-- 隐私标记：红色 -->
                                                     <Border Margin="8,0,0,0" Padding="6,1"
-                                                            CornerRadius="{DynamicResource Radius.Small}" Background="{DynamicResource Brush.DangerSoft}"
+                                                            CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.DangerSoft}"
                                                             BorderBrush="{DynamicResource Brush.DangerBorder}" BorderThickness="1"
                                                             Visibility="{Binding PrivateVisibility}">
                                                         <TextBlock Text="{loc:T '隐私 · 默认不勾'}" FontSize="10.5"
@@ -356,7 +356,7 @@
                         <Button Content="{loc:T '选择文件导入…'}" Style="{StaticResource Button.Base}" Padding="16,8"
                                 Margin="0,14,0,0" HorizontalAlignment="Left" Click="OnImportClick" />
 
-                        <Border x:Name="ImportResult" Margin="0,12,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border x:Name="ImportResult" Margin="0,12,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                                 Visibility="Collapsed">

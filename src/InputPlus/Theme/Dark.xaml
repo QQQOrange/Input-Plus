@@ -46,6 +46,20 @@
     <SolidColorBrush x:Key="Brush.Success" Color="{DynamicResource Color.Success}" />
     <SolidColorBrush x:Key="Brush.Warning" Color="{DynamicResource Color.Warning}" />
 
+    <!-- ============ 开关（用户 2026-11-24 给的参考图） ============
+         图里是两样东西：饱和蓝的胶囊轨道、一颗**深色**正圆钮（早先那道
+         "淡蓝竖杠"用户后来明确要求删掉，两种主题都不留）。
+         轨道蓝**不从 Color.Accent 继承**：Accent(#5B93FF) 是给文字/描边用的，
+         拿它当轨道底色会偏灰、钮压上去对比不够；图里那个蓝更饱和。
+         关状态用中性深灰（不是把蓝色调暗）：调暗后看着像"半开"。
+         钮色（2026-11-24 第二次反馈）：夜间模式不要白钮 —— 白钮在深色界面里
+         是个刺眼的光点，还会把旁边的文字压下去。所以钮跟页面同色系（比
+         Surface 略深一档，压在卡片上像"挖空"），靠 1px 亮描边 + 阴影浮起来。 -->
+    <SolidColorBrush x:Key="Brush.ToggleOn" Color="#3F7EFF" />
+    <SolidColorBrush x:Key="Brush.ToggleOff" Color="#3A4256" />
+    <SolidColorBrush x:Key="Brush.ToggleKnob" Color="#171B23" />
+    <SolidColorBrush x:Key="Brush.ToggleKnobBorder" Color="#4E5870" />
+
     <SolidColorBrush x:Key="Brush.QbarRowHover" Color="#14FFFFFF" />
     <SolidColorBrush x:Key="Brush.QbarRowSelected" Color="#2E5B93FF" />
     <SolidColorBrush x:Key="Brush.Keycap" Color="{DynamicResource Color.Keycap}" />

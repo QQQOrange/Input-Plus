@@ -118,23 +118,17 @@ public sealed class ForegroundWatcher : IDisposable
 
         try
         {
+            /* 走 WindowService.GetProcessPath：那里有 700ms 缓存，而且**只此一份**实现。
+             *
+             * 这里原来自己又写了一遍 OpenProcess + QueryFullProcessImageName ——
+             * 同一个跨进程调用在仓库里有两份代码，两份都要各自改、各自加缓存。
+             * 而它的调用点正是平滑滚动的热路径（每滚一格一次），
+             * 所以合并到 WindowService 之后滚动这条路顺带就跟着缓存了。 */
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == 0) return "";
 
-            IntPtr proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if (proc == IntPtr.Zero) return "";
-
-            try
-            {
-                var sb = new System.Text.StringBuilder(1024);
-                int size = sb.Capacity;
-                if (!QueryFullProcessImageName(proc, 0, sb, ref size)) return "";
-
-                string path = sb.ToString(0, size);
-                string name = Path.GetFileName(path);
-                return name.ToLowerInvariant();
-            }
-            finally { CloseHandle(proc); }
+            string path = WindowService.GetProcessPath(pid);
+            return path.Length == 0 ? "" : Path.GetFileName(path).ToLowerInvariant();
         }
         catch { return ""; }
     }

@@ -105,9 +105,8 @@ public static partial class SelfTest
         T(nameof(TestWg2Layer), TestWg2Layer);
         T(nameof(TestWg2Plus), TestWg2Plus);
         T(nameof(TestGestureListOrder), TestGestureListOrder);
-        /* 「按住右键连滚换标签」：滚轮每格执行一次、抬起才收尾（v1.5.9.1）。 */
-        T(nameof(TestGestureWheelSession), TestGestureWheelSession);
-        T(nameof(TestWheelOnlyKeyPress), TestWheelOnlyKeyPress);
+        /* 滚轮手势（v1.5.9.1）在 300382d 那一版还不存在 —— 回滚手势代码时
+         * 连同它的自测一起摘掉了，这里不留空洞。 */
 
         Section("中键菜单");
         T(nameof(TestMiddleMenu), TestMiddleMenu);

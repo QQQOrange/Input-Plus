@@ -36,8 +36,16 @@ internal static class QbarIndex
     /// </summary>
     internal const int SchemaVersion = 2;
 
-    /// <summary>文件条数上限。到了就停止枚举，索引仍然可用，只是不全。</summary>
-    internal const int MaxFiles = 800000;
+    /// <summary>
+    /// 文件条数上限。到了就停止枚举，索引仍然可用，只是不全。
+    ///
+    /// 从 80 万收到 25 万：真机上 80 万的预算意味着一次全量重建要连续烧半小时以上
+    /// （实测 56% 一个核、常驻 368 MB），而用户真正会搜的文档远远不到这个数 ——
+    /// 超出部分基本都是构建产物与包缓存。配合 QbarRoots.SkipDirNames 里新增的
+    /// build/obj/target/.gradle 等跳过项，这个上限已经足够覆盖日常使用，
+    /// 同时把重建时间和常驻内存压回可接受范围。
+    /// </summary>
+    internal const int MaxFiles = 250000;
 
     /// <summary>目录条数上限。</summary>
     internal const int MaxDirs = 200000;
@@ -53,7 +61,16 @@ internal static class QbarIndex
     /// 既快又压得更紧（实测建索引 23.1 s → 16 s，体积涨幅从 +9% 收到 +3%）。
     /// </summary>
     private const int BuildBatchDocs = 20000;
-    private const int CommitIntervalMs = 2000;
+    /* 提交间隔 2s → 15s，并给"按时间提交"配一个最小批闸。
+     *
+     * 为什么：每次 commit 都要**合并段**，而合并是纯 CPU 的。原来只要索引里有流量
+     * （任何目录在写文件），就每 2 秒提交一次 —— 段永远在合并，主进程常驻 1.5 个核
+     * 以上，钩子回调和滚动帧定时器只能排队，用户看到的就是"整个软件都卡"。
+     * 索引不是实时视图：新文件晚 15 秒能被搜到完全可以接受，CPU 被打满不可以。 */
+    private const int CommitIntervalMs = 15000;
+
+    /// <summary>按时间提交时至少要有这么多条待提交，否则继续攒（防止空转提交）。</summary>
+    private const int MinDocsForTimedCommit = 200;
 
     /// <summary>校准周期：每 6 小时把索引与磁盘对一遍（watcher 漏掉的、休眠期间产生的）。</summary>
     private static readonly TimeSpan CalibrateInterval = TimeSpan.FromHours(6);
@@ -192,6 +209,19 @@ internal static class QbarIndex
             /* 自检会构造大量测试数据，绝不能顺手把用户整块盘扫一遍。
              * 自检里要验真实索引时显式调 PublishForTest（它只索引给定的一棵夹具树）。 */
             if (IsSelfTestProcess()) { _status = "自检进程不建索引"; return; }
+
+            /* 诊断开关：CLP_NO_INDEX=1 时完全不碰索引（不打开、不扫、不提交）。
+             *
+             * 用途只有一个：把"索引在写"这个变量从现场里摘掉。
+             * 建索引/合并段是纯 CPU 的，一台机器上如果它正好在反复重建，
+             * 手势、滚动、别名全都会跟着卡 —— 排查时必须能一键关掉它，
+             * 否则永远分不清"是索引拖的"还是"功能本身坏了"。 */
+            if (Environment.GetEnvironmentVariable("CLP_NO_INDEX") == "1")
+            {
+                _status = "索引已禁用（CLP_NO_INDEX=1）";
+                CoreLog.Warn("CLP_NO_INDEX=1：本次运行不建索引、不挂监视，搜索只剩非索引来源");
+                return;
+            }
 
             if (!TantivyApi.IsAvailable)
             {
@@ -359,7 +389,11 @@ internal static class QbarIndex
 
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = Math.Min(4, Math.Max(1, roots.Length)),
+                /* 4 → 2：每个扫描线程都会被 ScanPacer 压到约 50% 占空比，
+                 * 4 路并行合计就是 2 个核（实测 219%）；而枚举本来是 I/O 等待型，
+                 * 2 路足够喂满磁盘。目标是把"建索引"的峰值压到 1 个核上下，
+                 * 前台永远还有余量。 */
+                MaxDegreeOfParallelism = Math.Min(2, Math.Max(1, roots.Length)),
                 CancellationToken = token,
             };
             int done = 0;
@@ -367,14 +401,28 @@ internal static class QbarIndex
             {
                 Parallel.ForEach(roots, parallelOptions, root =>
                 {
-                    int n = Interlocked.Increment(ref done);
-                    _status = $"正在建立索引（{n}/{roots.Length}）：{root}";
-                    long f = 0, d = 0;
-                    bool ok = ScanRoot(root, ref f, ref d, token, generation);
-                    Interlocked.Add(ref _scanFiles, f);
-                    Interlocked.Add(ref _scanDirs, d);
-                    if (ok) completedBag.Add(root);
-                    else Volatile.Write(ref _scanCancelled, 1);
+                    /* 扫描线程降到 BelowNormal。
+                     *
+                     * 为什么必须做：索引线程和"钩子回调 / 手势 8 ms 采样 / 滚动帧定时器"
+                     * 在同一个进程里抢 CPU。全量重建是纯 CPU+I/O 的连续活，按普通优先级
+                     * 跑满 4 个线程时，钩子回调会被排到队尾 —— LowLevelHooksTimeout 一到
+                     * 整个鼠标/键盘功能就跟着抖，用户看到的是"手势卡、菜单不灵"。
+                     * 降一级之后重建只是慢一点，前台交互不再被抢。
+                     * 线程池线程的优先级会被还回来，所以这里 finally 里复位。 */
+                    var prio = Thread.CurrentThread.Priority;
+                    try
+                    {
+                        Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
+                        int n = Interlocked.Increment(ref done);
+                        _status = $"正在建立索引（{n}/{roots.Length}）：{root}";
+                        long f = 0, d = 0;
+                        bool ok = ScanRoot(root, ref f, ref d, token, generation);
+                        Interlocked.Add(ref _scanFiles, f);
+                        Interlocked.Add(ref _scanDirs, d);
+                        if (ok) completedBag.Add(root);
+                        else Volatile.Write(ref _scanCancelled, 1);
+                    }
+                    finally { Thread.CurrentThread.Priority = prio; }
                 });
             }
             catch (OperationCanceledException)
@@ -479,6 +527,29 @@ internal static class QbarIndex
         return rc;
     }
 
+    /// <summary>
+    /// 枚举节流器：按**实测速度**自适应，把索引线程压到大约一半的占空比。
+    ///
+    /// 为什么按时间而不是按条数：目录枚举的速度在不同机器上差一个量级
+    /// （SSD/机械盘/网络盘、单层一万个文件 vs 几百个）。按"干满 40ms 就歇 40ms"
+    /// 自适应，慢盘上几乎不额外拖慢，快盘上也不会把一整核吃干净。
+    /// 索引晚建一会儿没关系，前台输入不能被抢 —— 用户的体感取决于后者。
+    /// </summary>
+    private sealed class ScanPacer
+    {
+        private readonly Stopwatch _work = Stopwatch.StartNew();
+        private int _steps;
+
+        internal void Step(CancellationToken token)
+        {
+            if ((++_steps & 255) != 0) return;
+            long ms = _work.ElapsedMilliseconds;
+            if (ms < 40) return;
+            _work.Restart();
+            if (token.IsCancellationRequested) return;
+            Thread.Sleep((int)Math.Min(40, ms));
+        }
+    }
     /// <summary>扫一个根。返回 false 表示被取消。</summary>
     /// <param name="idempotent">
     /// 索引里**已经有**这个根的内容时传 true：每一批都走"先删后加"。
@@ -490,6 +561,7 @@ internal static class QbarIndex
         bool idempotent = false)
     {
         var batch = new List<IndexDoc>(BuildBatchDocs);
+        var pacer = new ScanPacer();
         var stack = new Stack<(string Path, int Depth, long Mtime)>();
         long rootMtime = DirMtimeTicks(root);
         stack.Push((root, 0, rootMtime));
@@ -537,6 +609,9 @@ internal static class QbarIndex
                 if (isDir)
                 {
                     if (QbarRoots.Skip(entry.Name)) continue;
+                    /* 自己的数据目录（日志/段文件/settings）永远不进索引：
+                     * 否则索引自己的写入会立刻变成 watcher 事件，形成自激回路。 */
+                    if (QbarRoots.IsOwnData(path)) continue;
                     if (Interlocked.Read(ref _dirs) + dirs >= MaxDirs) continue;
                     dirs++;
                     stack.Push((path, depth + 1, childMtime));
@@ -554,6 +629,7 @@ internal static class QbarIndex
                 }
 
                 if (batch.Count >= BuildBatchDocs) FlushBatchTimed(batch, idempotent);
+                pacer.Step(token);
             }
 
             if (batch.Count > 0) FlushBatchTimed(batch, idempotent);
@@ -657,9 +733,11 @@ internal static class QbarIndex
 
     private static void MaybeCommit()
     {
-        if (Volatile.Read(ref _pendingSinceCommit) < CommitBatchDocs
-            && SinceCommit.ElapsedMilliseconds < CommitIntervalMs)
-            return;
+        int pending = Volatile.Read(ref _pendingSinceCommit);
+        if (pending >= CommitBatchDocs) { Flush(force: false); return; }   // 攒够了就提交
+        if (SinceCommit.ElapsedMilliseconds < CommitIntervalMs) return;    // 还没到点
+        if (pending < MinDocsForTimedCommit) return;                       // 到点但没什么内容：继续攒，别空转合并
+        Flush(force: false);
         Flush(force: false);
     }
 
@@ -1003,13 +1081,79 @@ internal static class QbarIndex
     {
         try
         {
-            QbarIndexWatcher.Start(roots, token, OnWatcherBatch, MarkDirtyAndRescan);
+            /* 盘根（C:\ / D:\）**不整盘挂监视**，只挂用户真正会动的那些目录。
+             *
+             * 为什么：QbarRoots 会把包含关系折叠掉，所以本机的 roots 实际只剩
+             * `C:\` 和 `D:\` 两条 —— 等于"监视整台机器的每一次文件写入"。
+             * 实测（本机）：主进程稳定 1.4~1.8 个核、索引段每几秒合并一轮，
+             * 而事件里绝大多数是编译中间产物、Temp、日志、浏览器缓存这些
+             * 用户根本不会去搜的东西。这些噪声还会把钩子回调和滚动帧定时器一起拖慢，
+             * 用户体感就是"整个软件都卡"。
+             *
+             * 覆盖面不受影响：盘根的内容首次建索引时已经全量入库，之后每 6 小时的
+             * 校准会把漏掉的补上；日常真正会变的那几个目录仍然实时监视。 */
+            var watch = new List<string>(roots.Length + 8);
+            bool hasDriveRoot = false;
+
+            foreach (string root in roots)
+            {
+                bool isDriveRoot;
+                try { isDriveRoot = string.Equals(Path.GetPathRoot(root), root, StringComparison.OrdinalIgnoreCase); }
+                catch { isDriveRoot = false; }
+
+                if (isDriveRoot) { hasDriveRoot = true; continue; }   // 盘根本身不挂
+                watch.Add(root);
+            }
+
+            if (hasDriveRoot)
+            {
+                /* 用户目录与 shell 文件夹：这些才是"日常会变、而且用户会去搜"的地方。 */
+                foreach (string? candidate in UserishDirs())
+                {
+                    if (string.IsNullOrEmpty(candidate)) continue;
+                    try { if (Directory.Exists(candidate)) watch.Add(candidate); } catch { }
+                }
+            }
+
+            /* 去重 + 去掉被其它目录包含的那些（同一片子树挂两遍会双份事件）。 */
+            var final = new List<string>(watch.Count);
+            foreach (string dir in watch)
+            {
+                bool covered = false;
+                foreach (string exist in final)
+                {
+                    if (QbarRoots.IsSameOrUnder(dir, exist)) { covered = true; break; }
+                }
+                if (!covered) final.Add(dir);
+            }
+            if (hasDriveRoot)
+                CoreLog.Info($"索引监视：盘根不整盘挂监视，改挂 {final.Count} 个用户目录（其余靠 6 小时校准兜底）");
+
+            QbarIndexWatcher.Start(final.ToArray(), token, OnWatcherBatch, MarkDirtyAndRescan);
         }
         catch (Exception ex)
         {
             CoreLog.Swallow(ex, "启动目录监视");
             _problem = "目录监视启动失败：" + ex.Message;
         }
+    }
+
+    /// <summary>用户会真正会动的那些目录（用户目录、桌面、文档、下载、图片、视频、Public）。</summary>
+    private static IEnumerable<string?> UserishDirs()
+    {
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        yield return Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (profile.Length > 0)
+        {
+            yield return Path.Combine(profile, "Downloads");
+            string? parent = Path.GetDirectoryName(profile);
+            if (!string.IsNullOrEmpty(parent)) yield return Path.Combine(parent, "Public");
+        }
+        yield return Environment.GetEnvironmentVariable("PUBLIC");
     }
 
     private static void OnWatcherBatch(WatcherBatch batch)
@@ -1109,9 +1253,13 @@ internal static class QbarIndex
     private static int ScanRootForCalibration(string root, CancellationToken token)
     {
         int changed = 0;
+        var pacer = new ScanPacer();
         var stack = new Stack<string>();
         stack.Push(root);
-        var batch = new List<string>(512);
+        /* 一批 5000 条（原来是 512）：每批都会 delete+add+**commit**，
+         * 而每次 commit 都要合并段 —— 25 万个文件按 512 一批是 488 次合并，
+         * 实测这一段的耗时和 add_document 本身相当。放大到 5000 之后提交次数少一个量级。 */
+        var batch = new List<string>(5000);
         while (stack.Count > 0)
         {
             if (token.IsCancellationRequested) break;
@@ -1129,13 +1277,15 @@ internal static class QbarIndex
                 if (isDir)
                 {
                     if (QbarRoots.Skip(entry.Name)) continue;
+                    if (QbarRoots.IsOwnData(path)) continue;
                     stack.Push(path);
                 }
                 batch.Add(path);
-                if (batch.Count >= 512)
+                if (batch.Count >= 5000)
                 {
                     changed += ApplyUpsert(batch);
                     batch.Clear();
+                    pacer.Step(token);
                 }
             }
         }

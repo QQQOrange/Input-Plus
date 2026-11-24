@@ -384,6 +384,13 @@ public sealed partial class AppHost
         try { HoldDrag.ApplySettings(); } catch (Exception ex) { CoreLog.Swallow(ex, "重新加载按住拖拽设置"); }
         Context.Mouse.Step = Settings.Global.MouseMoveStep;
         Engine.Suspended = false;
+        /* 暂停状态要**一起**复位，三个功能一个都不能漏。
+         *
+         * 以前只复位 Engine：用户点过"暂停"之后再点"重新加载配置"，引擎活了，
+         * 但手势/平滑滚动/按住拖拽的 Suspended 还挂在 true —— 界面上开关显示"已开启"，
+         * 实际永远不工作，只有重启程序才好。这是"功能莫名全没了"的一大来源。 */
+        try { Gestures.Suspended = false; } catch (Exception ex) { CoreLog.Swallow(ex, "复位手势暂停"); }
+        try { Scroll.Suspended = false; } catch (Exception ex) { CoreLog.Swallow(ex, "复位滚动暂停"); }
         if (_hookHostReady)
         {
             SendHookHostCommand("SUSPEND 0");

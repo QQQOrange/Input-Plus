@@ -530,6 +530,9 @@ internal static class Native
 
 	public const int GWL_EXSTYLE = -20;
 
+	/// <summary>GetWindow 的 uCmd：取 owner 窗口（对话框/弹窗有 owner，主窗口没有）。</summary>
+	public const uint GW_OWNER = 4u;
+
 	public const long WS_VISIBLE = 268435456L;
 
 	public const long WS_CAPTION = 12582912L;

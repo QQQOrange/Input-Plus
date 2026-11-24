@@ -898,6 +898,36 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		return Math.Abs(to.X - from.X) <= limit && Math.Abs(to.Y - from.Y) <= limit;
 	}
 
+	/// <summary>
+	/// 这个本进程窗口该不该让用户拖。
+	///
+	/// 2026-11-24 用户报"按住拖拽在 Input Plus 自己的页面里不能使"。
+	/// 原来的判据是一张白名单（<c>OwnWindowRegistry</c>），只有主窗口在 Loaded 时登记；
+	/// 而本程序里还有几个**正常应用窗口**——手势设置窗、菜单管理窗——它们没登记，
+	/// 于是被当成浮层一律跳过。用户看到的就是"别的地方能拖，自己界面里拖不动"。
+	///
+	/// 改成按窗口类型判，比维护登记表稳（新加一个窗口不用记得去登记）：
+	///   · 有 owner 的是对话框/弹窗，位置跟着父窗口走，不单独拖；
+	///   · <c>WS_EX_TOOLWINDOW</c>：菜单、提示、各种 HUD 都带这个；
+	///   · <c>WS_EX_NOACTIVATE</c> / <c>WS_EX_TRANSPARENT</c>：手势覆盖层、OSD、Toast 带这个。
+	/// 三条都过得去的，才是用户眼里"这个程序的一个页面"。
+	///
+	/// 主窗口仍然在白名单里（先判它），所以就算哪天它被改成 toolwindow 也照样能拖。
+	/// </summary>
+	private static bool IsDraggableOwnWindow(nint hwnd)
+	{
+		if (hwnd == IntPtr.Zero) return false;
+		if (InputPlus.Core.HoldDrag.OwnWindowRegistry.IsAllowed(hwnd)) return true;
+
+		long ex = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
+		if ((ex & Native.WS_EX_TOOLWINDOW) != 0) return false;
+		if ((ex & Native.WS_EX_NOACTIVATE) != 0) return false;
+		if ((ex & Native.WS_EX_TRANSPARENT) != 0) return false;
+
+		/* 无 owner = 顶层应用窗口。对话框（设置里的子窗）带 owner，不单独拖。 */
+		return Native.GetWindow(hwnd, Native.GW_OWNER) == IntPtr.Zero;
+	}
+
 	/// <summary>hooks.c:1491-1877：按下鼠标键那一刻的全部判断与起手。</summary>
 	private bool BeginDrag(AppConfig cfg, int action, Native.POINT pt)
 	{
@@ -965,12 +995,14 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		// 一处有意偏离 hooks.c:1520-1545：原版只认黑名单，而我们的进程里有设置窗、拖拽提示、
 		// 各种 HUD/浮层 —— 它们铺在屏幕上，按住触发键想拖别的窗口时极易先把自家窗口拖走（实测发生：
 		// 主窗口被拖到 -426,0，界面全乱）。
-		// 但用户明确要求"按住拖拽也要能在 Input Plus 自己的窗口上用"：所以只放行**主窗口**
-		// （在 OwnWindowRegistry 里登记过的那一个），菜单/HUD/浮层照旧跳过。
+		// 但用户要求"按住拖拽也要能在 Input Plus 自己的窗口上用"。
+		// 2026-11-24：判据从"只认登记过的主窗口"改成"按窗口类型判"——原来那几个
+		// 正常应用窗口（手势设置窗/菜单管理窗）没登记，被当成浮层跳过，用户看到的就是
+		// "在它自己的页面里拖不动"。见 IsDraggableOwnWindow。
 		uint ownPid;
 		Native.GetWindowThreadProcessId(num2, out ownPid);
 		if (ownPid == (uint)Environment.ProcessId && !DragOwnWindowForTest
-			&& !InputPlus.Core.HoldDrag.OwnWindowRegistry.IsAllowed(num2))
+			&& !IsDraggableOwnWindow(num2))
 		{
 			HookProbe.W("BeginDrag：是本进程的浮层/菜单窗口，跳过 hwnd=0x" + num2.ToString("X"));
 			return false;
@@ -1378,6 +1410,14 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		{
 			return;
 		}
+		/* 这里曾经加过"自适应抽帧"（写一帧超过 120ms 就每 N 帧少写一次），
+		 * 目的是防止慢窗口把钩子回调拖过系统的 300ms 摘钩线。
+		 * 实测 `--drag-e2e`：旧二进制连跑 3 次全过，加了抽帧的版本 3 次里 1 次红在
+		 * 「拖左上角没有按改大小处理」—— 前两帧被抽掉时窗口看着就没动。
+		 * 按规矩整条回滚，留这条注释免得下次再试一遍。
+		 * 真要治"重窗口拖到一半被摘钩"，得走上游那条"几何搬到工作线程"的路，
+		 * 而本文件上面那段注释记着：那个版本因为"不跟手/松手还在动"被回滚过 ——
+		 * 两条路都要单独一轮带慢窗口真机验证。 */
 		AltState? alt = _state;
 		AppConfig? cfg = _config();
 		// hooks.c:1508-1567：尺寸没变就是纯移动（走 MOVETHICKBORDERS / MOVEASYNC 那条更便宜的路）。
@@ -1698,6 +1738,10 @@ internal sealed class AltDragSink : IInputSink, IDisposable
 		StopTimers();
 		// hooks.c:977-978：Esc 里紧跟着就是 UnhookMouse()，这次拖动不再接管鼠标。
 		WantMouseHook(false);
+		/* 还要把这一笔拖动的状态整个拍平：_blockAltUp / _blockMouseUp / _state / _hwnd。
+		 * 以前只清 _action 和 _activated —— 留下的 _blockAltUp 会让下一次松触发键
+		 * 走到 "补发一对假 Ctrl" 那条路（hooks.c 里 Esc 之后这些旗子是一起清的）。 */
+		ResetDragState();
 	}
 
 	/// <summary>

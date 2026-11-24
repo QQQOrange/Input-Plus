@@ -122,7 +122,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.All}"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter />
                         </Border>
@@ -181,7 +181,7 @@
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
                                                 <Border Background="{DynamicResource Brush.BorderStrong}"
-                                                        CornerRadius="{DynamicResource Radius.Tiny}" Margin="0.5" />
+                                                        CornerRadius="{DynamicResource Radius.All}" Margin="0.5" />
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>
@@ -222,7 +222,7 @@
              位置由布局算 —— 拼接、宽度一致都是布局的自然结果。 -->
         <Border Grid.Column="0" x:Name="MainCard" Margin="14,14,0,14" Width="160"
                 VerticalAlignment="Top"
-                Padding="6,4,6,4" CornerRadius="{DynamicResource Radius.Card}"
+                Padding="6,4,6,4" CornerRadius="{DynamicResource Radius.All}"
                 Background="{DynamicResource Brush.Surface}"
                 BorderBrush="{DynamicResource Brush.Border}"
                 BorderThickness="1">
@@ -296,7 +296,7 @@
                同一圈留白会显得空；行容器另用 SubMenuRow（6,2）。
              - 纵向由代码按"父项行的位置"设 Margin.Top，默认对齐卡片顶。 -->
         <Border Grid.Column="1" x:Name="SubCard" Width="160" Visibility="Collapsed"
-                Margin="0,14,14,0" Padding="4,4,4,4" CornerRadius="{DynamicResource Radius.Card}"
+                Margin="0,14,14,0" Padding="4,4,4,4" CornerRadius="{DynamicResource Radius.All}"
                 VerticalAlignment="Top"
                 TextElement.Foreground="{DynamicResource Brush.TextPrimary}"
                 Background="{DynamicResource Brush.Surface}"

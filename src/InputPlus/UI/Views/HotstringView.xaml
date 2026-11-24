@@ -270,7 +270,7 @@
                              它会在 ItemsSource 换掉之后再排一遍，两套 comparer 打架，
                              屏幕上看到的顺序就和列头对不上。所以 CanUserSortColumns=False。 -->
                         <Border x:Name="EntryGridHost" Background="{DynamicResource Brush.SurfaceAlt}"
-                                CornerRadius="{DynamicResource Radius.Control}" Padding="0,2" Margin="8,0,8,4">
+                                CornerRadius="{DynamicResource Radius.All}" Padding="0,2" Margin="8,0,8,4">
                             <DataGrid x:Name="EntryList"
                                       Background="Transparent" BorderThickness="0" RowHeaderWidth="0"
                                       HeadersVisibility="Column" GridLinesVisibility="None"
@@ -300,7 +300,7 @@
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Grid.Column="0" Width="18" Height="18" CornerRadius="{DynamicResource Radius.Small}"
+                                                    <Border Grid.Column="0" Width="18" Height="18" CornerRadius="{DynamicResource Radius.All}"
                                                             Margin="0,0,6,0" VerticalAlignment="Center"
                                                             Background="{DynamicResource Brush.AccentSoft}"
                                                             ToolTip="{loc:T '当前前缀符号'}">
@@ -512,7 +512,7 @@
                            Placement="Bottom" PlacementTarget="{Binding ElementName=GroupBox}">
                         <Border Background="{DynamicResource Brush.SurfaceAlt}"
                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                                CornerRadius="{DynamicResource Radius.Control}" Padding="5" Margin="8"
+                                CornerRadius="{DynamicResource Radius.All}" Padding="5" Margin="8"
                                 TextElement.Foreground="{DynamicResource Brush.TextPrimary}">
                             <Border.Effect>
                                 <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.32" Color="#000000" />

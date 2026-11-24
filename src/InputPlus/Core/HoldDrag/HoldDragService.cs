@@ -169,7 +169,18 @@ public sealed class HoldDragService : IDisposable
         {
             if (string.IsNullOrEmpty(Modules.HoldDrag.Log.Path))
             {
-                Modules.HoldDrag.Log.Init(Modules.HoldDrag.AppPaths.DataDir);
+                /* 日志必须跟着主程序的数据目录走。
+                 *
+                 * 以前用的是模块自带的那套 %APPDATA%\HoldDrag —— 那是**独立程序**
+                 * HoldDrag.exe 的目录：INPUTPLUS_DATA 指到别处（隔离排查、自检）
+                 * 也照样往里写，把两个产品的日志混在一个目录里；而干净机器上
+                 * 那个目录根本不存在，Log 又不会自己建，于是「按住拖拽没反应」
+                 * 时 holddrag.log 一行都没有，只能靠猜。
+                 *
+                 * 现在落在主程序自己的 logs\ 下：隔离运行写隔离目录，跟 app.log 放一起。 */
+                string logDir = System.IO.Path.Combine(InputPlus.Core.AppPaths.DataDir, "logs");
+                System.IO.Directory.CreateDirectory(logDir);
+                Modules.HoldDrag.Log.Init(logDir);
             }
         }
         catch

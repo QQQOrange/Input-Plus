@@ -46,6 +46,15 @@
     <SolidColorBrush x:Key="Brush.Success" Color="{DynamicResource Color.Success}" />
     <SolidColorBrush x:Key="Brush.Warning" Color="{DynamicResource Color.Warning}" />
 
+    <!-- 开关：和深色主题同一套（蓝轨道 + 正圆钮，钮里不放任何符号 ——
+         竖杠两种主题都删了），只有两样随主题变：
+         "关"的轨道变浅（深灰压在浅色卡片上太扎眼）、钮保持纯白
+         （浅色界面上深钮反而像个洞，还认不出这是一颗可以拖的钮）。 -->
+    <SolidColorBrush x:Key="Brush.ToggleOn" Color="#3F7EFF" />
+    <SolidColorBrush x:Key="Brush.ToggleOff" Color="#CBD2DE" />
+    <SolidColorBrush x:Key="Brush.ToggleKnob" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="Brush.ToggleKnobBorder" Color="#38000000" />
+
     <SolidColorBrush x:Key="Brush.QbarRowHover" Color="#0F000000" />
     <SolidColorBrush x:Key="Brush.QbarRowSelected" Color="#1F2B6CF6" />
     <SolidColorBrush x:Key="Brush.Keycap" Color="{DynamicResource Color.Keycap}" />

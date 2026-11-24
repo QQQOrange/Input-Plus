@@ -9,7 +9,7 @@
         ShowInTaskbar="True" ShowActivated="True"
         FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
-    <Border CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Surface}" BorderThickness="1"
+    <Border CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.Surface}" BorderThickness="1"
             BorderBrush="{DynamicResource Brush.BorderStrong}" Margin="18">
         <Grid>
             <!-- 四行：内容 / 状态文字 / 进度条 / 按钮。
@@ -26,7 +26,7 @@
 
             <StackPanel Grid.Row="0" Margin="24,22,24,0">
                 <StackPanel Orientation="Horizontal">
-                    <Border Width="38" Height="38" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.AccentSoft}"
+                    <Border Width="38" Height="38" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.AccentSoft}"
                             BorderBrush="{DynamicResource Brush.AccentSoftBorder}" BorderThickness="1">
                         <TextBlock Text="&#xE895;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                    FontSize="17" Foreground="{DynamicResource Brush.Accent}"

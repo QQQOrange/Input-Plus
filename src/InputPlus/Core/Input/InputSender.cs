@@ -106,6 +106,18 @@ public static class InputSender
     /// </summary>
     public static bool InjectionBlocked => Environment.TickCount64 < Interlocked.Read(ref _blockedUntilMs);
 
+    /// <summary>
+    /// 此刻 <see cref="Send"/> 会不会**假装成功**（启动静默期）。
+    ///
+    /// 静默期里 Send 直接 <c>return true</c>，可一个事件都没发出去。
+    /// 平滑滚动要是照旧把物理滚轮吞掉，用户看到的就是"滚轮完全不动"，
+    /// 而注入侧一次错都不报 —— 所以它必须先问这一句再决定吞不吞。
+    ///
+    /// **不含 <see cref="DryRun"/>**：干跑只出现在诊断/自检里，那几条路径本来就不该
+    /// 真的滚动，而自检要验证"接不接管"这件事本身（干跑下也走 SendForTest 假注入）。
+    /// </summary>
+    internal static bool SendingMuted => DateTime.Now < QuietUntil;
+
     /* 熔断时长：15s → 30s → 60s → … 封顶 5 分钟。
      * 为什么逐次加长：真是"这台机器注不了入"的环境，重试太勤会每 15 秒吃掉一次点击；
      * 而开机的瞬时故障只需要一次 15 秒的等待。 */

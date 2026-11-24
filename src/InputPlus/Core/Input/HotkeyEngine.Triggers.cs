@@ -705,11 +705,30 @@ public sealed partial class HotkeyEngine
          *
          * 这里**不展开** —— 改造前的结论就是"只有可打印字符和（空格模式下的）
          * 空格会触发"，保持不变。挂起中的展开会因为没有新字符而由计时器收尾，
-         * 或者因为这里复位了缓冲而作废（两种结果都与改造前一致）。 */
+         * 或者因为这里复位了缓冲而作废（两种结果都与改造前一致）。
+         *
+         * ★ 2026-11-24：组字中的回车**不再清空缓冲**。
+         *
+         * 中文输入法下打 `;mail`：物理键全都进了缓冲（`;mail`），但屏幕上什么都
+         * 没有 —— 那几个字符还在输入法的组字串里。按回车把它们提交上屏之后，
+         * 屏幕上才**第一次**真的出现 `;mail`。
+         * 以前这里无条件 `Reset()`：缓冲一空，用户接着按空格时
+         * `SnippetMatcher.MatchSpan` 拿到的是空串，永远命中不了 ——
+         * 用户报的"输入法里打完按回车，再按空格也应该能触发别名"就是这条。
+         *
+         * 判据是"此刻还有没有组字串"：钩子先于输入法拿到按键，所以提交组字的
+         * 那一下回车仍能读到组字串；普通换行时读不到，照旧清空。
+         * 缓冲里的内容和上屏后的文本是同一个（全角/半角由 SnippetMatcher.Fold
+         * 归一），所以展开时按触发词长度回删也对得上。 */
         if (vk is 0x20 or 0x0D or 0xE5)
         {
             _snippetBuffer.Apply(TextEventKind.Terminator);
-            _snippetBuffer.Reset();
+
+            bool imeCommit = vk == 0x0D && ImeCompositionText().Length > 0;
+            if (!imeCommit) _snippetBuffer.Reset();
+            else if (SnippetDebugOn)
+                CoreLog.Info("[片段DBG] 组字中的回车 = 提交上屏，保留缓冲（之后按空格仍可展开）");
+
             return false;
         }
 

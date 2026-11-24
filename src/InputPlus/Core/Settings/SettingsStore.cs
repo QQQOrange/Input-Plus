@@ -298,6 +298,16 @@ public static class SettingsStore
                 bool migrated = MigrateBuiltinEngines(s) | MigrateBuiltinWebAndRun(s)
                                 | MigrateSendKeysToCustomKey(s);
 
+                /* 这份配置来自**更新的版本**：本程序不认识的字段在反序列化时已经丢了，
+                 * 再自动 Save 一次就等于把新版配置整份降级覆盖（换回新版本也读不回来）。
+                 * 这种文件只读、不自动回写；用户主动改设置时仍会写（那是他的选择）。 */
+                if (s.SchemaVersion > AppSettings.CurrentSchemaVersion)
+                {
+                    CoreLog.Warn($"设置文件版本 {s.SchemaVersion} 比本程序支持的 {AppSettings.CurrentSchemaVersion} 新："
+                                 + "本次只读，不自动回写，避免把新版本的字段覆盖掉");
+                    return s;
+                }
+
                 /* 已经设了备份密码、但这份文件还是明文的旧数据 → 立刻以加密形式重存，
                  * 让"设了密码就不再留明文"当场生效，而不是等下一次改设置。 */
                 bool needsEncrypt = !LocalCrypto.IsEncrypted(File.ReadAllText(AppPaths.SettingsFile))
@@ -591,24 +601,55 @@ public static class SettingsStore
     /// </summary>
     private static bool TryLoadBackup(out AppSettings settings, out string error)
     {
-        string bakError = "";
-        if (TryLoadFile(AppPaths.SettingsFile + ".bak", out settings, out bakError)
-            && !IsStructurallyEmpty(settings))
+        string bakPath = AppPaths.SettingsFile + ".bak";
+        string goodPath = AppPaths.SettingsFile + ".good";
+        /* .tmp 也参与恢复：一次保存如果在最后那步 File.Move 之前失败，
+         * 最新的一份内容就停在 .tmp 里，而它以前从不被读回 —— 下次保存直接覆盖掉。 */
+        string tmpPath = AppPaths.SettingsFile + ".tmp";
+
+        /* 先读**更新的那一份**。
+         *
+         * .bak 装的是「这次保存之前」的那一代，.good 装的是「最近一次成功保存」——
+         * 主文件坏掉时，用户手里最新的配置在 .good 里。以前固定先读 .bak，
+         * 于是恢复出来的配置比最后一次保存旧一代；更糟的是随后的修复写盘
+         * 会把 .good 一起覆盖成那一代，最新副本当场消失，换回新版本也读不回来。
+         * 读时间戳失败时退回原来的顺序（.bak 优先），与旧行为一致。 */
+        string[] all = { bakPath, goodPath, tmpPath };
+        var present = new List<string>(3);
+        foreach (string p in all)
         {
-            error = "";
-            return true;
+            try { if (File.Exists(p)) present.Add(p); } catch { }
+        }
+        /* 按修改时间从新到旧（同刻时 .bak 在前，与旧行为一致）。 */
+        present.Sort((a, b) =>
+        {
+            try { return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)); }
+            catch { return string.CompareOrdinal(a, b); }
+        });
+        string[] candidates = present.Count > 0 ? present.ToArray() : new[] { bakPath, goodPath };
+
+        /* out 参数必须先有值：一份候选都读不出来时，调用方拿到的就是默认设置。 */
+        settings = DefaultSettings.Create();
+        string[] errors = new string[candidates.Length];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            if (TryLoadFile(candidates[i], out settings, out errors[i])
+                && !IsStructurallyEmpty(settings))
+            {
+                error = "";
+                return true;
+            }
         }
 
-        string goodError = "";
-        if (TryLoadFile(AppPaths.SettingsFile + ".good", out settings, out goodError)
-            && !IsStructurallyEmpty(settings))
+        string ErrOf(string path)
         {
-            error = "";
-            return true;
+            int idx = Array.FindIndex(candidates, p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            string e = idx >= 0 && idx < errors.Length ? errors[idx] : "";
+            return e.Length > 0 ? e : "结构不完整";
         }
-
-        error = "备份：" + (bakError.Length > 0 ? bakError : "结构不完整")
-                + "；快照：" + (goodError.Length > 0 ? goodError : "结构不完整");
+        string bakError = File.Exists(bakPath) ? ErrOf(bakPath) : "文件不存在";
+        string goodError = File.Exists(goodPath) ? ErrOf(goodPath) : "文件不存在";
+        error = "备份：" + bakError + "；快照：" + goodError;
         return false;
     }
 
@@ -749,8 +790,17 @@ public static class SettingsStore
 
             /* 再留一份“最近一次成功保存”的快照。它不参与日常 .bak 轮换，
              * 即使主文件和 .bak 都被空壳污染，仍能从这里恢复。
-             * 快照失败不影响本次主文件已写入成功。 */
-            try { File.Copy(AppPaths.SettingsFile, AppPaths.SettingsFile + ".good", true); }
+             * 快照失败不影响本次主文件已写入成功。
+             *
+             * 走 tmp + Move：直接 Copy 到 .good 时，进程如果在复制途中被杀，
+             * .good 会变成半截文件 —— 而它是主文件坏掉时**唯一**还有最新一代的副本。
+             * .bak 早就改成这套写法了，这里跟上。 */
+            try
+            {
+                string goodTmp = AppPaths.SettingsFile + ".good.tmp";
+                File.Copy(AppPaths.SettingsFile, goodTmp, true);
+                File.Move(goodTmp, AppPaths.SettingsFile + ".good", true);
+            }
             catch (Exception ex) { CoreLog.Warn("保存设置快照失败：" + ex.Message); }
 
             _skipNextBackupCopy = false;
@@ -759,6 +809,9 @@ public static class SettingsStore
         catch (Exception ex)
         {
             CoreLog.Error("保存设置失败", ex);
+            /* 写盘抛异常时 _skipNextBackupCopy 以前会一直留 true：
+             * 之后每一次保存都跳过 .bak 轮换，备份悄悄停在很久以前那一代。 */
+            _skipNextBackupCopy = false;
             return false;
         }
     }

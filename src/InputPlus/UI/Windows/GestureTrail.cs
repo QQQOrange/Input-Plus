@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Media;
@@ -118,7 +118,7 @@ internal sealed class GestureTrail
         if (points.Count == 0) return points;
         if (!smooth) return points;
         if (points.Count > SmoothPointLimit) return points;
-        return Chaikin(points, 2);
+        return Chaikin(points, 1);
     }
 
     /// <summary>

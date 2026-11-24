@@ -35,10 +35,82 @@ internal static class QbarRoots
         ".vs",
         "obj",
         "bin",
+
+        /* 构建产物与包缓存：**不是用户想搜的东西**，但数量能把索引压死。
+         *
+         * 真机现场（2026-11-24）：索引在扫
+         *   C:\Users\<用户>\...\android\app\build\kotlin\compileReleaseUnitTestKotlin\cacheable\...
+         * 这一条链路上几十万个文件，主进程稳定烧掉 56% 一个核、常驻 368 MB，
+         * 持续半小时以上 —— 而钩子回调、手势 8 ms 采样、滚动帧定时器全在排队等 CPU，
+         * 用户看到的就是"手势卡、菜单不灵、别名不展开"。
+         *
+         * 这些名字里没有一个会是用户日常要找的文档：要搜代码请直接搜工程根目录，
+         * 里面的 build/obj 目录本来就该被跳过。按名字整段比较，不做子串匹配。 */
+        "build",
+        "Build",
+        "target",
+        "dist",
+        "out",
+        "coverage",
+        ".gradle",
+        ".nuget",
+        ".cargo",
+        ".rustup",
+        ".m2",
+        ".stack-work",
+        ".dart_tool",
+        ".pub-cache",
+        ".terraform",
+        ".next",
+        ".nuxt",
+        ".cache",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".tox",
+        ".venv",
+        "venv",
+        "site-packages",
+        "Pods",
+        "DerivedData",
+        ".idea",
+        ".vscode",
+        "packages",
+        "Temp",
+        "tmp",
+        ".tmp",
     };
 
     /// <summary>是否该跳过这一层目录。空名字（盘根）不跳。</summary>
     internal static bool Skip(string dirName) => SkipDirNames.Contains(dirName);
+
+    /* ── 本程序自己的数据目录：**永远不进索引，也不接受 watcher 事件** ──
+     *
+     * 这是一个自激回路，也是"主进程常驻 1.8 个核、越用越卡"的真正发动机：
+     *   · 索引根里有盘根（C:\ / D:\），而本程序的数据目录（日志、settings、
+     *     `file-index-tantivy` 段文件）正好在里面；
+     *   · watcher 监听的是 FILE_NOTIFY_CHANGE_SIZE | LAST_WRITE；
+     *   · 于是：写索引 → watcher 看到自己的段文件变了 → 入队 upsert → commit
+     *     → 又写新段 → 又触发 watcher ⇒ 每 2 秒一轮，永远停不下来。
+     * 用户看到的是 CPU 打满、手势/滚动/别名全部发涩，而索引其实早就建完了
+     * （state.json 里 Done=true）。
+     *
+     * 判定用**路径**而不是名字：数据目录可以被 INPUTPLUS_DATA 指到任意地方，
+     * 而"叫 InputPlus Data 的文件夹"也可能是用户的正常目录。 */
+    private static string _ownDataDir = "";
+
+    internal static bool IsOwnData(string? fullPath)
+    {
+        if (string.IsNullOrEmpty(fullPath)) return false;
+        string own = _ownDataDir;
+        if (own.Length == 0)
+        {
+            try { own = Normalize(Core.AppPaths.DataDir) ?? ""; } catch { own = ""; }
+            if (own.Length == 0) return false;
+            _ownDataDir = own;
+        }
+        return IsSameOrUnder(fullPath, own);
+    }
 
     internal static string[] Compute()
     {

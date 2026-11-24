@@ -186,15 +186,84 @@ public static class WindowChrome
     public static void ApplyShell(Window window, bool dark)
         => Apply(window, dark, BackdropType.Mica, zeroFrame: false);
 
+    /// <summary>
+    /// 主窗口外框圆角，半径读 <see cref="ThemeMetrics.Radius"/>。
+    ///
+    /// 两种情况二选一：
+    /// ① 半径正好等于 Win11 的原生值（8）—— 交给 DWM，边缘有抗锯齿，最漂亮；
+    /// ② 半径是别的值（例如统一成 12）—— DWM 只能给 8/4/0，只能自绘：
+    ///    先关掉 DWM 圆角，再用窗口区域（窗口形状）裁一个同半径的圆角矩形。
+    ///    代价是区域边缘不做抗锯齿，拐角会有一点锯齿；好处是外框和内层卡片
+    ///    永远是同一个半径，用户要的"所有圆角一致"才成立。
+    ///
+    /// 最大化时把区域整个撤掉，否则屏幕角上会露出一圈桌面色。
+    /// </summary>
     public static void EnableRounded(Window window)
     {
         try
         {
             var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
-            int round = 2;
+
+            /* 一律交给 DWM，**不再自绘窗口区域**。
+             *
+             * 以前（工作区里那版）在半径 != DWM 原生值时用 SetWindowRgn 裁一个圆角矩形，
+             * 代价是：① 边缘不抗锯齿；② 对 AllowsTransparency 的窗口（手势覆盖层、
+             * 中键菜单、Toast）设区域会直接破坏分层渲染 —— 表现就是"窗口在，但一个像素都看不见"。
+             * 用户要的"圆角跟图上一样大"是内层卡片/按钮的事（ThemeMetrics.Radius），
+             * 窗口外框保持系统原生的 8，视觉上更干净，也不会再出现整块不显示。
+             * 最大化时 DWM 自己会去掉圆角，不需要额外处理。 */
+            int round = 2; // DWMWCP_ROUND
             DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
         }
         catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
     }
+
+    private static void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is Window window) ApplyWindowRegion(window);
+    }
+
+    private static void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        if (sender is Window window) ApplyWindowRegion(window);
+    }
+
+    /// <summary>把窗口形状裁成圆角矩形；最大化时撤掉区域。</summary>
+    private static void ApplyWindowRegion(Window window)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            if (window.WindowState == WindowState.Maximized)
+            {
+                SetWindowRgn(hwnd, IntPtr.Zero, true);
+                return;
+            }
+
+            var source = PresentationSource.FromVisual(window);
+            double scale = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            int w = (int)Math.Round(window.ActualWidth * scale);
+            int h = (int)Math.Round(window.ActualHeight * scale);
+            if (w <= 0 || h <= 0) return;
+
+            int diameter = (int)Math.Round(ThemeMetrics.Radius * scale) * 2;
+            IntPtr region = CreateRoundRectRgn(0, 0, w + 1, h + 1, diameter, diameter);
+            if (region == IntPtr.Zero) return;
+            /* SetWindowRgn 接管这块 region 的所有权，成功后不要 DeleteObject。 */
+            if (SetWindowRgn(hwnd, region, true) == 0) DeleteObject(region);
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "窗口圆角区域");
+        }
+    }
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int width, int height);
+
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool redraw);
 }

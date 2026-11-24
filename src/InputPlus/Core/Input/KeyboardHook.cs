@@ -155,8 +155,7 @@ public sealed class KeyboardHook : IDisposable
     private long _keyEvents;
 
     /// <summary>累计收到的滚轮事件数（垂直 + 水平，含注入；诊断用）。</summary>
-    public long WheelEventCount => Interlocked.Read(ref _wheelEvents);
-    private long _wheelEvents;
+    public long WheelEventCount => Interlocked.Read(ref _wheelEvents);    private long _wheelEvents;
     private long _physicalWheelEvents;
     private long _injectedWheelEvents;
 
@@ -165,6 +164,27 @@ public sealed class KeyboardHook : IDisposable
 
     /// <summary>其中"带本程序注入标记"的滚轮数（平滑滚动自己发的；诊断用）。</summary>
     public long InjectedWheelEventCount => Interlocked.Read(ref _injectedWheelEvents);
+
+    /// <summary>LLKHF_INJECTED：这个键是别的程序注射的，不是人的手按的。</summary>
+    private const uint LLKHF_INJECTED = 0x10;
+
+    private static int _physCtrl, _physAlt, _physShift;
+
+    /// <summary>
+    /// 人此刻是否**真的**按着这个修饰键（注射来的不算）。
+    ///
+    /// `GetAsyncKeyState` 会把别的程序注射的 Ctrl/Alt 也算成"按着"。
+    /// 现场就有一个工具在按 Ctrl+C 打点（`dwExtraInfo=0x5153454C46`，一秒几十次），
+    /// 于是"Ctrl+滚轮放行"那道闸时真时假 —— 用户看到的是"滚轮有时候失效"。
+    /// 修饰键的语义必须只认物理事件。
+    /// </summary>
+    public bool IsPhysicalModifierDown(int vk) => vk switch
+    {
+        VK.Control or VK.LControl or VK.RControl => Volatile.Read(ref _physCtrl) != 0,
+        VK.Menu or VK.LMenu or VK.RMenu => Volatile.Read(ref _physAlt) != 0,
+        VK.Shift or VK.LShift or VK.RShift => Volatile.Read(ref _physShift) != 0,
+        _ => false,
+    };
 
     public KeyboardHook()
     {
@@ -240,6 +260,11 @@ public sealed class KeyboardHook : IDisposable
                 DispatchMessage(ref msg);
             }
             CoreLog.Error($"钩子线程退出（_running={_running}）：从此不再收到任何按键");
+            /* 线程没了，管理器里的状态必须跟着清 —— 否则看门狗看到 `_running=true` +
+             * `_threadId!=0` 就以为还有救，`PostThreadMessage(WM_APP_REARM)` 全打进空气，
+             * 钩子永远装不回来（"按住拖拽/手势彻底没反应，重启才好"就是这么来的）。 */
+            _running = false;
+            _threadId = 0;
 
             /* 只卸**自己装的**那两个句柄；如果字段已经被新线程换掉，不能动它。 */
             if (myHook != IntPtr.Zero) UnhookWindowsHookEx(myHook);
@@ -280,6 +305,27 @@ public sealed class KeyboardHook : IDisposable
                 // 包括触摸键盘、屏幕键盘、其他自动化工具和远程桌面输入。
                 // 那样一来，用这些方式输入时 Caps 组合键会全部失效。
                 bool injectedByUs = data.dwExtraInfo == InputSender.InjectionTag;
+
+                /* 物理修饰键状态：只认**非注射**事件（LLKHF_INJECTED = 0x10）。
+                 *
+                 * 为什么要单独记一份：`GetAsyncKeyState` 分不清"人按着 Ctrl"和
+                 * "别的程序正在注射 Ctrl"。现场就有一个工具在按 Ctrl+C 打点
+                 * （`dwExtraInfo=0x5153454C46` = "QSELF"），一秒几十次 —— 于是
+                 * 平滑滚动里"Ctrl+滚轮放行"那道闸时真时假，用户看到的就是
+                 * "滚轮有时候失效"。修饰键的语义必须是"人的手按着"。 */
+                if ((data.flags & LLKHF_INJECTED) == 0)
+                {
+                    bool down = isDown;
+                    switch ((int)data.vkCode)
+                    {
+                        case VK.Control: case VK.LControl: case VK.RControl:
+                            Volatile.Write(ref _physCtrl, down ? 1 : 0); break;
+                        case VK.Menu: case VK.LMenu: case VK.RMenu:
+                            Volatile.Write(ref _physAlt, down ? 1 : 0); break;
+                        case VK.Shift: case VK.LShift: case VK.RShift:
+                            Volatile.Write(ref _physShift, down ? 1 : 0); break;
+                    }
+                }
                 if (TraceKeys)
                 {
                     CoreLog.Info($"钩子收到 vk=0x{data.vkCode:X2} down={isDown} " +
@@ -415,9 +461,83 @@ public sealed class KeyboardHook : IDisposable
     /// <summary>钩子回调的最长耗时（毫秒），诊断用。</summary>
     public double MaxCallbackCostMs { get; private set; }
 
+    /// <summary>
+    /// **鼠标**回调的最长耗时（毫秒）。
+    ///
+    /// 以前只有键盘那份统计（<see cref="MaxCallbackCostMs"/>），鼠标回调完全没量过 ——
+    /// 而恰恰是它最重：一次按下要解析作用目标（OpenProcess）、跑候选匹配、
+    /// 中键还要做 LVM_HITTEST/UIA；滚轮每格都要再来一次。
+    /// 这些都在钩子线程上同步跑，超过 LowLevelHooksTimeout 就是"点了没反应"。
+    /// 没有这条统计，出问题只能靠猜。
+    /// </summary>
+    public double MaxMouseCallbackCostMs { get; private set; }
+
+    /// <summary>鼠标回调累计次数（探活用：它不涨就说明钩子已经不在链上了）。</summary>
+    public long MouseEventCount => Interlocked.Read(ref _mouseEvents);
+    private long _mouseEvents;
+
+    /// <summary>鼠标回调"进行中"打点（同键盘那份，见 <see cref="CallbackStuckMs"/>）。</summary>
+    private long _mCallbackStartedTick;
+    private int _mCallbackMsg;
+
+    /// <summary>鼠标回调正卡着多久（毫秒）。0 = 没卡。</summary>
+    internal long MouseCallbackStuckMs
+    {
+        get
+        {
+            long started = Interlocked.Read(ref _mCallbackStartedTick);
+            if (started == 0) return 0;
+            long ms = Environment.TickCount64 - started;
+            return ms > 2000 ? ms : 0;
+        }
+    }
+
+    /// <summary>卡住时正在处理的消息号（WM_*）。</summary>
+    internal int MouseStuckMsg => Volatile.Read(ref _mCallbackMsg);
+
+    private long _lastMouseSlowLogAt;
+
+    private void ObserveMouseCallbackCost(long t0)
+    {
+        double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+        if (ms > MaxMouseCallbackCostMs) MaxMouseCallbackCostMs = ms;
+        if (ms < 30) return;
+
+        long now = Environment.TickCount64;
+        if (now - _lastMouseSlowLogAt < 5000) return;
+        _lastMouseSlowLogAt = now;
+
+        int msg = Volatile.Read(ref _mCallbackMsg);
+        CoreLog.Warn($"鼠标钩子回调耗时 {ms:F0}ms（msg=0x{msg:X}）—— 超过 LowLevelHooksTimeout 会被摘钩，"
+                     + "期间点击/滚动全部排队；请查作用目标解析、命中判定是否又在钩子里做了");
+    }
+
     private long _lastSlowLogAt;
 
     private IntPtr MouseCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        /* 计时 + 计数 + 卡点打点。
+         *
+         * 这条回调是整台机器输入路径上最容易被堵住的地方：一次按下要解析作用目标
+         * （OpenProcess）、跑候选匹配，中键还要 LVM_HITTEST/UIA；滚轮每格再来一次。
+         * 全都在钩子线程上同步跑，堵住就是"点了没反应 / 滚一格卡一下"，
+         * 而以前这里**一点数字都没有**，只能靠猜。 */
+        long t0 = Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _mouseEvents);
+        Volatile.Write(ref _mCallbackMsg, (int)wParam);
+        Interlocked.Exchange(ref _mCallbackStartedTick, Environment.TickCount64);
+        try
+        {
+            return MouseCallbackCore(nCode, wParam, lParam);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _mCallbackStartedTick, 0);
+            ObserveMouseCallbackCost(t0);
+        }
+    }
+
+    private IntPtr MouseCallbackCore(int nCode, IntPtr wParam, IntPtr lParam)
     {
         // 探针：确认钩子宿主到底有没有收到这次鼠标事件（排查"按住拖拽收不到鼠标"）。
         // 探针关着时连字符串都不拼 —— 这是鼠标钩子回调里，每次点击/滚轮都会走到的位置。
@@ -449,13 +569,25 @@ public sealed class KeyboardHook : IDisposable
                     if (delta != 0)
                     {
                         /* 手势优先：按住起始键时滚轮可能是一条手势。
-                         * 手势没接手才往下走原有的滚动逻辑。 */
-                        if (GestureWheelEvent is { } gestureWheel
-                            && gestureWheel(delta > 0 ? 1 : -1, false, false))
-                            return new IntPtr(1);
-                        if (ScrollWheelEvent is { } scrollWheel
-                            && scrollWheel(delta, false, false))
-                            return new IntPtr(1);
+                         * 手势没接手才往下走原有的滚动逻辑。
+                         *
+                         * 两条各自 try/catch：以前它们在一个 try 块里，手势那条一抛异常，
+                         * 这一格滚轮就直接落到 CallNextHookEx —— 平滑滚动**一次都收不到**，
+                         * 用户看到的是"平滑滚动时好时坏"。抛异常不该连带打死另一个功能。 */
+                        if (GestureWheelEvent is { } gestureWheel)
+                        {
+                            bool took;
+                            try { took = gestureWheel(delta > 0 ? 1 : -1, false, false); }
+                            catch (Exception ex) { CoreLog.Swallow(ex, "手势滚轮回调"); took = false; }
+                            if (took) return new IntPtr(1);
+                        }
+                        if (ScrollWheelEvent is { } scrollWheel)
+                        {
+                            bool took;
+                            try { took = scrollWheel(delta, false, false); }
+                            catch (Exception ex) { CoreLog.Swallow(ex, "平滑滚动回调"); took = false; }
+                            if (took) return new IntPtr(1);
+                        }
                         WheelEvent?.Invoke(delta > 0 ? 1 : -1, false, false);
                     }
                 }
@@ -812,9 +944,17 @@ public sealed class KeyboardHook : IDisposable
             return;
         }
 
+        /* 记住原来的模式再重来。
+         *
+         * `Start()` 有一句 `if (_running) return;`，而 `Stop()` 会把 `_running` 清掉；
+         * 但 `mouseOnly` **不传回去** —— 一个 mouse-only 实例（手势/平滑滚动用的那条）
+         * 线程死过一次之后就变成"键盘钩子实例"：键盘装上了、鼠标再也不装，
+         * 于是手势和滚动整场失效，而 `IsRunning` 因为 new IsRunning 语义又永远报 false。
+         * 这一句是 1.6.2 顺手带进来的真 bug，这里补掉。 */
+        bool mouseOnly = _mouseOnly;
         Stop();
         Thread.Sleep(80);
-        Start();
+        Start(mouseOnly);
     }
 
 }

@@ -89,7 +89,36 @@ public static class WindowService
         return cls.Length > 0 ? cls.ToString() : null;
     }
 
+    /// <summary>
+    /// 取进程可执行文件路径 —— **带 700ms 缓存**。
+    ///
+    /// 这是一个 `OpenProcess` + `QueryFullProcessImageName` 的跨进程调用，
+    /// 而在本程序里它是**热路径**：鼠标手势每次按下、平滑滚动每滚一格、
+    /// Qbar 每次重建窗口列表都要问一次。实测在受保护/提权的前台窗口上单次就是几十毫秒，
+    /// 而调用点经常在低级钩子回调里 —— 堵住钩子线程就是"点一下卡一下"，
+    /// 超过 LowLevelHooksTimeout 还会被系统摘钩。
+    ///
+    /// 进程的 exe 路径在一场会话里不会变，缓存 700ms 对任何调用方都无感；
+    /// 这里做**唯一一层**，别在上层再各写一份（以前 GestureService/Scroll 各有一套
+    /// 自己的解析，改一处漏一处）。
+    /// </summary>
+    private const int ProcessPathTtlMs = 700;
+    private const int ProcessPathCacheMax = 512;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, (string Path, long Until)> ProcessPathCache = new();
+
     public static string GetProcessPath(uint pid)
+    {
+        if (pid == 0) return "";
+        long now = Environment.TickCount64;
+        if (ProcessPathCache.TryGetValue(pid, out var hit) && now < hit.Until) return hit.Path;
+
+        string path = ReadProcessPath(pid);
+        if (ProcessPathCache.Count > ProcessPathCacheMax) ProcessPathCache.Clear();
+        ProcessPathCache[pid] = (path, now + ProcessPathTtlMs);
+        return path;
+    }
+
+    private static string ReadProcessPath(uint pid)
     {
         IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (h == IntPtr.Zero) return "";

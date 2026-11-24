@@ -23,7 +23,7 @@
             </Grid.RowDefinitions>
 
             <!-- 欢迎横幅 -->
-            <Border Grid.Row="0" CornerRadius="{DynamicResource Radius.Card}" Padding="26,24" Margin="0,0,0,18">
+            <Border Grid.Row="0" CornerRadius="{DynamicResource Radius.All}" Padding="26,24" Margin="0,0,0,18">
                 <Border.Background>
                     <!-- 与引导页同一块品牌渐变（Controls.xaml / Brush.BrandHero） -->
                     <StaticResource ResourceKey="Brush.BrandHero" />
@@ -80,7 +80,7 @@
                 <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.AccentSoft}">
+                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.AccentSoft}">
                                 <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="14" Foreground="{DynamicResource Brush.Accent}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -97,7 +97,7 @@
                 <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.AccentSoft}">
+                            <Border Width="30" Height="30" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.AccentSoft}">
                                 <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                            FontSize="14" Foreground="{DynamicResource Brush.Accent}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -128,7 +128,7 @@
 
                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="1" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
@@ -141,7 +141,7 @@
 
                         <StackPanel Grid.Column="1" Margin="6,0,6,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="2" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
@@ -154,7 +154,7 @@
 
                         <StackPanel Grid.Column="2" Margin="12,0,0,0">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Accent}">
+                                <Border Width="24" Height="24" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.Accent}">
                                     <TextBlock Text="3" Foreground="White" FontWeight="SemiBold" FontSize="12"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
@@ -191,7 +191,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Margin="0,0,10,10" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                                <Border Margin="0,0,10,10" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                         VerticalAlignment="Stretch"
                                         Background="{DynamicResource Brush.SurfaceAlt}"
                                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">

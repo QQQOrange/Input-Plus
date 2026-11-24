@@ -342,7 +342,7 @@
                             <!-- 颜色图例：不看文字也知道深蓝=已绑定 -->
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                                         Margin="14,0,0,0">
-                                <Border Width="12" Height="12" CornerRadius="{DynamicResource Radius.Tiny}"
+                                <Border Width="12" Height="12" CornerRadius="{DynamicResource Radius.All}"
                                                 Background="{DynamicResource Brush.Accent}"
                                                 BorderBrush="{DynamicResource Brush.AccentHover}" BorderThickness="1"
                                                 VerticalAlignment="Center" />
@@ -353,7 +353,7 @@
                                                    VerticalAlignment="Center" />
                                         <TextBlock Text="{loc:T '触发键'}" Style="{StaticResource Text.Tertiary}"
                                                    Margin="5,0,12,0" VerticalAlignment="Center" />
-                                        <Border Width="12" Height="12" CornerRadius="{DynamicResource Radius.Tiny}"
+                                        <Border Width="12" Height="12" CornerRadius="{DynamicResource Radius.All}"
                                                 Background="{DynamicResource Brush.AccentSoft}"
                                                 BorderBrush="{DynamicResource Brush.AccentSoftBorder}" BorderThickness="1"
                                                 VerticalAlignment="Center" />
@@ -951,14 +951,14 @@
                             -->
                             <!-- 只是一句"已绑定 / 绑定失败"的提示，不该横成一条通栏横幅：
                                  内容多长就多长（Left 对齐），短提示自然缩成一个小胶囊。 -->
-                            <Border x:Name="BindStatusBar" Margin="0,10,0,0" Padding="11,7" CornerRadius="{DynamicResource Radius.Control}"
+                            <Border x:Name="BindStatusBar" Margin="0,10,0,0" Padding="11,7" CornerRadius="{DynamicResource Radius.All}"
                                     HorizontalAlignment="Left" Visibility="Collapsed">
                                 <TextBlock x:Name="BindStatusText" FontSize="12" TextWrapping="Wrap"
                                            TextTrimming="CharacterEllipsis" />
                             </Border>
 
                             <!-- ============ 已绑定的程序（窗口绑定专用） ============ -->
-                            <Border x:Name="WinBindPanel" Margin="0,14,0,0" Padding="14,12" CornerRadius="{DynamicResource Radius.Card}"
+                            <Border x:Name="WinBindPanel" Margin="0,14,0,0" Padding="14,12" CornerRadius="{DynamicResource Radius.All}"
                                     Background="{DynamicResource Brush.SurfaceAlt}"
                                     BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                                     Visibility="Collapsed">
@@ -975,7 +975,7 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
 
-                                        <Border Grid.Column="0" Width="34" Height="34" CornerRadius="{DynamicResource Radius.Control}"
+                                        <Border Grid.Column="0" Width="34" Height="34" CornerRadius="{DynamicResource Radius.All}"
                                                 Background="{DynamicResource Brush.Surface}"
                                                 BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
                                                 VerticalAlignment="Center">

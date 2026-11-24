@@ -220,9 +220,25 @@ internal static class ContentIndex
             int rc = ContentNative.Open(_dir);
             if (rc != 0)
             {
+                /* 索引目录坏了（段文件被杀软/同步盘删掉、commit 中断留下半截 meta）：
+                 * 文件名索引那边遇到 -4/-7 是"清目录重建"的，正文这边以前只把状态写成
+                 * "打开失败"就 return，而且 _started 还留在 1 —— 之后没有任何入口再试，
+                 * 只能靠用户手跑 `--content-build --rebuild`。这里对齐文件名索引。 */
+                _problem = ContentNative.LastError;
+                CoreLog.Warn($"打开正文索引失败（{rc}）：{_problem}；清掉索引目录重建一次");
+                ContentNative.Close();
+                try { if (File.Exists(StatePath)) File.Delete(StatePath); } catch { }
+                try { if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true); } catch { }
+                try { Directory.CreateDirectory(_dir); } catch { }
+                rc = ContentNative.Open(_dir);
+            }
+            if (rc != 0)
+            {
                 _problem = ContentNative.LastError;
                 _status = "打开正文索引失败";
-                CoreLog.Warn("打开正文索引失败：" + _problem);
+                CoreLog.Warn("重建之后仍然打不开正文索引：" + _problem);
+                /* 复位后下一次 Start() 还能再试，不至于一轮失败就永久关死。 */
+                Interlocked.Exchange(ref _started, 0);
                 return;
             }
 

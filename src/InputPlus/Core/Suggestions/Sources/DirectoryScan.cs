@@ -74,7 +74,7 @@ internal static class DirectoryScan
 
             var list = new List<string>();
             foreach (string dir in Directory.EnumerateDirectories(parent, mask, SearchOption.TopDirectoryOnly)
-                         .Take(16))
+                         .Take(64))
             {
                 string candidate = tail.Length == 0 ? dir : dir + tail;
                 if (DirExists(candidate)) list.Add(candidate);

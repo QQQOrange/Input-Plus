@@ -170,8 +170,17 @@ public sealed partial class AppHost : IDisposable
         Scroll = new Core.Scroll.SmoothScrollService(() => Settings)
         {
             WheelBindingHeld = direction => Engine.HasWheelBinding(direction),
+            /* 回声校验：吞掉滚轮后必须看到"自己注入的那一格"从钩子回来，否则退化成原生滚动。
+             * 这里接的是钩子自己的注入计数 —— 只有它知道事件到底有没有进队列
+             * （SendInput 返回成功、宿主没接住、安全软件过滤，这些都只有钩子看得见）。 */
+            InjectedEcho = () => Gestures.Hook?.InjectedWheelEventCount ?? -1,
         };
         Scroll.Attach(Gestures.Hook);
+        /* 订阅只在 Attach 那一刻做一次：如果手势自己的钩子这时还没建起来
+         * （Attach() 里创建失败就是 null），之后除非用户恰好改一次设置，
+         * 平滑滚动**整场会话**都收不到滚轮 —— 表现就是"开了平滑，一点效果都没有"。
+         * 这里用一次性重试把订阅补上，补不上就写日志（别再静默）。 */
+        RetryScrollAttach(0);
         SettingsChanged += () =>
         {
             try
@@ -300,6 +309,35 @@ public sealed partial class AppHost : IDisposable
         // 剪贴板：用 AddClipboardFormatListener 的消息驱动，取代上游 900ms 轮询
         _clipboard = new ClipboardWatcher(OnClipboardChanged);
         _watchdog = new HookWatchdog(Engine, _dispatcher, message => Notify(message));
+    }
+
+    /// <summary>
+    /// 把手势钩子补订到平滑滚动上（见构造处的说明）。
+    /// 每秒试一次，最多 10 次；成功就停，失败留一行日志。
+    /// </summary>
+    private void RetryScrollAttach(int attempt)
+    {
+        try
+        {
+            if (Gestures.Hook is { } hook)
+            {
+                Scroll.Attach(hook);
+                if (attempt > 0) CoreLog.Info($"平滑滚动：第 {attempt} 次重试把订阅补上了（钩子之前是 null）");
+                return;
+            }
+            if (attempt >= 10)
+            {
+                CoreLog.Warn("平滑滚动：手势钩子 10 秒内都没建起来，本次会话不会平滑（滚轮按原样交给系统）");
+                return;
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "补订平滑滚动"); }
+
+        var timer = new System.Threading.Timer(_ =>
+        {
+            try { _dispatcher.BeginInvoke(() => RetryScrollAttach(attempt + 1)); } catch { }
+        }, null, 1000, System.Threading.Timeout.Infinite);
+        GC.KeepAlive(timer);
     }
 
     private void WireEvents()

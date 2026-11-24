@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
+using InputPlus.Core.Input;
 using InputPlus.Core.Scroll;
 using InputPlus.Core.Settings;
 
@@ -453,6 +454,129 @@ public static partial class SelfTest
             }
             finally
             {
+                SmoothScrollService.SendForTest = null;
+            }
+        }
+
+        /* ---- 四道闸（照上游）：目标程序 / 控件类 / 修饰键 / delta 口径 ----
+         *
+         * 用户 2026-11-23 报"滚轮失效"。上游 SmoothScroll 的两道硬闸我们一直没搬：
+         *   ① `%System32%` 下的程序一律不平滑（伪代码里整段排队都在 `if 路径不含 System32` 内层）；
+         *   ② Ctrl/Alt + 滚轮直接放行。
+         * 再加上经典控件（EDIT/ListBox）吃 `delta/120` 整数除法这一条，
+         * 就解释了"开了平滑之后某些程序滚不动"。
+         */
+        {
+            var gateSettings = new AppSettings
+            {
+                Scroll = new ScrollOptions { Enabled = true, AnimationTime = 60, HorizontalShift = false },
+            };
+            var savedTarget = SmoothScrollService.DefaultTargetForTest;
+            var savedKeys = SmoothScrollService.DefaultIsKeyDownForTest;
+            SmoothScrollService.SendForTest = (_, _) => { };
+
+            try
+            {
+                SmoothScrollService.DefaultIsKeyDownForTest = _ => false;
+
+                SmoothScrollService.DefaultTargetForTest = ("Edit", @"C:\Apps\foo.exe");
+                using (var s = new SmoothScrollService(() => gateSettings))
+                    Check("闸：经典控件 Edit 放行（让它整格滚）", !s.OnWheel(120, false, false));
+
+                SmoothScrollService.DefaultTargetForTest = ("Chrome_WidgetWin_1", @"C:\Windows\System32\notepad.exe");
+                using (var s = new SmoothScrollService(() => gateSettings))
+                    Check("闸：System32 下的程序放行（上游整块排除）", !s.OnWheel(120, false, false));
+
+                SmoothScrollService.DefaultTargetForTest = ("Chrome_WidgetWin_1", @"C:\Apps\chrome.exe");
+                using (var s = new SmoothScrollService(() => gateSettings))
+                {
+                    Check("闸：普通程序照常接管", s.OnWheel(120, false, false));
+                    Check("delta 口径：60（半格）放行", !s.OnWheel(60, false, false));
+                    Check("delta 口径：30（触摸板）放行", !s.OnWheel(30, false, false));
+                    Check("delta 口径：100 的整数倍接管", s.OnWheel(100, false, false));
+                    Check("delta 口径：240（两格合并）接管", s.OnWheel(240, false, false));
+                }
+
+                SmoothScrollService.DefaultIsKeyDownForTest = vk => vk == VK.Control;
+                using (var s = new SmoothScrollService(() => gateSettings))
+                    Check("闸：Ctrl+滚轮 放行给目标程序（缩放）", !s.OnWheel(120, false, false));
+
+                SmoothScrollService.DefaultIsKeyDownForTest = vk => vk == VK.Menu;
+                using (var s = new SmoothScrollService(() => gateSettings))
+                    Check("闸：Alt+滚轮 放行给目标程序", !s.OnWheel(120, false, false));
+            }
+            finally
+            {
+                SmoothScrollService.DefaultTargetForTest = savedTarget;
+                SmoothScrollService.DefaultIsKeyDownForTest = savedKeys;
+                SmoothScrollService.SendForTest = null;
+            }
+        }
+
+        /* ---- 纯函数：delta 像不像"鼠标滚一格"（上游 0x32 + 120/100 口径） ---- */
+        Check("delta 判定：<50 一律不算滚轮格", !SmoothScrollService.LooksLikeNotchDelta(49));
+        Check("delta 判定：120 算", SmoothScrollService.LooksLikeNotchDelta(120));
+        Check("delta 判定：-120 算", SmoothScrollService.LooksLikeNotchDelta(-120));
+        Check("delta 判定：240 算（合并的两格）", SmoothScrollService.LooksLikeNotchDelta(240));
+        Check("delta 判定：100 算（部分驱动）", SmoothScrollService.LooksLikeNotchDelta(100));
+        Check("delta 判定：60 不算", !SmoothScrollService.LooksLikeNotchDelta(60));
+
+        /* ---- 回声校验：吞了却看不到注入回响 → 冷却三格，再自动回到接管 ----
+         *
+         * 第一版这里用的是 static 的"停接管 30 秒→5 分钟"，一次误判就让平滑消失
+         * 好几分钟，连 `--scroll-probe` 都会跟着被污染。上游根本没有这种状态，
+         * 它只回答"这一格能不能做"。现在改成按**格数**冷却，事件恢复就自然回正。
+         */
+        {
+            var echoSettings = new AppSettings
+            {
+                Scroll = new ScrollOptions { Enabled = true, AnimationTime = 60, HorizontalShift = false },
+            };
+            var savedTarget = SmoothScrollService.DefaultTargetForTest;
+            var savedKeys = SmoothScrollService.DefaultIsKeyDownForTest;
+            SmoothScrollService.SendForTest = (_, _) => { };
+            SmoothScrollService.DefaultTargetForTest = ("Chrome_WidgetWin_1", @"C:\Apps\chrome.exe");
+            SmoothScrollService.DefaultIsKeyDownForTest = _ => false;
+
+            try
+            {
+                /* ① 死链路：注入计数永远不动 */
+                long deadEcho = 0;
+                using (var dead = new SmoothScrollService(() => echoSettings)
+                {
+                    InjectedEcho = () => Volatile.Read(ref deadEcho),
+                })
+                {
+                    dead.ResetEchoForTest();
+                    Check("回声：第一格照常接管（还没到判定期）", dead.OnWheel(120, false, false));
+                    Thread.Sleep(300);   // 超过 EchoDeadlineMs(150)
+                    Check("回声：上一格没回响，这一格直接放行", !dead.OnWheel(120, false, false));
+                    CheckEqual("回声：记账一次", dead.SwallowWithoutEcho, 1L);
+                    Check("回声：冷却第 1 格放行", !dead.OnWheel(120, false, false));
+                    Check("回声：冷却第 2 格放行", !dead.OnWheel(120, false, false));
+                    Check("回声：冷却第 3 格放行", !dead.OnWheel(120, false, false));
+                    Check("回声：冷却用完自动回到接管（不会永久躺平）", dead.OnWheel(120, false, false));
+                }
+
+                /* ② 活链路：回响每次都涨，就该一直吞（别把正常机器误判成死的） */
+                long liveEcho = 0;
+                using (var live = new SmoothScrollService(() => echoSettings)
+                {
+                    InjectedEcho = () => Interlocked.Increment(ref liveEcho),
+                })
+                {
+                    live.ResetEchoForTest();
+                    bool l1 = live.OnWheel(120, false, false);
+                    Thread.Sleep(300);
+                    bool l2 = live.OnWheel(120, false, false);
+                    Check("回声：有回响就一直接管（不误伤正常机器）", l1 && l2);
+                    CheckEqual("回声：有回响时不记这笔账", live.SwallowWithoutEcho, 0L);
+                }
+            }
+            finally
+            {
+                SmoothScrollService.DefaultTargetForTest = savedTarget;
+                SmoothScrollService.DefaultIsKeyDownForTest = savedKeys;
                 SmoothScrollService.SendForTest = null;
             }
         }

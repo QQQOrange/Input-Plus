@@ -56,7 +56,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
-                            <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.Control}" />
+                            <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource Radius.All}" />
                             <ToggleButton x:Name="Toggle" Focusable="False" ClickMode="Press"
                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                                 <ToggleButton.Template>
@@ -79,7 +79,7 @@
                                    PopupAnimation="Fade">
                                 <Border Background="{DynamicResource Brush.Surface}"
                                         BorderBrush="{DynamicResource Brush.BorderStrong}"
-                                        BorderThickness="1" CornerRadius="{DynamicResource Radius.Control}" Margin="0,4,0,0" Padding="4"
+                                        BorderThickness="1" CornerRadius="{DynamicResource Radius.All}" Margin="0,4,0,0" Padding="4"
                                         MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                         MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                         TextElement.Foreground="{DynamicResource Brush.TextPrimary}">
@@ -103,7 +103,7 @@
         </Style>
     </UserControl.Resources>
 
-    <Border x:Name="Shell" CornerRadius="{DynamicResource Radius.Control}" BorderThickness="1" MinHeight="34"
+    <Border x:Name="Shell" CornerRadius="{DynamicResource Radius.All}" BorderThickness="1" MinHeight="34"
             Background="{DynamicResource Brush.Surface}"
             SnapsToDevicePixels="True">
         <Border.Style>

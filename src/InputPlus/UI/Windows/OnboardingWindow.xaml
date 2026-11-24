@@ -8,7 +8,7 @@
         FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
 
     <Grid Margin="24">
-        <Border CornerRadius="{DynamicResource Radius.Card}" Background="{DynamicResource Brush.Surface}" BorderThickness="1"
+        <Border CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.Surface}" BorderThickness="1"
                 BorderBrush="{DynamicResource Brush.BorderStrong}">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -17,7 +17,7 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- 左：品牌区 -->
-                <Border Grid.Column="0" CornerRadius="12,0,0,12">
+                <Border Grid.Column="0" CornerRadius="{DynamicResource Radius.Left}">
                     <Border.Background>
                         <!-- 品牌渐变：定义在 Controls.xaml（Brush.BrandHero），两套主题共用 -->
                         <StaticResource ResourceKey="Brush.BrandHero" />
@@ -25,7 +25,7 @@
                     <Grid>
                         <StackPanel VerticalAlignment="Center" Margin="30,0">
                             <!-- 与侧栏、exe 用同一张应用图标（淡白描边勾出轮廓） -->
-                            <Border CornerRadius="{DynamicResource Radius.Card}" BorderThickness="1" BorderBrush="{StaticResource Brush.BrandHairline}"
+                            <Border CornerRadius="{DynamicResource Radius.All}" BorderThickness="1" BorderBrush="{StaticResource Brush.BrandHairline}"
                                     HorizontalAlignment="Left">
                                 <Image Width="64" Height="64"
                                        RenderOptions.BitmapScalingMode="HighQuality"

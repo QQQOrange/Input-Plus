@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -24,7 +24,10 @@ namespace InputPlus.Core.Qbar;
 internal static class QbarIndexWatcher
 {
     private const int BufferBytes = 64 * 1024;
-    private const int DebounceMs = 250;
+    /* 250ms → 1500ms：这个间隔直接决定"每秒提交几次索引"。
+     * 250ms 时，任何持续写入的目录都会让索引每秒提交数次，而每次提交都要合并段；
+     * 合并占满一个核之后，手势采样、钩子回调、滚动帧就都跟着卡。 */
+    private const int DebounceMs = 1500;
     private const int MaxBatch = 4096;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
 
@@ -183,6 +186,13 @@ internal static class QbarIndexWatcher
 
                 string relative = Encoding.Unicode.GetString(buffer, offset + 12, nameLength);
                 string full = Path.Combine(_root, relative);
+                /* 自己的数据目录产生的变更**一律忽略**。
+                 *
+                 * 这是自激回路的那一刀：索引段文件、app.log、settings.json 都在
+                 * 盘根之下，watcher 又监听着 SIZE/LAST_WRITE —— 不忽略的话，
+                 * "写索引"本身会立刻变成"要写索引"，每 2 秒一轮，CPU 永久打满
+                 * （实测主进程常驻 ~1.8 个核）。 */
+                if (!QbarRoots.IsOwnData(full))
                 switch (action)
                 {
                     case 2: // FILE_ACTION_REMOVED

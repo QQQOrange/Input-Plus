@@ -92,6 +92,10 @@ internal static class ScrollProbeCli
             report.AppendLine("  触发键绑定占用：" + service.RejectedBinding);
             report.AppendLine("  程序例外禁用：" + service.RejectedRule);
             report.AppendLine("  触摸板细碎 delta：" + service.RejectedTouchpad);
+            report.AppendLine("  注入被挡而放行：" + service.RejectedBlocked
+                              + (service.RejectedBlocked > 0
+                                  ? "  ← 这一项非 0 就是「滚轮被吞了却注不进去」，查前台是不是管理员窗口/UIPI"
+                                  : ""));
 
             if (physical == 0 && injected <= 8)
             {

@@ -15,9 +15,11 @@
         刻意做成**点击穿透**（IsHitTestVisible=False）：它压在别的窗口上方，
         能点的话会挡住用户真正想点的东西。停止录制回主窗口点。
     -->
-    <Border CornerRadius="{DynamicResource Radius.Pill}" Background="{DynamicResource Brush.OverlayCardAlt}"
+    <!-- 圆角 = 半高（32/2）。写 Radius.Pill(999) 的话 WPF 会按轴压缩成椭圆角，
+         这条"胶囊"就成了一眼能看出的鸭蛋形。 -->
+    <Border CornerRadius="16" Height="32" Background="{DynamicResource Brush.OverlayCardAlt}"
             BorderThickness="1" BorderBrush="{DynamicResource Brush.OverlayBorder}"
-            Padding="15,7" Margin="20">
+            Padding="15,0" Margin="20">
         <StackPanel Orientation="Horizontal">
             <Ellipse x:Name="Dot" Width="9" Height="9" Fill="{DynamicResource Brush.Danger}" VerticalAlignment="Center" />
             <TextBlock Text="{loc:T '录制中'}" Foreground="{DynamicResource Brush.OverlayText}" FontSize="12.5" FontWeight="SemiBold"

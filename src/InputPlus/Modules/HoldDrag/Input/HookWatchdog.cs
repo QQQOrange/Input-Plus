@@ -77,6 +77,9 @@ internal sealed class HookWatchdog : IDisposable
 	/// <summary>上一次补装鼠标钩子的时刻（TickCount64），防止每秒刷一次日志。</summary>
 	private long _lastMouseRetryAt;
 
+	/// <summary>上一次重建钩子线程的时刻（TickCount64），防止每 3 秒重建一次。</summary>
+	private long _lastThreadReviveAt;
+
 	public int Checks { get; private set; }
 
 	public int Rescues { get; private set; }
@@ -137,6 +140,19 @@ internal sealed class HookWatchdog : IDisposable
 	{
 		Checks++;
 		CheckCallbackStall();
+		/* 钩子线程整个退出了（GetMessageW 返回 ≤0）：引擎已经把句柄清空、消息循环也没了，
+		 * 这一路只有重新 Install() 能救。每 5 秒最多试一次，别和别的检查抢。 */
+		if (!_hooks.HookThreadAlive)
+		{
+			long reviveTick = Environment.TickCount64;
+			if (reviveTick - Interlocked.Read(ref _lastThreadReviveAt) >= 5000)
+			{
+				Interlocked.Exchange(ref _lastThreadReviveAt, reviveTick);
+				Log.Info("按住拖拽：钩子线程已退出，正在重建钩子线程。");
+				_hooks.Install();
+			}
+			return false;
+		}
 		// 鼠标钩子现在是按需装的（不拖的时候本来就卸着）：这段时间收不到鼠标事件完全正常，
 		// 绝不能当成「钩子掉了」去重装 —— 否则空闲时每 5 秒白重装一次。
 		if (!_hooks.MouseInstalled)

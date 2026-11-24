@@ -81,6 +81,23 @@ public sealed partial class AppHost
     /// <summary>钩子自检的计时器（首轮失败时要临时提前复查）。</summary>
     private System.Windows.Threading.DispatcherTimer? _probeTimer;
 
+    /// <summary>钩子自检单飞闸：一轮没跑完，下一拍直接跳过（不要让两轮探针叠在一起）。</summary>
+    private int _probeBusy;
+
+    /// <summary>
+    /// 改探活间隔。
+    ///
+    /// 探活现在跑在后台线程上，而 DispatcherTimer 的 Interval 属于界面线程那一侧 ——
+    /// 这里统一 marshal 回去，不依赖 DispatcherTimer 内部自己怎么处理跨线程。
+    /// </summary>
+    private void SetProbeInterval(TimeSpan interval)
+    {
+        _ = _dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_probeTimer != null) _probeTimer.Interval = interval;
+        }));
+    }
+
     /// <summary>Raw Input 收到的按键总数（和钩子的事件数对比，用来发现"钩子被摘"）。</summary>
     private long _rawKeyCount;
 
@@ -147,7 +164,19 @@ public sealed partial class AppHost
             {
                 timer.Interval = TimeSpan.FromSeconds(60);
             }
-            ProbeHookOnce(round == 1 ? "启动自检" : "定期自检", verbose);
+            /* 探活一轮最坏要 3×900ms + 2×150ms ≈ 3 秒，里面还有一次 RestartHook 的 Join(3s)，
+             * 以前它就跑在这个 DispatcherTimer 上 —— 也就是**界面线程**：
+             * 钩子坏掉的那些机器上每 5 秒冻一次界面，用户以为"程序卡死了"。
+             * 现在挪到后台跑，同一时刻只允许一轮（_probeBusy 单飞闸）。
+             * 界面亲和的两处（定时器间隔、Toast）都各自 marshal 回去了。 */
+            string why = round == 1 ? "启动自检" : "定期自检";
+            if (Interlocked.CompareExchange(ref _probeBusy, 1, 0) != 0) return;
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { ProbeHookOnce(why, verbose); }
+                catch (Exception ex) { CoreLog.Swallow(ex, "钩子自检"); }
+                finally { Interlocked.Exchange(ref _probeBusy, 0); }
+            });
         };
         timer.Start();
     }
@@ -687,8 +716,8 @@ public sealed partial class AppHost
             if (ok)
             {
                 _probeFailures = 0;
-                if (_probeTimer != null && !verbose && _probeTimer.Interval != TimeSpan.FromSeconds(60))
-                    _probeTimer.Interval = TimeSpan.FromSeconds(60);
+                if (!verbose && _probeTimer?.Interval != TimeSpan.FromSeconds(60))
+                    SetProbeInterval(TimeSpan.FromSeconds(60));
             }
             if (ok && verbose)
             {
@@ -708,7 +737,7 @@ public sealed partial class AppHost
             if (_probeFailures < 2)
             {
                 CoreLog.Info($"钩子自检第一轮没过（{why}）：可能是启动期注入还没落地，5 秒后复查");
-                if (_probeTimer != null) _probeTimer.Interval = TimeSpan.FromSeconds(5);
+                SetProbeInterval(TimeSpan.FromSeconds(5));
                 return;
             }
 

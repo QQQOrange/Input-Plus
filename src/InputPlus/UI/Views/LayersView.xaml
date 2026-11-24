@@ -196,7 +196,7 @@
                             <ItemsControl x:Name="LayerList" Margin="0,12,0,0">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                                        <Border Margin="0,0,0,6" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                                 Background="{DynamicResource Brush.SurfaceAlt}"
                                                 BorderBrush="{Binding RowBorder}" BorderThickness="1">
                                             <Grid>

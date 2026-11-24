@@ -891,11 +891,12 @@ public static partial class SelfTest
          * 规则（用户原话）：勾了「识别手势立即执行」的，生效那一刻就消失；
          * 没勾的，画的过程中方框跟着预览，松手结算执行时立刻消失。
          * 两种情况都不留尾巴 —— 所以常量必须是 0。 */
-        CheckEqual("命中执行后名称立刻消失（停留 0 毫秒）", GestureService.HitLabelLingerMs, 0);
+        CheckEqual("命中后名称停留 250 毫秒（WG2 的标签停留值）", GestureService.HitLabelLingerMs, 250);
 
-        /* ---- 轨迹几何：WG2 的 20px 采样 / ≤128 点切角 / 立刻清空 ----
-         * 对齐的是 A/U.cs 的 C_f = 20f 与 F()（count <= 128 ? 1 : 0 轮平滑），
-         * 以及 A/T.cs:115-119 的"手势结束就把轨迹整条清掉"。 */
+        /* ---- 轨迹几何：20px 采样（WG2 的绘制口径 C_f=20f）/ ≤128 点 1 轮切角 / 立刻清空 ----
+         * 采样距离在 2026-11-24 改过两轮：20 → 8 → **回到 20**。
+         * 8px 是当时误把"识别距离"和"绘制距离"当成一回事；WG2 里画线用 20px
+         * （A/U.cs），送识别的是 30px（A/L.cs）。用例跟着绘制口径走。 */
         var trail = new InputPlus.UI.Windows.GestureTrail();
         Check("轨迹第一个点一定收下", trail.Add(0, 0));
         Check("离上一个点不到 20px 的点丢弃", !trail.Add(19, 0));

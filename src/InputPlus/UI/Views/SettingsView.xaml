@@ -96,7 +96,7 @@
                         </StackPanel>
 
                         <Border x:Name="UsageDetailPanel" Visibility="Collapsed" Margin="0,10,0,0"
-                                Padding="12,10" CornerRadius="{DynamicResource Radius.Control}" Background="{DynamicResource Brush.SurfaceAlt}">
+                                Padding="12,10" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.SurfaceAlt}">
                             <StackPanel>
                                 <TextBlock Text="{loc:T '动作排行'}" Style="{StaticResource Text.Tertiary}" />
                                 <ItemsControl x:Name="UsageRankList" Margin="0,6,0,0" />
@@ -243,7 +243,7 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="{loc:T '以管理员身份启动'}" Style="{StaticResource Text.Body}" />
                                     <Border x:Name="AdminBadge" Margin="8,0,0,0" Padding="7,1"
-                                            CornerRadius="{DynamicResource Radius.Small}" Background="{DynamicResource Brush.WarningSoft}"
+                                            CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.WarningSoft}"
                                             BorderBrush="{DynamicResource Brush.WarningBorder}" BorderThickness="1"
                                             VerticalAlignment="Center">
                                         <TextBlock x:Name="AdminBadgeText" Text="{loc:T '管理员'}" FontSize="10.5"
@@ -679,7 +679,7 @@
                                     Tag="toast" Click="OnPickToastColor"
                                     ToolTip="{loc:T '提示条的底色（保留透明度）。'}">
                                 <StackPanel Orientation="Horizontal">
-                                    <Border x:Name="ToastColorSwatch" Width="16" Height="16" CornerRadius="{DynamicResource Radius.Tiny}"
+                                    <Border x:Name="ToastColorSwatch" Width="16" Height="16" CornerRadius="{DynamicResource Radius.All}"
                                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1" />
                                     <TextBlock Text="{loc:T '选择颜色'}" Margin="6,0,0,0" VerticalAlignment="Center" />
                                 </StackPanel>

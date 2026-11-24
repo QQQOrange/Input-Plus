@@ -81,6 +81,21 @@ public sealed class WheelGestureSession
 
     public bool Active => Vk != 0;
 
+    /// <summary>
+    /// 会话开始的时刻（TickCount64）。
+    ///
+    /// 用途只有一个：抬手丢了之后的兜底。这一路的结束条件**只有**触发键抬起，
+    /// 而 UAC 安全桌面、锁屏、钩子重装缝隙里那条 WM_*BUTTONUP 不会到 ——
+    /// 会话就一直活着，之后每滚一格都执行一次动作，直到用户再按一次那颗键。
+    /// </summary>
+    public long StartedAtMs { get; private set; }
+
+    /// <summary>按住多久还没抬起就当作"抬手丢了"。60 秒：正常按住不放几乎到不了。</summary>
+    public const int MaxHoldMs = 60000;
+
+    /// <summary>会话已经活过了上限（调用方据此收尾）。</summary>
+    public bool Expired(long nowMs) => Vk != 0 && nowMs - StartedAtMs > MaxHoldMs;
+
     private int _lastSign;
 
     /// <summary>
@@ -91,6 +106,7 @@ public sealed class WheelGestureSession
     {
         if (vk == 0 || vk == Vk) return;
         Vk = vk;
+        StartedAtMs = Environment.TickCount64;
         Fired = false;
         Hits = 0;
         Reversals = 0;

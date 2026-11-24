@@ -25,7 +25,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ListViewItem">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                CornerRadius="{DynamicResource Radius.Small}" Padding="{TemplateBinding Padding}">
+                                CornerRadius="{DynamicResource Radius.All}" Padding="{TemplateBinding Padding}">
                             <GridViewRowPresenter
                                 Columns="{Binding View.Columns, RelativeSource={RelativeSource AncestorType=ListView}}"
                                 Content="{TemplateBinding Content}" />
@@ -58,7 +58,7 @@
                     <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,6,0,0"
                                Text="{loc:T '在这个页面里直接按键即可。按住触发键再按别的键，下面会立刻显示切到了第几层。'}" />
 
-                    <Border Margin="0,16,0,0" Padding="18,16" CornerRadius="{DynamicResource Radius.Control}"
+                    <Border Margin="0,16,0,0" Padding="18,16" CornerRadius="{DynamicResource Radius.All}"
                             Background="{DynamicResource Brush.SurfaceAlt}"
                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                         <StackPanel>
@@ -78,7 +78,7 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
-                        <Border Grid.Column="0" Margin="0,0,5,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border Grid.Column="0" Margin="0,0,5,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}">
                             <StackPanel>
                                 <TextBlock Text="{loc:T '键盘钩子'}" Style="{StaticResource Text.Tertiary}" FontSize="11" />
@@ -87,7 +87,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Grid.Column="1" Margin="5,0,5,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border Grid.Column="1" Margin="5,0,5,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}">
                             <StackPanel>
                                 <TextBlock Text="{loc:T '触发键'}" Style="{StaticResource Text.Tertiary}" FontSize="11" />
@@ -96,7 +96,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Grid.Column="2" Margin="5,0,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.Control}"
+                        <Border Grid.Column="2" Margin="5,0,0,0" Padding="12,10" CornerRadius="{DynamicResource Radius.All}"
                                 Background="{DynamicResource Brush.SurfaceAlt}">
                             <StackPanel>
                                 <TextBlock Text="{loc:T '当前层'}" Style="{StaticResource Text.Tertiary}" FontSize="11" />

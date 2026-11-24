@@ -30,7 +30,7 @@ public static class CliFlags
         "--content-status", "--content-build", "--content-query", "--content-extract",
         "--shell-probe", "--dialogprobe", "--filedialog-e2e", "--suggestions-probe", "--scroll-probe",
         "--foreground-file", "--reveal-file", "--office-recent",
-        "--gesture-overlay-diag",
+        "--gesture-overlay-diag", "--capture-test",
     };
 
     /// <summary>

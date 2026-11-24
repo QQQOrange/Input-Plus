@@ -814,7 +814,7 @@ public partial class FileDialogBarWindow : Window
 
         /* 贴住对话框那一条边是直角（外侧两角保持圆角）；接触侧不留阴影留白，
          * 否则那条 8DIP 的透明边距看起来就是"没贴紧"的缝。 */
-        Panel.CornerRadius = below ? new CornerRadius(0, 0, 12, 12) : new CornerRadius(12, 12, 0, 0);
+        Panel.CornerRadius = below ? ThemeMetrics.CornerBottom : ThemeMetrics.CornerTop;
         if (OuterGrid != null)
             OuterGrid.Margin = below ? new Thickness(8, 0, 8, 8) : new Thickness(8, 8, 8, 0);
     }

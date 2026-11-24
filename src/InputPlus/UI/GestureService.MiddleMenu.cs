@@ -451,13 +451,7 @@ public sealed partial class GestureService
 
             try
             {
-                var win = new GestureMenuWindow(def, ActionCatalog.TitleOf, favorite)
-                {
-                    /* 悬停展开固定文件夹时先取多少条：跟「搜索前建议」的条数设置走
-                     * （用户明确要求"具体显示条目受搜索前建议的约束"）。 */
-                    FolderPageSize = Core.Gestures.FolderPeek.PageSizeFor(
-                        settings.Suggestions?.ShowCount ?? Core.Gestures.FolderPeek.DefaultPageSize),
-                };
+                var win = new GestureMenuWindow(def, ActionCatalog.TitleOf, favorite);
                 win.Closed += (_, _) => OnMiddleMenuClosed(win);
                 _middleMenu = win;
                 win.Show();

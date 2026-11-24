@@ -76,6 +76,9 @@ internal sealed class HookEngine : IDisposable
 
 	public bool KeyboardInstalled => _kbHook != IntPtr.Zero;
 
+	/// <summary>钩子线程本身还活着吗。句柄非零但线程已退出 = 钩子收不到任何事件。</summary>
+	public bool HookThreadAlive => _hookThread is { IsAlive: true };
+
 	public bool MouseInstalled => _msHook != IntPtr.Zero;
 
 	/// <summary>鼠标钩子此刻是不是「该装着」（按着触发键 / 正在拖）。看门狗据此判断掉事件是不是正常。</summary>
@@ -120,9 +123,19 @@ internal sealed class HookEngine : IDisposable
 	public bool Install()
 	{
 		// 鼠标钩子按需装（altdrag hooks.c:1914-1934）：这里只认键盘钩子有没有装上。
-		if (_kbHook != IntPtr.Zero)
+		/* 句柄非零**不等于**「钩子还活着」：钩子线程因为 GetMessageW 返回 ≤0 退出时，
+		 * 句柄还留在字段里。这时直接 return true 会让调用方以为装好了，
+		 * 而回调永远不会再来 —— 「按住拖拽按了没反应」，且没有任何重装路径。
+		 * 所以这里同时要求线程还活着，并把上一轮的僵尸句柄丢掉。 */
+		if (_kbHook != IntPtr.Zero && HookThreadAlive)
 		{
 			return true;
+		}
+		if (_kbHook != IntPtr.Zero)
+		{
+			HookProbe.W("Install(): 上一轮钩子线程已退出，丢弃僵尸句柄 kbHook=0x" + _kbHook.ToString("X"));
+			_kbHook = IntPtr.Zero;
+			_msHook = IntPtr.Zero;
 		}
 		LastError = 0;
 		_hookQuit = false;
@@ -231,6 +244,15 @@ internal sealed class HookEngine : IDisposable
 				}
 			}
 			HookProbe.W("钩子线程结束（_hookQuit=" + _hookQuit + "）");
+			/* 线程要退出了：把所有「看起来还装着」的状态清干净。
+			 * 不清的话 Install() 和看门狗都会拿这个非零句柄当成「一切正常」。
+			 * _hookThreadId 尤其要清 —— 线程 id 会被系统复用，留着它会让后续
+			 * PostThreadMessage 投到一个毫不相干的线程上。 */
+			_hookQuit = true;
+			_hookThreadId = 0;
+			_kbHook = IntPtr.Zero;
+			_msHook = IntPtr.Zero;
+			Log.Error("按住拖拽：钩子线程已退出（GetMessageW 返回 ≤0），钩子全部失效，等待看门狗重建");
 		}
 		catch (Exception ex)
 		{

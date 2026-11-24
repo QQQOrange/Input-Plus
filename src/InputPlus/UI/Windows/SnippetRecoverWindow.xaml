@@ -28,7 +28,7 @@
             </StackPanel>
 
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource Brush.SurfaceSoft}"
-                    CornerRadius="{DynamicResource Radius.Control}" Padding="10,8" Margin="0,12,0,0">
+                    CornerRadius="{DynamicResource Radius.All}" Padding="10,8" Margin="0,12,0,0">
                 <TextBlock Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap"
                            Text="{loc:T '只补「当前配置里没有的」：同触发词的现有版本不会被覆盖。恢复后照常保存到配置里。'}" />
             </Border>

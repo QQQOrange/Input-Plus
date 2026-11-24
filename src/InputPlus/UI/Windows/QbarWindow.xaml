@@ -62,8 +62,10 @@
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,10,0"
                                 VerticalAlignment="Center">
-                        <!-- 关键词标签：输入 "bd " 后出现 -->
-                        <Border x:Name="ChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.All}" Height="32"
+                        <!-- 关键词标签：输入 "bd " 后出现。
+                             圆角走 Radius.Chip(8)，不是 Radius.All(16)：这个标签 32 高，
+                             16 正好是半高 → 两端变半圆（用户 2026-11-24 报的就是这个）。 -->
+                        <Border x:Name="ChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32"
                                 Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
                                 Background="{DynamicResource Brush.OverlayAccentSoft}" BorderThickness="1"
                                 BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
@@ -94,7 +96,7 @@
                         <!-- 过滤器 chip：输入 "doc:" 并选中命中项后出现在这里。
                              它和上面那个关键词 chip 是两回事：关键词 chip 改的是"去哪儿搜"，
                              这个改的是"搜什么"（扩展名/范围/时间），所以两个可以同时存在。 -->
-                        <Border x:Name="FilterChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.All}" Height="32"
+                        <Border x:Name="FilterChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32"
                                 Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
                                 Background="{DynamicResource Brush.OverlayRowHover}" BorderThickness="1"
                                 BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">

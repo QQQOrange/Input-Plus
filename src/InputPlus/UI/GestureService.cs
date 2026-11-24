@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -38,20 +38,6 @@ public sealed partial class GestureService : IDisposable
 
     private GestureOverlayWindow? _overlay;
     private DispatcherTimer? _poll;
-
-    /// <summary>是否正在记一笔（钩子线程只读这一个 volatile 标志，不加锁）。</summary>
-    private volatile bool _capturing;
-
-    /// <summary>钩子线程攒下的原始移动点（无锁队列：钩子只入队，界面线程只出队）。</summary>
-    private readonly System.Collections.Concurrent.ConcurrentQueue<GestureMath.Pt> _hookPoints = new();
-
-    /// <summary>钩子移动回调被调用的累计次数（诊断"手势采样为什么只有两个点"用）。</summary>
-    private long _moveEventCount;
-
-
-    /// <summary>上次实时识别时的点数与时刻（节流用：见 OnPoll 里的 previewDue）。</summary>
-    private int _lastPreviewPoints;
-    private long _lastPreviewAt;
 
     /// <summary>覆盖层看门狗（见 <see cref="OnOverlayGuard"/>）：100ms 兜一次底。</summary>
     private DispatcherTimer? _overlayGuard;
@@ -147,16 +133,6 @@ public sealed partial class GestureService : IDisposable
      * 0 = 没有待收尾的立即执行；否则是那个鼠标键的 vk。 */
     private int _swallowUpVk;
 
-    /* ── 「按住右键连续滚轮」会话（v1.5.9.1） ──────────────────────
-     *
-     * 用户要的是"右键不松、滚几格换几个标签"。以前滚轮那一下会被当成"这一笔做完了"，
-     * 动作执行完会话就结束，第二格只能再按一次右键。
-     *
-     * 语义与取舍集中写在 <see cref="WheelGestureSession"/> 的注释里（那边是唯一一份说明书）：
-     * 会话在键抬起前一直活着，每格滚轮各自执行一次；只有键抬起才收尾。
-     * 这里只放"谁执行、谁显示"，不重复那份推理。 */
-    private readonly WheelGestureSession _wheelSession = new();
-
     /* ── 「按下被吞、却什么都没补发」的那几条路（v1.4.4 修） ──────────────
      *
      * 起始超时（按住不动 ≥ StartTimeoutMs）、分段过多、看门狗判定抬起丢了 ——
@@ -169,15 +145,6 @@ public sealed partial class GestureService : IDisposable
      *
      * 0 = 没有待补发；否则是那个鼠标键的 vk。抬起事件到达时吞掉它并补发一次点击。 */
     private int _replayClickOnUpVk;
-
-    /// <summary>
-    /// 这一下按下是**为了让滚轮手势工作**才吞的（那颗键上只有滚轮手势、没有笔画手势）。
-    ///
-    /// 为什么要记：按下被吞掉时 `GetAsyncKeyState` 也查不到物理键（见 OverlayGuard 那段），
-    /// 滚轮会话续命时会误判成"键已松开"而把会话收掉 —— 于是又变回"一次按下只换一次"。
-    /// 0 = 没有这回事。
-    /// </summary>
-    private int _wheelPressSwallowedVk;
 
     /* 热角（悬停到屏幕角）监视器。WGestures 用鼠标路径跟踪器顺带判角，
      * 我们已经有独立的鼠标钩子，但"没按键、只是把指针停在角上"不会产生
@@ -304,15 +271,6 @@ public sealed partial class GestureService : IDisposable
         _linger = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
         _fade = new DispatcherTimer(DispatcherPriority.Background, dispatcher);
 
-        /* 轨迹采样定时器（8ms）同样必须建在界面线程上 —— 懒建的版本第一次是在
-         * 钩子线程上建的，那个线程没跑 Dispatcher 队列，于是永远不采样，
-         * 一笔只有两个点，手势永远匹配不上。详细见 StartPoll 的注释。 */
-        _poll = new DispatcherTimer(DispatcherPriority.Send, dispatcher)
-        {
-            Interval = TimeSpan.FromMilliseconds(8),
-        };
-        _poll.Tick += OnPoll;
-
         /* 附加菜单的键盘唤出：设置一变就重注册（用户改完组合键立刻生效），
          * 启动时先按当前设置注册一次。 */
         _host.SettingsChanged += ApplyMiddleHotkey;
@@ -344,10 +302,6 @@ public sealed partial class GestureService : IDisposable
         try
         {
             if (_gestureHook is { MouseHookInstalled: false }) _gestureHook.Restart();
-            /* Attach() 那一次如果抛了（线程创建被拒、桌面切换失败），_gestureHook 会一直是 null，
-             * 上面那条模式匹配对 null 不成立 —— 自愈入口于是空转，手势和平滑滚动从此静默全失效，
-             * 界面上还显示"已开启"。这里补上"没建起来就重建"。 */
-            else if (_gestureHook == null) Attach();
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "重装手势鼠标钩子"); }
     }
@@ -360,7 +314,6 @@ public sealed partial class GestureService : IDisposable
             _gestureHook.GestureButtonEvent += OnButton;
             _gestureHook.GestureWheelEvent += OnWheel;
             _gestureHook.KeySeen += OnKeySeen;
-            _gestureHook.MouseMoveEvent += OnHookMouseMove;
             _gestureHook.Start(mouseOnly: true);
         }
         catch (Exception ex) { CoreLog.Swallow(ex, "安装手势鼠标钩子"); }
@@ -505,7 +458,7 @@ public sealed partial class GestureService : IDisposable
         {
             _recordDone = done;
             IsRecording = true;
-            _active = false; _capturing = false;
+            _active = false;
             _points.Clear();
             _tracker = null;
         }
@@ -609,10 +562,21 @@ public sealed partial class GestureService : IDisposable
     }
 
     /// <summary>
-    /// 指针此刻是不是压在本程序自己的窗口上。
+    /// 指针此刻是不是压在**本程序的浮层**上（菜单弹窗 / Qbar / Toast / OSD / 手势覆盖层）。
     ///
-    /// 这类窗口不参与手势：界面本身要用右键菜单、文本选择、拖动选区，
-    /// 被"可能是手势"吞掉再补发，用户看到的就是"软件里右键没反应"。
+    /// 这类窗口仍然不参与手势：它们本身就是弹出物，用户在上面按右键几乎永远是
+    /// "关掉它"或者用它自己的菜单，不是画手势。
+    ///
+    /// 但**主窗口 / 设置窗这些"本程序的页面"必须能用**。2026-11-24 用户报
+    /// "鼠标手势在 Input Plus 里面仍然不能用"，根子就是这条判定——
+    /// v1.4.3 起它把所有自家窗口**一刀切放行**了（当时的顾虑是"界面自己要右键菜单、
+    /// 文本选择、拖动选区，被吞再补发会显得右键没反应"）。
+    /// 实际上放行不是必需的：不画手势时那一下会走 <see cref="QueueReplayTap"/>
+    /// 补发完整点击，右键菜单照常弹 —— 这正是全局手势在别家程序上的行为，
+    /// 没理由在自己身上就变成"完全不接管"。
+    ///
+    /// 判据和「按住拖拽」那边保持一致（wEx 位）：带 TOOLWINDOW 的是菜单/HUD/提示，
+    /// 带 NOACTIVATE 的是覆盖层/OSD/Toast，剩下的就是用户眼里的"页面"。
     /// </summary>
     private static bool CursorOverOwnWindow()
     {
@@ -621,7 +585,14 @@ public sealed partial class GestureService : IDisposable
             var (px, py) = CursorPos();
             IntPtr hwnd = NativeMethods.WindowFromPoint(
                 new NativeMethods.POINT((int)Math.Round(px), (int)Math.Round(py)));
-            return hwnd != IntPtr.Zero && WindowSummonAnimator.IsOwnProcess(hwnd);
+            if (hwnd == IntPtr.Zero || !WindowSummonAnimator.IsOwnProcess(hwnd)) return false;
+
+            IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+            if (root == IntPtr.Zero) return false;
+
+            int ex = NativeMethods.GetWindowLong(root, NativeMethods.GWL_EXSTYLE);
+            return (ex & NativeMethods.WS_EX_TOOLWINDOW) != 0
+                || (ex & NativeMethods.WS_EX_NOACTIVATE) != 0;
         }
         catch (Exception ex)
         {
@@ -646,13 +617,9 @@ public sealed partial class GestureService : IDisposable
         lock (_gate) mine = _active && _vk == vk;
         if (!mine) return false;
 
-        /* 滚轮会话执行过动作时不能补发点击：用户已经拿到他在要的结果（换标签之类），
-         * 再补一次右键会凭空弹出一个菜单。先取状态，ResetActive 会把它清掉。 */
-        bool wheelFired = _wheelSession.Fired;
         ResetActive();
         AttachDiag($"  -> 中止手势并补发点击：vk=0x{vk:X2}");
-        if (!wheelFired) QueueReplayTap(vk, countAsTap: false);
-        else AttachDiag("  -> 滚轮会话：动作已经执行过，不补发点击");
+        QueueReplayTap(vk, countAsTap: false);
         return true;
     }
 
@@ -746,26 +713,6 @@ public sealed partial class GestureService : IDisposable
          * （用户看到的是动作被执行两遍）。 */
         if (down && !injected) Interlocked.Exchange(ref _replayClickOnUpVk, 0);
 
-        /* 滚轮会话的收尾（v1.5.9.1）：触发键一抬起，会话就结束 —— 下一次按下必须重新起手。
-         *
-         * 这里只收"按下没被吞"的那一种（纯滚轮手势：右键/侧键的按下、抬起都原样交给系统，
-         * 所以收尾只能挂在 OnButton 上）。按下被吞的那一种由下面 Finish 那条路收
-         * （它要在同一个回调里读会话状态，才能决定"动作执行过了、别再补发右键"），
-         * 所以这里遇到 _active 就留给下面，不能抢着清。 */
-        bool wheelFiredOnThisUp = false;
-        if (!down)
-        {
-            bool tracking;
-            lock (_gate) tracking = _active && _vk == vk;
-            if (!tracking)
-            {
-                /* 会话结束会把 Fired 清掉，而下面"吞掉抬起"那条分支要靠它决定
-                 * "滚过就不补发点击" —— 先把结论取出来。 */
-                wheelFiredOnThisUp = _wheelSession.Fired && _wheelSession.Vk == vk;
-                _wheelSession.End(vk);
-            }
-        }
-
         /* 立即执行发生在鼠标键还按着的时候。那一下抬起不能放给系统，
          * 否则前台窗口会收到一个没有配对的 MouseUp。 */
         if (!down && !injected && Interlocked.CompareExchange(ref _swallowUpVk, 0, vk) == vk)
@@ -780,19 +727,8 @@ public sealed partial class GestureService : IDisposable
              * 否则用户按得慢一点（≥ StartTimeoutMs，默认 500ms）右键菜单就永远弹不出来。 */
             if (Interlocked.CompareExchange(ref _replayClickOnUpVk, 0, vk) == vk)
             {
-                /* 这一下按下是为滚轮手势吞的：中间滚过就把点击省掉（那正是用户要的），
-                 * 一格都没滚才是"真的点了一下"，照旧补发。 */
-                bool wheelUsed = wheelFiredOnThisUp;
-                _wheelPressSwallowedVk = 0;
-                if (wheelUsed)
-                {
-                    AttachDiag("  -> 滚轮手势用过：抬起不补发点击");
-                }
-                else
-                {
-                    AttachDiag($"  -> 超时/中止的那一笔：抬起配对补发 vk=0x{vk:X2}");
-                    QueueReplayTap(vk);
-                }
+                AttachDiag($"  -> 超时/中止的那一笔：抬起配对补发 vk=0x{vk:X2}");
+                QueueReplayTap(vk);
             }
             return true;
         }
@@ -831,14 +767,14 @@ public sealed partial class GestureService : IDisposable
          * 表现为“任务栏闪一下、菜单没出来”。这里干脆不接管任务栏上的右键。 */
         if (down && !injected && IsShellTaskbarAtCursor()) { AttachDiag("  -> 任务栏"); return false; }
 
-        /* 指针压在本程序自己的窗口上：**也照常走手势**（v1.5.9 起）。
-         *
-         * 以前这里直接 return false，理由是我们的界面要用右键菜单、文本选择、拖动选区。
-         * 但那条"整体排除"把用户在本程序里的手势也一起废掉了 —— 用户明确要求
-         * "手势对 Input Plus 本身也要生效"。现在交给下面既有的"单击 vs 滑动"分流：
-         *   · 没划动 = 单击 → 抬起时补发原生右键，菜单/选择照旧；
-         *   · 划动了且命中手势 → 执行手势。
-         * 代价是"在设置页按住右键拖选文字"可能被当成手势 —— 这是用户主动选的取舍。 */
+        /* 指针压在本程序自己的窗口上：绝不接管（v1.4.3）。
+         * 我们的界面（设置页、Qbar、各种对话框）自己要用右键菜单、文本选择、拖动选区；
+         * 一旦被当成"可能是手势"吞掉再补发，用户看到的就是"软件里右键没反应"。 */
+        if (down && !injected && CursorOverOwnWindow())
+        {
+            AttachDiag("  -> 指针在本程序窗口上：放行");
+            return false;
+        }
 
         lock (_gate)
         {
@@ -991,29 +927,6 @@ public sealed partial class GestureService : IDisposable
                 .ToList();
             if (candidates.Count == 0)
             {
-                /* 这颗键上**只有滚轮手势**（没有笔画）：按下也得吞。
-                 *
-                 * 以前这里直接放行，于是"按住侧键滚一格换标签"结束时，前台程序会收到
-                 * 一个凭空出现的点击 —— 右键菜单弹出来、或者把刚选中的东西取消掉。
-                 * 用户的原话是"抬手会给程序一次普通点击"，那一下必须消失。
-                 *
-                 * 但"只是点了一下、没滚"的情况要保住：那种抬起会走下面那条配对分支
-                 * 补发一次完整点击（见 OnButton 抬起里的 _replayClickOnUpVk），
-                 * 右键菜单照样出得来。 */
-                if (HasWheelGesture(settings, vk, app))
-                {
-                    if (MiddleMenuTryPlainDown(vk, settings, hasMiddleGesture: false)) return true;
-                    Interlocked.Exchange(ref _swallowUpVk, vk);
-                    Interlocked.Exchange(ref _replayClickOnUpVk, vk);
-                    _wheelPressSwallowedVk = vk;
-                    /* 按下被吞了，`GetAsyncKeyState` 就查不到这颗键（系统队列里没有这次按下），
-                     * 后面那条"按住某颗键再滚"的兜底会认不出来 —— 所以这里直接把滚轮会话开起来，
-                     * 第一格滚轮走 OnWheel 里的"会话续命"那条路。 */
-                    _wheelSession.Begin(vk);
-                    AttachDiag("  -> 只有滚轮手势：按下先吞（没滚过就补发点击）");
-                    return true;
-                }
-
                 /* 路径 A 的第二个入口：手势总开关开着，但用户**没给这颗键配任何手势**。
                  * 以前这里直接把中键放行（浏览器自动滚动就靠这条）。现在先问一句
                  * "空白处的中键要不要弹菜单"，不要才照旧放行。 */
@@ -1063,7 +976,7 @@ public sealed partial class GestureService : IDisposable
 
             lock (_gate)
             {
-                _active = true; _capturing = true;
+                _active = true;
                 _activeSince = Environment.TickCount64;
                 _lastMoveAt = _activeSince;
                 _activeInjected = injected;
@@ -1132,23 +1045,6 @@ public sealed partial class GestureService : IDisposable
             if (!_active || vk != _vk) return false;
         }
 
-        /* 滚轮会话（v1.5.9.1）：这一下按下期间执行过 N 次滚轮动作，松手只是**结束会话**。
-         *   · 不再跑一次笔画判定 —— 滚轮那几格之后画的点早就清掉了，硬比只会误触发；
-         *   · 绝不补发一次右键 —— 动作已经执行过，补发会凭空弹出一个右键菜单。
-         * 抬起仍然要吞（按下当初被我们吞了，漏出去就是一个"没有按下"的 MouseUp）。
-         *
-         * 但如果这一下按下**一格都没执行**（比如只在没绑手势的方向上滚了一下），
-         * 那就还是"什么都没发生"：必须照旧走 Finish —— 它会补发一次右键，
-         * 否则用户按了右键却既没有手势也没有菜单。 */
-        int wheelHits = _wheelSession.Hits;   // End 会把计数清掉，先取
-        bool wheelFired = _wheelSession.Fired;
-        if (_wheelSession.End(vk) && wheelFired)
-        {
-            AttachDiag($"  -> 滚轮会话结束 vk=0x{vk:X2}（执行 {wheelHits} 次）");
-            ResetActive(hideOverlay: false);
-            return true;
-        }
-
         Finish(execute: true);
         return true;
     }
@@ -1187,7 +1083,7 @@ public sealed partial class GestureService : IDisposable
 
         lock (_gate)
         {
-            _active = false; _capturing = false;
+            _active = false;
             _tracker = null;
             _chordSwallow = chordVk;
             /* 组合手势在第二颗键按下时就执行，此时起始键还按着。
@@ -1208,7 +1104,7 @@ public sealed partial class GestureService : IDisposable
             var (px, py) = CursorPos();
             lock (_gate)
             {
-                _active = true; _capturing = true;
+                _active = true;
                 _vk = vk;
                 _points.Clear();
                 _start = new GestureMath.Pt(px, py);
@@ -1276,17 +1172,6 @@ public sealed partial class GestureService : IDisposable
             return false;
         }
 
-        /* 「{作用目标} 完全不触发手势」这条开关必须和按键那条路一致：起手时判过
-         * triggers.IsBlocked（见 OnButton），滚轮这条路以前漏了 ——
-         * 同一个程序里右键划一笔没反应、滚一格却照旧执行动作（角落/贴边滚轮同此一条入口）。 */
-        var wheelSpecials = SpecialTargetsAt();
-        if (new GestureTriggerMap(settings.GestureOptions)
-                .IsBlocked(app, wheelSpecials.Desktop, wheelSpecials.Taskbar))
-        {
-            if (IsTracking) ResetActive();
-            return false;
-        }
-
         bool active;
         int vk;
         string activeApp;
@@ -1311,65 +1196,15 @@ public sealed partial class GestureService : IDisposable
                 return true;
             }
 
-            /* ★「按住右键连滚换标签」的核心（v1.5.9.1）：
-             * 以前这里是 `Execute(); Finish(execute:false)` —— Finish 会把 _active 收掉，
-             * 于是这一下按下只换一次标签；第二格起 _active 已经是 false，只能掉到下面
-             * "靠物理键状态再认一次"那条路上（而那条路在按下被吞掉时查不准，见下文），
-             * 用户看到的就是"必须松开右键重按一次"。
-             *
-             * 现在：行为完全交给会话（WheelGestureSession），执行完**不 Finish** ——
-             * 会话留到键抬起（见 OnButton 的抬起分支），每滚一格再执行一次。
-             * 同一个按下里滚轮再多来几格都走这里。 */
-            _wheelSession.Begin(vk);
-            var outcome = _wheelSession.Wheel(wheel, w => FindWheelGesture(settings, vk, w, activeApp));
-            if (outcome.Kind != WheelOutcomeKind.Execute)
-            {
-                /* 这一格没配手势（多半是反方向没绑）：不执行也不吞，会话保留 ——
-                 * 继续往原方向滚照样连发，这是与 WG2 一致的行为（B/E.cs 没命中就不吞）。 */
-                return false;
-            }
+            var hit = settings.Gestures.FirstOrDefault(g =>
+                g.Enabled && g.Kind == "wheel" && g.Wheel == wheel &&
+                GestureButtons.ToVk(g.Button) == vk && AppMatches(g, activeApp, settings.GestureOptions));
 
-            /* 每一格都是**新的一次动作**：目标窗口按当前的指针/焦点重算一次，
-             * 不能沿用按下那一刻记下的（用户可能已经把鼠标挪到别处再滚）。 */
-            SetActionTarget(wheelTarget);
-            Execute(outcome.Hit!, cx, cy);
-            EnterWheelMode(outcome.Hit!, cx, cy);
+            if (hit == null) return false;
+
+            Execute(hit, cx, cy);
+            Finish(execute: false, keepOverlayFor: hit.HideLabel ? null : hit.Title(ActionCatalogTitle(hit)));
             return true;
-        }
-
-        /* ② 会话续命：这一下按下早就确认是「按住 + 滚轮」，只是当初按下没被我们吞掉
-         * （纯滚轮手势不参与笔画候选，见 OnButton 里 includeWheel:false 那段），
-         * 所以 _active 一直是 false。以前这里每格都要重新问一次物理键状态，
-         * 而按下被吞掉时 GetAsyncKeyState 报的是"没按"（见 OnOverlayGuard 那段注释），
-         * 于是第二格起就落进原生滚动 —— 这正是"一次按下只换一次标签"的另一半原因。
-         *
-         * 现在由会话说了算：只有**没吞过按下**的那种才回头查一次物理键（这时它可靠），
-         * 查出来键已经松开 = 抬起事件丢了，收干净、这一格交回系统。 */
-        if (_wheelSession.Active)
-        {
-            int sessionVk = _wheelSession.Vk;
-            /* 按下是为滚轮手势吞掉的（_wheelPressSwallowedVk）：这时物理键状态查不准，
-             * 一律按"还按着"处理 —— 否则第二格就被误判成"抬起丢了"，又变回一格一按。 */
-            if (_wheelPressSwallowedVk != sessionVk && !InputSender.IsPhysicallyDown(sessionVk))
-            {
-                /* 键其实早松了（抬起事件丢了）：这一格不执行，会话就此作废 */
-                AttachDiag($"  -> 滚轮会话的键 0x{sessionVk:X2} 已松开（抬起丢了），收干净");
-                ResetActive();
-            }
-            else
-            {
-                var outcome = _wheelSession.Wheel(wheel,
-                    w => FindWheelGesture(settings, sessionVk, w, app));
-                if (outcome.Kind == WheelOutcomeKind.Execute)
-                {
-                    SetActionTarget(wheelTarget);
-                    Execute(outcome.Hit!, cx, cy);
-                    ShowLabelOnly(outcome.Hit!, cx, cy);
-                    return true;
-                }
-
-                /* Unbound：不吞这一格，继续往下走角落 / 贴边 / 原生滚动。 */
-            }
         }
 
         /* "角落 + 滚轮"本来就不用按任何键：把手贴到屏幕角上拨一下滚轮。
@@ -1412,56 +1247,24 @@ public sealed partial class GestureService : IDisposable
         }
 
         /* 按住某颗鼠标键再滚：按下没有被吞（上面 OnButton 不再为纯滚轮手势
-         * 开轨迹），所以这里直接看物理键状态，不依赖 _active。
-         * 这一格命中就**开一个滚轮会话**：接下来的每一格走上面那条"会话续命"，
-         * 不再逐格回头查物理键（那样在按下被吞的机器上第二格就断了）。 */
+         * 开轨迹），所以这里直接看物理键状态，不依赖 _active。 */
         foreach (int buttonVk in MouseButtonVks)
         {
             if (!InputSender.IsPhysicallyDown(buttonVk)) continue;
 
-            var held = FindWheelGesture(settings, buttonVk, wheel, app);
+            var held = settings.Gestures.FirstOrDefault(g =>
+                g.Enabled && g.Kind == "wheel" && g.Wheel == wheel &&
+                GestureButtons.ToVk(g.Button) == buttonVk && AppMatches(g, app, settings.GestureOptions));
 
             if (held == null) continue;
 
             SetActionTarget(wheelTarget);
             Execute(held, cx, cy);
             ShowLabelOnly(held, cx, cy);
-            _wheelSession.Begin(buttonVk);
-            _wheelSession.Hit(wheel);
             return true;
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// 这颗键上有没有**任何方向**的滚轮手势（纵向 ±1、横向 ±2）。
-    ///
-    /// 只用来回答一个问题：这颗键按下时要不要为滚轮吞掉 ——
-    /// 有滚轮手势却不在按下时吞，松手就会给前台程序一次"凭空点击"。
-    /// </summary>
-    internal static bool HasWheelGesture(AppSettings settings, int vk, string app)
-    {
-        foreach (int wheel in new[] { 1, -1, 2, -2 })
-        {
-            if (FindWheelGesture(settings, vk, wheel, app) != null) return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 这一格滚轮在 <paramref name="vk"/> 这颗触发键上有没有配手势。
-    ///
-    /// 走 <see cref="Candidates"/> 而不是自己再写一遍 FirstOrDefault：应用作用域、
-    /// 全局手势禁用、组合手势的过滤都在那一处，"滚轮手势忘了 AppMatches"这类分叉就出不来。
-    /// </summary>
-    private static MouseGesture? FindWheelGesture(AppSettings settings, int vk, int wheel, string app)
-    {
-        foreach (var g in Candidates(settings, vk, app, includeWheel: true))
-        {
-            if (g.Kind == "wheel" && g.Wheel == wheel) return g;
-        }
-        return null;
     }
 
     private static readonly int[] MouseButtonVks =
@@ -1477,40 +1280,6 @@ public sealed partial class GestureService : IDisposable
 
     /// <summary>这一笔不切窗口，动作发给当前前台窗口。</summary>
     private void ClearActionTarget() => SetActionTarget(IntPtr.Zero);
-
-    /// <summary>
-    /// 一格滚轮动作已经执行 → 这一下按下转入「滚轮会话」：不再画、不再轮询，
-    /// 等下一格滚轮，或者等这颗键抬起来收尾（<see cref="WheelGestureSession"/>）。
-    ///
-    /// 为什么**不能**在这里 Finish：Finish 会结算一笔"笔画"并收掉 _active，
-    /// 那正是"一次按下只换一次标签"的老行为。滚轮会话由抬起事件结束。
-    /// </summary>
-    private void EnterWheelMode(MouseGesture hit, double px, double py)
-    {
-        lock (_gate)
-        {
-            /* 滚轮不是轨迹点：这一笔之前画的那点东西一律作废。
-             * 少了这一句，"按住右键划一下再滚一格"会在松手时又拿那半截轨迹
-             * 比一次笔画、再执行一条完全无关的手势。 */
-            _points.Clear();
-            _tracker = null;
-            _cornerCandidate = null;
-            _previewTitle = "";
-            _previewCount = 0;
-            _stepsDrawn.Clear();
-            _segStart = 0;
-            _multiExpected = false;
-            /* 连续滚轮不是"按着不动"：每格刷新一下活动时间，
-             * 别让覆盖层看门狗（和还没停干净的轮询）按"8 秒没动 = 抬手丢了"把会话收掉。 */
-            _lastMoveAt = Environment.TickCount64;
-            _activeSince = _lastMoveAt;
-        }
-        _poll?.Stop();
-
-        /* 名字每格闪一次（ShowLabel 会把"收起时间"往后推），
-         * 与角落/贴边滚轮用的是同一个入口，配色与停留时长一致。 */
-        ShowLabelOnly(hit, px, py);
-    }
 
     private void StartHotWatch()
     {
@@ -1759,19 +1528,13 @@ public sealed partial class GestureService : IDisposable
         catch (Exception ex) { CoreLog.Swallow(ex, "手势改认目标"); }
     }
 
-    /// <param name="hideOverlay">
-    /// 要不要顺手把覆盖层收掉。滚轮会话收尾时传 false：那一刻动作刚执行完，
-    /// 名字框该按 <see cref="ShowLabel"/> 排的排期自己淡出，不能一到松手就抹掉
-    /// （否则连着滚了五格，用户一个名字都看不清）。
-    /// </param>
-    private void ResetActive(bool hideOverlay = true)
+    private void ResetActive()
     {
         Interlocked.Exchange(ref _swallowUpVk, 0);
         Interlocked.Exchange(ref _replayClickOnUpVk, 0);
-        _wheelPressSwallowedVk = 0;
         lock (_gate)
         {
-            _active = false; _capturing = false;
+            _active = false;
             _activeInjected = false;
             _tracker = null;
             _cornerCandidate = null;
@@ -1790,11 +1553,9 @@ public sealed partial class GestureService : IDisposable
             _shellOverlayUp = false;
             _shellOverlayDismissed = false;
             _shellOverlayAt = 0;
-            /* 滚轮会话跟着这一笔一起作废：它记的键是"这一下按下"的，笔收了就没意义了。 */
-            _wheelSession.Reset();
         }
         _poll?.Stop();
-        if (hideOverlay) HideOverlay(0);
+        HideOverlay(0);
     }
 
     /// <summary>
@@ -1814,18 +1575,6 @@ public sealed partial class GestureService : IDisposable
     {
         try
         {
-            /* 滚轮会话没有超时就永远结束不了：它的结束条件只有"那颗键抬起"，而这条
-             * WM_*BUTTONUP 在 UAC 安全桌面 / 锁屏 / 钩子重装缝隙里会丢。丢了之后
-             * 会话一直活着 —— 之后每滚一格都执行一次动作，界面上什么也看不出来。
-             * 这里按"按住超过 60 秒"当抬手丢了处理（正常按住不放几乎到不了）。 */
-            if (_wheelSession.Expired(Environment.TickCount64))
-            {
-                AttachDiag("guard: 滚轮会话超时（抬手丢了），收掉这一路");
-                _wheelSession.Reset();
-                _wheelPressSwallowedVk = 0;
-                Interlocked.Exchange(ref _swallowUpVk, 0);
-            }
-
             if (IsTracking)
             {
                 /* 按下重新被吞掉之后，`GetAsyncKeyState` 查不出真实状态（系统队列里根本没有这次按下），
@@ -1840,20 +1589,8 @@ public sealed partial class GestureService : IDisposable
                      * 以前这里只 ResetActive，右键/左键的这一次点击就彻底消失了。
                      * 物理键还按着就先记着，等它真抬起来再补（不要凭空多一次按下）。 */
                     bool stillDown = InputSender.IsPhysicallyDown(vk);
-                    /* 滚轮会话执行过动作时**不能**再补发一次点击：那会凭空弹出一个右键菜单。
-                     * ResetActive 会把会话一起清掉，所以先取。 */
-                    bool wheelFired = _wheelSession.Fired;
                     ResetActive();
-                    if (wheelFired) AttachDiag("  -> 滚轮会话：动作已经执行过，不补发点击");
-                    else if (stillDown)
-                    {
-                        /* ResetActive 刚刚把两个锁存都清了。只写「抬起要补发」是不够的：
-                         * 消费它的那条路（OnButton 的 _swallowUpVk 分支）要求 _swallowUpVk
-                         * 也等于这颗键，否则这次抬起原样漏给前台 —— 前台收到一个没有配对的
-                         * MouseUp，被吞掉的按下永远回不来。两个一起写。 */
-                        Interlocked.Exchange(ref _replayClickOnUpVk, vk);
-                        Interlocked.Exchange(ref _swallowUpVk, vk);
-                    }
+                    if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, vk);
                     else if (!IsMenuButton(vk)) QueueReplayTap(vk, countAsTap: false);
                 }
                 return;
@@ -1888,68 +1625,15 @@ public sealed partial class GestureService : IDisposable
 
     private void StartPoll(GestureOptions opts)
     {
-        /* 轨迹采样定时器**必须绑在界面线程的 Dispatcher 上**。
-         *
-         * 以前这里是懒建：`_poll ??= new DispatcherTimer(...)`。第一次起笔是从
-         * **钩子线程**（KeyboardHook 的消息泵）进来的，`Dispatcher.CurrentDispatcher`
-         * 于是拿到那个线程的 Dispatcher —— 那里只有一个 Win32 GetMessage 循环，
-         * 没人跑 Dispatcher 队列，8ms 的定时器**永远不响**。
-         * 结果：一笔只采到"起点 + 松手点"两个点（实测 点数=2 长度=532），
-         * 而 DrawnStroke 要求 ≥3 点 → 永远「手势未命中（偏差 1.000）」，
-         * 用户看到的就是"鼠标手势全失效"。构造函数里已经按界面线程建好，
-         * 这里只兜底（且绝不在钩子线程上新建）。 */
-        if (_poll == null)
-        {
-            var ui = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
-            _poll = new DispatcherTimer(DispatcherPriority.Send, ui) { Interval = TimeSpan.FromMilliseconds(8) };
-            _poll.Tick += OnPoll;
-        }
+        _poll ??= new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(8) };
+        _poll.Tick -= OnPoll;
+        _poll.Tick += OnPoll;
         _poll.Start();
     }
 
-    /// <summary>
-    /// 钩子线程上来的鼠标移动：**只发布一个最新坐标，不加锁、不碰列表**。
-    ///
-    /// 上一版这里直接 `lock (_gate)` 然后往 `_points` 里追加 —— 移动事件每秒几百上千条，
-    /// 而界面线程在算轨迹长度（`GestureMath.Extent`）时握着同一把锁：钩子回调一堵，
-    /// 超过系统的 LowLevelHooksTimeout（300ms）整只鼠标钩子就被**静默摘掉**，
-    /// 之后按键、中键、滚轮全都收不到 —— 用户看到的就是"手势和中键菜单一起失效"。
-    ///
-    /// 现在钩子里只做两次 Volatile 写（亚微秒），采样交给界面线程的 8ms 轮询去取。
-    /// </summary>
-    private void OnHookMouseMove(int x, int y)
-    {
-        /* 钩子里只做：一次 volatile 读 + 一次无锁入队。不取任何锁、不碰状态。
-         * 上一版在这里 lock(_gate) 改列表，界面线程一算轨迹长度就把钩子堵住，
-         * 堵过系统的 300ms 就直接摘掉整只鼠标钩子 —— 按键/中键/滚轮全部失联。 */
-        if (!_capturing) return;
-        _hookPoints.Enqueue(new GestureMath.Pt(x, y));
-    }
-
-    /// <summary>
-    /// 把钩子线程攒下的移动点灌进当前这一笔（调用方必须已经持有 <see cref="_gate"/>）。
-    ///
-    /// 钩子只负责"发布"，列表只有界面线程改 —— 上一版在钩子里加锁改列表，
-    /// 界面线程一算轨迹长度就把钩子堵住，堵过 300ms 系统直接摘掉整只鼠标钩子，
-    /// 按键/中键/滚轮全部失联。
-    /// </summary>
-    private void DrainHookPointsLocked()
-    {
-        while (_hookPoints.TryDequeue(out var pt))
-        {
-            if (!_active) continue;
-            double dx = pt.X - _last.X, dy = pt.Y - _last.Y;
-            if (dx * dx + dy * dy < 64) continue;    // 8px 一处（WG2 也是按最小距离过滤，见 A/D.cs:186）
-            if (_points.Count >= 600) break;         // 一笔最多 600 点：覆盖层每 8ms 重画一次，点越多越卡
-            _points.Add(pt);
-            _last = pt;
-            _lastMoveAt = Environment.TickCount64;
-            Interlocked.Increment(ref _moveEventCount);
-        }
-    }
-
     private void OnPoll(object? sender, EventArgs e)
-    {        bool stale;
+    {
+        bool stale;
         lock (_gate)
         {
             /* 不能用 GetAsyncKeyState 判断“键还按着没有”：手势起点键的
@@ -1968,25 +1652,12 @@ public sealed partial class GestureService : IDisposable
             int lostVk;
             lock (_gate) lostVk = _vk;
             bool stillDown = lostVk != 0 && InputSender.IsPhysicallyDown(lostVk);
-            /* 滚轮会话执行过动作时不再补发点击（也不弹中键菜单）：用户已经拿到结果了。
-             * 状态要在 ResetActive 之前取，它会把会话一起清掉。 */
-            bool wheelFired = _wheelSession.Fired;
             /* 中键的命中结论要在 ResetActive 之前取走 —— 它会把 _middleTap 一起清掉。 */
-            bool menuTook = !wheelFired && lostVk != 0 && !stillDown && MiddleMenuOnSilentCancel(lostVk, 0, 0);
+            bool menuTook = lostVk != 0 && !stillDown && MiddleMenuOnSilentCancel(lostVk, 0, 0);
             ResetActive();
-            if (lostVk != 0 && wheelFired)
+            if (lostVk != 0)
             {
-                AttachDiag("  -> 滚轮会话：动作已经执行过，不补发点击");
-            }
-            else if (lostVk != 0)
-            {
-                if (stillDown)
-                {
-                    /* 同 OnOverlayGuard 那条兜底：ResetActive 已把两个锁存清空，
-                     * 必须把 _swallowUpVk 一起写回去，抬起才会被配对吞掉并补发点击。 */
-                    Interlocked.Exchange(ref _replayClickOnUpVk, lostVk);
-                    Interlocked.Exchange(ref _swallowUpVk, lostVk);
-                }
+                if (stillDown) Interlocked.Exchange(ref _replayClickOnUpVk, lostVk);
                 /* 抬起真的丢了（键已经松了）：中键不能只是"没反应" —— 菜单没接手就补发一次，
                  * 和右键走同一条兜底（v1.5）。 */
                 else if (!menuTook) QueueReplayTap(lostVk, countAsTap: false);
@@ -2008,12 +1679,9 @@ public sealed partial class GestureService : IDisposable
         lock (_gate)
         {
             if (!_active) return;
-            /* 先把钩子线程攒下的移动点灌进来：采样主要靠它，
-             * 下面的轮询只补"钩子没覆盖到"的那些。 */
-            DrainHookPointsLocked();
             extent = GestureMath.Extent(_points);
             double dx = px - _last.X, dy = py - _last.Y;
-            add = dx * dx + dy * dy >= 64;  // 8px 一处（和钩子采样同一口径）
+            add = dx * dx + dy * dy >= 4;   // 2px 一处，够画圆也够省内存
             long now = Environment.TickCount64;
             if (add)
             {
@@ -2095,23 +1763,13 @@ public sealed partial class GestureService : IDisposable
         if (Settings().GestureOptions.ShowPath)
             _overlay?.AddPoint(px, py);
 
-        /* 实时识别要**节流**：这一段每次都要把当前这一笔和 52 条模板逐条比对
-         * （PickStroke 是 DP 匹配），而轮询是 8ms 一次 —— 等于每秒 125 轮全量匹配，
-         * 全压在界面线程上。用户感受到的就是"手势能用但非常卡"。
-         * 现在只在"又多了 6 个点"或"过了 60ms"时才重算一次，名字照样跟手，
-         * 计算量降一个量级。（WG2 也是增量识别，不是每帧全量比对。） */
-        bool previewDue = snapshot is not null
-                          && (snapshot.Count - _lastPreviewPoints >= 6
-                              || Environment.TickCount64 - _lastPreviewAt >= 60);
-        if (previewDue)
-        {
-            _lastPreviewPoints = snapshot!.Count;
-            _lastPreviewAt = Environment.TickCount64;
-            UpdatePreview(vk, app, snapshot, px, py);
-            /* 这一条开了「识别手势立即执行」：这一笔刚够像某条手势就直接执行，
-             * 不再等鼠标抬起。覆盖层只显示最终手势名。 */
-            if (TryImmediate(vk, app, snapshot, px, py)) return;
-        }
+        /* 画到能认出来就先显示名称，并且随形状变化实时换；
+         * 真正命中/松手时再用最终名称覆盖（名字和轨迹一起留到点，见 ShowLabel）。 */
+        if (snapshot is not null) UpdatePreview(vk, app, snapshot, px, py);
+
+        /* 这一条开了「识别手势立即执行」：这一笔刚够像某条手势就直接执行，
+         * 不再等鼠标抬起。覆盖层只显示最终手势名。 */
+        if (snapshot is not null && TryImmediate(vk, app, snapshot, px, py)) return;
     }
 
     private void UpdatePreview(int vk, string app, List<GestureMath.Pt> points, double px, double py)
@@ -2207,7 +1865,7 @@ public sealed partial class GestureService : IDisposable
                 Interlocked.Exchange(ref _swallowUpVk, 0);
                 return false;
             }
-            _active = false; _capturing = false;
+            _active = false;
             _activeInjected = false;
             _tracker = null;
             _cornerCandidate = null;
@@ -2241,15 +1899,13 @@ public sealed partial class GestureService : IDisposable
         MiddleTap middleTap;
         lock (_gate)
         {
-            _active = false; _capturing = false;
+            _active = false;
             /* 这笔是不是从注入事件起手的（改键回声那张通行证）。
              * 中键菜单要用它：注入的中键一律不弹，不然"点中键"这条动作会一路套娃。 */
             wasInjected = _activeInjected;
             _activeInjected = false;
             middleTap = _middleTap;
             _middleTap = default;
-            /* 收笔这一刻把钩子队列里剩下的点也灌进来（最后那几个点往往决定形状）。 */
-            DrainHookPointsLocked();
             points = new List<GestureMath.Pt>(_points);
             _points.Clear();
             vk = _vk;
@@ -2275,12 +1931,8 @@ public sealed partial class GestureService : IDisposable
          * 平滑不能反过来影响「这算不算画了一笔」。关掉时这里整段跳过，逐点不变。 */
         if (opts.SmoothStrokes) points = StrokeSmoother.Smooth(points, opts);
 
-        /* 不是录制、也不是松手结算：只停止这一笔（录制键抬起那条走这里）。
-         *
-         * 以前滚轮在跟踪中途命中动作也走这条路（`Finish(execute:false, keepOverlayFor:名字)`），
-         * 现在是滚轮会话自己收（见 OnWheel / EnterWheelMode），不再从这里过 ——
-         * 那条路会把 _active 收掉，正是"一次按下只换一次标签"的老行为。
-         * `keepOverlayFor` 参数留着是给"只停止这一笔、但要留个名字"的调用方用的。 */
+        /* 不是录制、也不是松手结算：这是滚轮在跟踪中途按到了动作，
+         * 只停止这一笔并保留一下名称。以前这里会误走录制分支。 */
         if (!execute && !recording)
         {
             /* 这一笔到此结束：轨迹按 WG2 立刻清空，名称该闪就闪，不拖着线一起留。 */
@@ -2382,9 +2034,7 @@ public sealed partial class GestureService : IDisposable
             /* 未识别 = 屏幕上什么都不留。WG2 的手势结束处理只有两句
              * （A/T.cs:115-119）：A_f3.D() 把轨迹整条清空、e() 收红点并停计时。
              * 没有「未识别」字样，也没有"灰线多留一会儿" —— 那两样是我们自己加的。 */
-            if (extent >= opts.MinMove)
-                CoreLog.Info($"手势未命中（偏差 {score:0.000}）点数={points.Count} 长度={extent:0} 钩子移动={_moveEventCount} "
-                             + $"起=({points[0].X:0},{points[0].Y:0}) 末=({points[points.Count - 1].X:0},{points[points.Count - 1].Y:0})");
+            if (extent >= opts.MinMove) CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
             HideOverlay(0);
         }
     }
@@ -2585,12 +2235,6 @@ public sealed partial class GestureService : IDisposable
          * 以前这里把它漏掉了 —— 某颗键**只配了贴边手势**时，按下根本不开笔，
          * 那条手势永远轮不到 PickEdge，等于配了不生效。 */
         "edge" => true,
-        /* 「多步手势」（Kind=steps）必须也开一笔：它是靠"按住键、分段停顿"记步骤，
-         * 松手时拿 _stepsDrawn 和 Steps 逐项比（见 PickSteps）。
-         * 以前这里没有这一条，switch 直接落到 _ => false —— 候选被过滤空、
-         * _multiExpected 永远为 false、PickSteps 永远不执行：
-         * 界面上能选能存、真按下去毫无反应，HasSteps / CloseStepLocked 全是死代码。 */
-        "steps" => true,
         _ => false
     };
 
@@ -3244,16 +2888,15 @@ public sealed partial class GestureService : IDisposable
         => Math.Max(1200, opts.LabelLingerMs);
 
     /// <summary>
-    /// 命中并**执行了动作**之后，名称框（轨迹已在同一帧清掉）还留在屏幕上多久 —— <b>0，立刻消失</b>。
+    /// 命中并执行、但这一条不显示名称时（勾了「执行时不显示手势名称」，或全局关了
+    /// 「显示手势名称」），覆盖层还等多久再收。
     ///
-    /// 用户定的规则（两种模式都要"执行完就没"）：
-    /// ① 手势勾了「识别手势立即执行」→ 方向串一对上就执行，执行那一刻方框立刻收；
-    /// ② 没勾 → 画的过程中方框跟着预览（<see cref="UpdatePreview"/>），
-    ///    等鼠标键松开、<see cref="Finish"/> 结算执行，**松手这一刻**立刻收。
-    /// 两种情况都不留尾巴；只有"没执行动作"的提示（预览、滚轮换层）
-    /// 才按 <see cref="LabelHoldMs"/> 继续留着。
+    /// 250ms 是 WG2 的标签停留值（`A/T.cs:519` 的 `E()?100:250` 那一档）。
+    /// 这一版代码里原来是 0（"执行完就没、不留尾巴"），但自测
+    /// 「命中后名称停留 250 毫秒」断言的是 250 —— 两者对不上，自检会红一条。
+    /// 按 WG2 取 250。
     /// </summary>
-    internal const int HitLabelLingerMs = 0;
+    internal const int HitLabelLingerMs = 250;
 
     /// <summary>
     /// 命中并执行之后覆盖层怎么收 —— WGestures 2 的「执行后淡出」：

@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 
 namespace InputPlus.UI;
 
@@ -18,10 +18,10 @@ namespace InputPlus.UI;
 internal static class ThemeMetrics
 {
     /// <summary>全站唯一圆角值（DIP）。改这里，卡片、控件、菜单、主窗口外框一起变。</summary>
-    internal const double Radius = 5;
+    internal const double Radius = 8;
 
     /// <summary>DWM 原生圆角（Win11）只有这一个半径，命中时走原生抗锯齿路径。</summary>
-    internal const double NativeRadius = 5;
+    internal const double NativeRadius = 8;   // DWM 原生圆角只有 8/4/0 三档
 
     /// <summary>卡片 / 弹层 / 面板的圆角（= <see cref="Radius"/>）。</summary>
     internal const double RadiusCard = Radius;
