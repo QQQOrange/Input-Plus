@@ -85,6 +85,9 @@ internal static class QbarIndex
 
     /// <summary>熔断日志只打一次，成功后再复位。</summary>
     private static int _commitBlockedNoticed;
+
+    /// <summary>上次打"提交索引失败"警告的时刻（TickCount64）：这条按 30 秒节流。</summary>
+    private static long _commitWarnAt;
     private static long _docs;
     private static long _files;
     private static long _dirs;
@@ -844,6 +847,9 @@ internal static class QbarIndex
         if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) return false;
         if (TantivyApi.Commit())
         {
+            /* 只有"一次就成"才算健康。靠重开重放救回来的那批仍然说明索引目录有问题，
+             * 不能把失败计数清零 —— 否则每批都"失败一次 + 重开一次 492MB 索引"，
+             * 熔断永远不触发，CPU 就一直被这个重开循环吃掉。 */
             Interlocked.Exchange(ref _commitFailStreak, 0);
             Volatile.Write(ref _commitBlockedNoticed, 0);
             return true;
@@ -853,7 +859,13 @@ internal static class QbarIndex
          * （本机实测过：失败之后同一个 writer 再 commit 会"成功"却什么都没写进去）。
          * 所以不是原地重试，而是**关掉重开**，把 writer 换成一个干净的，再把这一批重放一次。 */
         string dir = TantivyApi.CurrentDir;
-        CoreLog.Warn("提交索引失败，重开索引后重放这一批：" + TantivyApi.LastError);
+        /* 这条警告按 30 秒节流：索引目录出问题时它一秒能来一条，刷爆日志还占 CPU。 */
+        long nowTick = Environment.TickCount64;
+        if (nowTick - Interlocked.Read(ref _commitWarnAt) >= 30000)
+        {
+            Interlocked.Exchange(ref _commitWarnAt, nowTick);
+            CoreLog.Warn("提交索引失败，重开索引后重放这一批：" + TantivyApi.LastError);
+        }
 
         /* 熔断：连续失败太多次就别再一轮轮重试了。
          *
@@ -889,12 +901,7 @@ internal static class QbarIndex
             if (TantivyApi.OpenEx(dir) != 0) continue;
             if (stale.Count > 0) TantivyApi.DeletePaths(stale);
             if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) continue;
-            if (TantivyApi.Commit())
-            {
-                Interlocked.Exchange(ref _commitFailStreak, 0);
-                Volatile.Write(ref _commitBlockedNoticed, 0);
-                return true;
-            }
+            if (TantivyApi.Commit()) return true;
             TantivyApi.Close();
         }
         /* 三次都没成：至少把索引重新打开 —— 一个坏批次不该让后面**所有**写入都变成
