@@ -739,6 +739,13 @@ internal static class QbarIndex
         {
             _problem = "增量写入失败：" + TantivyApi.LastError;
             CoreLog.Warn(_problem);
+            /* 提交失败、重开也失败时，writer 已经被 Close() 掉了（CurrentDir 变空）。
+             * 这时 _ready 仍是 1：Describe()/--index-status 照旧报"N 个文件、建索引于 …"一切正常，
+             * 而之后每一批写入都会失败、每次搜索都回"索引未打开" —— 用户看到的是
+             * "搜索突然什么都搜不到，但状态页说索引好好的"。把 ready 清掉，让状态说实话，
+             * 也让下一次启动走 OpenIndexWithRecovery 的自愈分支。 */
+            if (TantivyApi.CurrentDir.Length == 0)
+                Interlocked.Exchange(ref _ready, 0);
             return 0;
         }
         AfterImmediateCommit();
@@ -831,10 +838,30 @@ internal static class QbarIndex
         string dir = TantivyApi.CurrentDir;
         CoreLog.Warn("提交索引失败，重开索引后重放这一批：" + TantivyApi.LastError);
         TantivyApi.Close();
-        if (dir.Length == 0 || TantivyApi.OpenEx(dir) != 0) return false;
-        if (stale.Count > 0) TantivyApi.DeletePaths(stale);
-        if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) return false;
-        return TantivyApi.Commit();
+        if (dir.Length == 0) return false;
+
+        /* 重开 + 重放最多试三次，每次让一步。
+         *
+         * 失败最常见的原因是段文件被**外部短暂**占用（杀软实时扫描刚写出来的 .term/.idx、
+         * 同步盘、另一个进程的读句柄）—— 在 %TEMP% 下实测就是这样：同一份代码
+         * 一分钟前全绿、一分钟后这一组全红，错误都是 PermissionDenied。
+         * 注意这里**不能**复用原来那个 writer 重试：它失败之后内部状态不可信
+         * （本机实测过：同一个 writer 再 commit 会"成功"却什么都没写进去）。
+         * 所以每次都是关掉、重开一个新的 writer，再把这一批重放一遍。 */
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            if (attempt > 1) Thread.Sleep(150 * attempt);
+            if (TantivyApi.OpenEx(dir) != 0) continue;
+            if (stale.Count > 0) TantivyApi.DeletePaths(stale);
+            if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) continue;
+            if (TantivyApi.Commit()) return true;
+            TantivyApi.Close();
+        }
+        /* 三次都没成：至少把索引重新打开 —— 一个坏批次不该让后面**所有**写入都变成
+         * "索引未打开"（那才是真的整块功能停摆）。 */
+        if (TantivyApi.OpenEx(dir) == 0)
+            CoreLog.Warn("索引已重新打开，但这一批文档没写进去");
+        return false;
     }
 
     /// <summary>一批文档写进去：默认二进制，夹具构建要 JSON 时传 true。</summary>

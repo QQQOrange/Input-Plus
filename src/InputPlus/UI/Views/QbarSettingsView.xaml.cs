@@ -212,6 +212,10 @@ public partial class QbarSettingsView : UserControl
         RecentCountSlider.Value = _host.Settings.Qbar.RecentCount;
         UpdateRecentCountLabel();
         FontSizeSlider.Value = _host.Settings.Qbar.TextFontSize;
+        PanelOpacitySlider.Value = PanelOpacityPercent(_host.Settings.Qbar.PanelOpacity);
+        UpdatePanelOpacityLabel();
+        BlurStrengthSlider.Value = Math.Clamp(_host.Settings.Qbar.BlurStrength, 0, 100);
+        UpdateBlurStrengthLabel();
         UpdateFontPreview();
         ShowIconsBox.IsChecked = _host.Settings.Qbar.ShowIcons;
         ImeOnOpenBox.IsChecked = _host.Settings.Qbar.SwitchToEnglishOnOpen;
@@ -1366,6 +1370,11 @@ public partial class QbarSettingsView : UserControl
         _host.Settings.Qbar.RecentCount = (int)RecentCountSlider.Value;
         UpdateRecentCountLabel();
         _host.Settings.Qbar.TextFontSize = FontSizeSlider.Value;
+        _host.Settings.Qbar.PanelOpacity = (PanelOpacitySlider.Value / 100.0)
+            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        UpdatePanelOpacityLabel();
+        _host.Settings.Qbar.BlurStrength = (int)Math.Round(BlurStrengthSlider.Value);
+        UpdateBlurStrengthLabel();
         _host.Settings.Qbar.ShowIcons = ShowIconsBox.IsChecked == true;
         _host.Settings.Qbar.SwitchToEnglishOnOpen = ImeOnOpenBox.IsChecked == true;
         _host.Settings.Qbar.SwitchBackOnEngine = ImeBackBox.IsChecked == true;
@@ -1384,6 +1393,43 @@ public partial class QbarSettingsView : UserControl
         if (RecentCountValue == null) return;
         int count = (int)RecentCountSlider.Value;
         RecentCountValue.Text = count <= 0 ? Loc.T("不显示") : Loc.F("显示 {0} 条", count);
+    }
+
+    /// <summary>
+    /// 面板不透明度的滑杆读数 → 百分比。
+    ///
+    /// 存在设置里的是字符串（历史格式 "0.96"），这里夹到滑杆允许的 30%~100%：
+    /// 手改过 settings.json 的 0.1 或 3 都落到可操作区间，不会让滑杆跳出去。
+    /// </summary>
+    private static double PanelOpacityPercent(string? raw)
+    {
+        double value = 0.96;
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double parsed))
+            value = parsed;
+        else if (double.TryParse(raw, out double local))
+            value = local;
+        return Math.Clamp(value * 100.0, 30, 100);
+    }
+
+    /// <summary>面板不透明度的实时读数：只说百分比，别让人猜"0.96 是什么"。</summary>
+    private void UpdatePanelOpacityLabel()
+    {
+        if (PanelOpacityValue == null) return;
+        int percent = (int)Math.Round(PanelOpacitySlider.Value);
+        PanelOpacityValue.Text = percent >= 100
+            ? Loc.T("100% = 完全不透明")
+            : Loc.F("{0}% 不透明（越低越透，能看见后面的内容）", percent);
+    }
+
+    /// <summary>背景模糊强度的读数：0 明确写"不模糊"，别让人以为"少糊了一点"。</summary>
+    private void UpdateBlurStrengthLabel()
+    {
+        if (BlurStrengthValue == null) return;
+        int v = (int)Math.Round(BlurStrengthSlider.Value);
+        BlurStrengthValue.Text = v <= 0
+            ? Loc.T("0 = 不模糊（纯色面板，也不再抓屏）")
+            : Loc.F("强度 {0}（越大越糊）", v);
     }
 
     /// <summary>字号预览：让用户直接看到调大字号后的实际效果。</summary>
@@ -1530,6 +1576,7 @@ public partial class QbarSettingsView : UserControl
 
         q.PanelColor = def.PanelColor;
         q.PanelOpacity = def.PanelOpacity;
+        q.BlurStrength = def.BlurStrength;
         q.Width = def.Width;
         q.TextFontSize = def.TextFontSize;
         q.ListCount = def.ListCount;

@@ -1293,6 +1293,16 @@ public sealed class QbarOptions
 {
     public string PanelColor { get; set; } = "auto";   // auto = 跟随主题
     public string PanelOpacity { get; set; } = "0.96";
+
+    /// <summary>
+    /// 面板背后的毛玻璃强度（0~100）。0 = 不模糊也不抓屏。
+    ///
+    /// 以前这是写死的（`BackdropBlur.Capture` 默认 radius=30），用户没法调；而且那张
+    /// 模糊图会把"面板不透明度"夹死在 0.72 —— 所以整段删过一次。现在恢复，但强度交给用户，
+    /// 并且不透明度不再被夹：模糊图垫在底下，底色 alpha 完全按 PanelOpacity 来。
+    /// 50 ≈ 原来那个手感的 30px 半径。
+    /// </summary>
+    public int BlurStrength { get; set; } = 50;
     public double TextFontSize { get; set; } = 20;
     public int ListCount { get; set; } = 6;
     public double LineHeight { get; set; } = 38;
@@ -1437,8 +1447,15 @@ public sealed class QbarOptions
 /// </summary>
 public sealed class QbarContentOptions
 {
-    /// <summary>总开关。关掉后 Qbar 只按文件名/路径搜索（老行为）。</summary>
-    public bool Enabled { get; set; } = true;
+    /// <summary>
+    /// 总开关。关掉后 Qbar 只按文件名/路径搜索（老行为）。
+    ///
+    /// **默认关**：开着的话，全新装一次就在用户完全没做任何事的情况下开始整盘抽正文
+    /// （实测一分钟能写出两百多兆索引、持续烧一个核以上，笔记本上是分钟级的）。
+    /// 这属于"该由用户点头的事"，所以出厂不建；老配置里已经开着的照旧开着
+    /// （settings.json 里有这个字段，反序列化会把 true 读回来）。
+    /// </summary>
+    public bool Enabled { get; set; }
 
     /// <summary>要抽正文的扩展名，分号/逗号分隔，不带点。</summary>
     public string Extensions { get; set; } = "pdf;docx;xlsx;pptx;txt;md;html;htm;csv;json;log";
@@ -1558,7 +1575,16 @@ public sealed class FavoriteDirectory
 
 public sealed class AppSettings
 {
-    public int SchemaVersion { get; set; } = 1;
+    /// <summary>
+    /// 本程序能写出的配置格式版本。
+    ///
+    /// 读到比它**更新**的文件（回滚、双机共用同一便携目录、旧 exe 还在 dist 里）时，
+    /// 不认识的字段在反序列化那一刻就已经丢了 —— 此时任何一次自动回写都等于把
+    /// 新版配置整份降级覆盖，换回新版本也读不回来。所以那种文件只读不写。
+    /// </summary>
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     /// <summary>
     /// 内置搜索引擎表的版本号。

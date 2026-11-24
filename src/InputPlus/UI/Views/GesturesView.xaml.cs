@@ -99,6 +99,12 @@ public partial class GesturesView
         InitializeComponent();
         PreviewCanvas.SizeChanged += (_, _) => DrawPreview();
 
+        /* 三栏（全局手势 264 / 中间列表 * / 手势详情 400）在窄窗口里会把中间挤成 0，
+         * 用户看到的就是"全局手势那一栏被压扁"。窗口一窄就把右侧详情整栏收起来，
+         * 变宽再放回来；用户自己点过关闭按钮的话，变宽也不再自动弹。
+         * 点列表里任意一条手势 → 重新打开（见 OnGestureListClicked）。 */
+        SizeChanged += (_, e) => ApplyDetailVisibility(e.NewSize.Width);
+
         /* 列表搜索的分类 = 只搜哪一列。放进分类的四项都是列表里真能看到的文字：
          * 手势名（左边那行）/ 动作说明（右边那句）/ 备注，以及「全部」= 原来那串拼接串。
          * 应用路径不单列成分类：列表本来就按作用目标筛过，同一屏里那个字段几乎恒定，
@@ -1648,6 +1654,44 @@ private static PointCollection? IconFor(InputPlus.Core.Gestures.MouseGesture g)
         if (_dragItem == null) return;
         FinishDrag(e.GetPosition(ListScroll));
         e.Handled = true;
+    }
+
+    /* ── 手势详情栏的收起 / 展开 ───────────────────────────────────
+       窄窗口里详情栏会自动收起（不然中间那栏被挤成 0，"全局手势"看着就是被压扁了）。
+       用户也可以自己点详情栏标题右边的 ✕ 关掉；关掉之后点列表里任意一条手势会重新打开。 */
+
+    /// <summary>低于这个宽度就收起详情栏：264（全局手势）+ 400（详情）+ 中间至少 420。</summary>
+    private const double DetailHideBelowWidth = 1084;
+
+    /// <summary>用户自己点过关闭按钮（变宽也不再自动弹回来，直到他再点一条手势）。</summary>
+    private bool _detailUserClosed;
+
+    /// <summary>按当前宽度 + 用户意图决定详情栏显示与否。</summary>
+    private void ApplyDetailVisibility(double width)
+    {
+        if (DetailCol == null || DetailCard == null) return;
+        bool narrow = width > 0 && width < DetailHideBelowWidth;
+        bool show = !narrow && !_detailUserClosed;
+        DetailCol.Width = show ? new GridLength(400) : new GridLength(0);
+        DetailCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnDetailClose(object sender, RoutedEventArgs e)
+    {
+        _detailUserClosed = true;
+        ApplyDetailVisibility(ActualWidth);
+    }
+
+    /// <summary>点列表里任意一条手势 → 详情栏一定打开。</summary>
+    private void OnGestureListClicked(object sender, MouseButtonEventArgs e)
+    {
+        /* 以前这里只在"用户手动关过"时才打开，而且窄窗口下还会被宽度规则收回去 ——
+         * 结果就是用户说的"点某个手势，不弹手势详情"。
+         * 点了手势就是"我要看这条"，所以这里无视宽度与之前的关闭状态，直接打开。 */
+        _detailUserClosed = false;
+        if (DetailCol == null || DetailCard == null) return;
+        DetailCol.Width = new GridLength(400);
+        DetailCard.Visibility = Visibility.Visible;
     }
 
     private void OnDragLostCapture(object sender, MouseEventArgs e)

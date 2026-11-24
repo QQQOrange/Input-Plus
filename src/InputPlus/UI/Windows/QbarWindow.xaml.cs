@@ -111,6 +111,20 @@ public partial class QbarWindow : Window
     /// <summary>底部提示行的默认文案（离开文件菜单时要还原）。</summary>
     private const string FooterDefaultText = "↑↓ 选择    Enter 执行    Tab 补全    Esc 关闭";
 
+    /// <summary>
+    /// 用面板自己的圆角半径裁掉四角。
+    ///
+    /// 半径从主题资源读，跟 XAML 上写的 `Radius.All` 永远同一个数；换主题/改圆角
+    /// 不用回来改这里。
+    /// </summary>
+    private void ApplyPanelClip(Size size)
+    {
+        if (size.Width <= 0 || size.Height <= 0) return;
+        double radius = 8;
+        if (TryFindResource("Radius.All") is CornerRadius cr) radius = cr.TopLeft;
+        Panel.Clip = new RectangleGeometry(new Rect(size), radius, radius);
+    }
+
     public QbarWindow(AppHost host)
     {
         _host = host;
@@ -134,6 +148,12 @@ public partial class QbarWindow : Window
          * 自己跟踪 GetCursorPos + SetWindowPos，位置算得清、拖到屏幕边上也好夹。 */
         Panel.PreviewMouseLeftButtonDown += OnPanelMouseDown;
         Panel.PreviewMouseMove += OnPanelMouseMove;   // 只管光标形状，拖动由定时器驱动
+
+        /* 面板是圆角 Border，但 WPF 的 Border **不裁子元素**：结果列表、联想框这些自带
+         * 底色的子控件会把四个圆角外侧补成一个方块角 —— 用户截图里那圈"残留直角"就是它。
+         * 给 Panel 自己套一个同半径的裁剪，外框和内容一起收进圆角里。 */
+        Panel.SizeChanged += (_, e) => ApplyPanelClip(e.NewSize);
+        ApplyPanelClip(Panel.RenderSize);
 
         // 构造函数里建一次，之后只 Start/Stop：DispatcherTimer 反复 new 会挂在
         // Dispatcher 的计时器列表上，长期开着面板会慢慢积累。
@@ -728,7 +748,7 @@ public partial class QbarWindow : Window
 
             // 只有设置真的变了才重建画笔：Qbar 是高频开关的面板，
             // 每次 Open 都 new 一次 SolidColorBrush 属于无谓开销。
-            string stamp = $"{q.AccentColor}|{effectivePanel}|{q.PanelOpacity}|{q.TextFontSize}|{q.LineHeight}|{q.ListCount}|{ThemeStamp()}";
+            string stamp = $"{q.AccentColor}|{effectivePanel}|{q.PanelOpacity}|{q.BlurStrength}|{q.TextFontSize}|{q.LineHeight}|{q.ListCount}|{ThemeStamp()}";
             if (stamp == _styleStamp) return;
             _styleStamp = stamp;
 
@@ -743,6 +763,8 @@ public partial class QbarWindow : Window
             _panelColor = effectivePanel;
             _panelOpacity = double.TryParse(q.PanelOpacity, out double op) ? Math.Clamp(op, 0.3, 1) : 0.96;
             ApplyPanelTint();
+            /* 模糊强度变了也要立刻重拍（否则要等到下次唤出才生效）。 */
+            RefreshBackdrop();
             var panelColor = effectivePanel;
 
             // 整套前景色按底色亮度推导，保证任何底色下文字都可读
@@ -764,17 +786,14 @@ public partial class QbarWindow : Window
     /// <summary>
     /// 把面板底色铺到 TintFill 上。
     ///
-    /// 有模糊底图时必须把不透明度压低：用户设的是 0.96，那么厚的一层底色会把
-    /// 模糊糊死，等于白抓一张图（真机实测：0.82 时面板在纯色壁纸上看起来就是一块
-    /// 不透明的深色板，毛玻璃完全看不出来）。0.72 = 背后留 28% 的模糊透上来，
-    /// 既有玻璃感，字又不会被认出来 —— 真正让人读不出背后文字的是模糊半径，不是这层纱。
-    /// 没有底图时完全按用户设置来，否则"半透明面板"就变成了不透明面板。
+    /// 这里以前还带一条"有模糊底图就把不透明度压到 0.72"的分支 —— 那正是
+    /// 「滑条拖到 30% 和 100% 看着一样」的原因：模糊图盖住了底色，用户设的值被夹死。
+    /// 毛玻璃已经整段删掉（用户要求），现在完全按设置来。
     /// </summary>
     private void ApplyPanelTint()
     {
         if (_panelOpacity <= 0) return;
-        bool blurred = BackdropFill.Background is ImageBrush;
-        double op = blurred ? Math.Min(_panelOpacity, 0.72) : _panelOpacity;
+        double op = _panelOpacity;
         byte alpha = (byte)Math.Round(Math.Clamp(op, 0.3, 1) * 255);
 
         _panelBrush = new SolidColorBrush(Color.FromArgb(alpha, _panelColor.R, _panelColor.G, _panelColor.B));
@@ -784,15 +803,17 @@ public partial class QbarWindow : Window
     }
 
     /// <summary>
-    /// 抓一张"面板背后的桌面"做毛玻璃底图。
+    /// 抓一张"面板背后的桌面"并按用户设的强度模糊，铺到 BackdropFill 上。
     ///
-    /// Qbar 是分层窗口（要有圆角和透明），拿不到 DWM 的亚克力，只能自己拍一张。
-    /// 拍的时候必须把自己排除掉，否则拍到的"背后"就是面板自己 —— 先试
+    /// 强度来自「Qbar 面板 → 外观 → 背景模糊」（0~100，0 = 不抓也不模糊）。
+    /// 映射：50 ≈ 原来写死的 radius=30，100 ≈ 60。
+    ///
+    /// 抓的时候要把自己排除掉，否则拍到的"背后"就是面板自己 —— 先试
     /// WDA_EXCLUDEFROMCAPTURE（Win10 2004+ 支持分层窗口），系统不认这条就
     /// 把窗口藏 50ms 再拍（老系统上会闪一下，但只在打开/拖完的那一帧）。
     ///
-    /// 只在面板真的显示在屏幕上时才有意义：--render 把窗口摆在 -32000，
-    /// 自检可能根本没桌面，这些情况直接跳过。
+    /// 底色**不再**因为"有模糊图"被夹小：不透明度完全按用户设置，
+    /// 模糊图只是垫在下面 —— 用户设 100% 就该看不到模糊，那是他的选择。
     /// </summary>
     private void RefreshBackdrop()
     {
@@ -802,18 +823,27 @@ public partial class QbarWindow : Window
             if (Left < -2000 || Top < -2000) return;                 // 离屏渲染
             if (ActualWidth < 40 || ActualHeight < 40) return;
 
+            int strength = Math.Clamp(_host.Settings.Qbar.BlurStrength, 0, 100);
+            if (strength <= 0)
+            {
+                BackdropFill.Background = null;
+                ApplyPanelTint();
+                return;
+            }
+
             IntPtr hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd == IntPtr.Zero) return;
 
             Point tl = PointToScreen(new Point(0, 0));
             Point br = PointToScreen(new Point(ActualWidth, ActualHeight));
+            int radius = Math.Max(2, strength * 60 / 100);
 
             System.Windows.Media.Imaging.BitmapSource? shot;
             if (BackdropBlur.TryExcludeFromCapture(hwnd))
             {
                 try
                 {
-                    shot = BackdropBlur.Capture(tl, br);
+                    shot = BackdropBlur.Capture(tl, br, radius);
                 }
                 finally
                 {
@@ -829,7 +859,7 @@ public partial class QbarWindow : Window
                 {
                     // 让合成器把"透明的一帧"推上去再拍，否则拍到的仍是我们自己
                     System.Threading.Thread.Sleep(50);
-                    shot = BackdropBlur.Capture(tl, br);
+                    shot = BackdropBlur.Capture(tl, br, radius);
                 }
                 finally
                 {
@@ -854,6 +884,17 @@ public partial class QbarWindow : Window
             CoreLog.Warn("Qbar 背景模糊失败：" + ex.Message);
         }
     }
+
+    /// <summary>
+    /// 【已删除】Qbar 背后的毛玻璃抓图。
+    ///
+    /// 用户要求把弹窗的模糊功能整个去掉。它带来的问题不只是"好看不好看"：
+    ///   · 每次唤出 / 拖完都要**再拍一次屏**（先把自己排除出截屏，老系统上还要
+    ///     把自己藏 50ms 再拍），这几毫秒里面板是空的；
+    ///   · 拍到的模糊图会盖在底色上，把"面板不透明度"这个设置夹死在 0.72，
+    ///     滑条从 30% 拖到 100% 几乎看不出差别 —— 用户报的"调了没生效"就是它。
+    /// 现在面板只用 TintFill 的一层底色（alpha = 用户设置），不再抓屏。
+    /// </summary>
 
     /// <summary>设置页改了外观后调用，强制下次打开重建画笔。</summary>
     public void InvalidateStyle() => _styleStamp = "";
@@ -1392,6 +1433,14 @@ public partial class QbarWindow : Window
         DetachEscInterceptor();
         StopFocusTimer();
         StopOutsideWatch();
+        /* Alt+F4 不走 HideQbar，所以这几个定时器以前会继续跑在**已经关闭**的窗口上：
+         * 250ms 的建议防抖、45ms 的查询防抖、输入法探活、拖动轮询 ——
+         * 面板都没了还在每隔几十毫秒醒一次。这里统一停掉。 */
+        _suggestTimer.Stop();
+        _queryTimer.Stop();
+        _imeTimer?.Stop();
+        _imeVerify?.Stop();
+        _dragPoll?.Stop();
         base.OnClosed(e);
     }
 

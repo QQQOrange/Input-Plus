@@ -98,6 +98,14 @@ internal static class OsdPlacement
      * 注意进度条宽度**不随数字位数变化**：100% 时系统那条仍是 42.0~152.0，
      * 数字只是往左长，右边距恒为 13。
      */
+    /// <summary>
+    /// OSD 卡片的圆角（DIP）。
+    ///
+    /// **不跟主题半径走**：这块横条要贴在系统自己的音量/亮度浮层旁边，
+    /// 半径必须跟系统那个一致 —— 实测拟合系统为 15px @200% = 7.5 DIP
+    /// （按 8 画会圆过头 1px，肉眼能看出来；自检里也是按 7.5 断言的）。
+    /// 全站其它地方的圆角仍然走 <see cref="InputPlus.UI.ThemeMetrics.Radius"/>。
+    /// </summary>
     public const double CardRadiusDip = 7.5;
 
     /// <summary>图标槽宽度（DIP）。字形绕槽中心缩放，槽本身不变。</summary>
