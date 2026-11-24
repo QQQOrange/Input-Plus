@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -45,8 +45,12 @@ public sealed partial class GestureService : IDisposable
     /// <summary>钩子线程攒下的原始移动点（无锁队列：钩子只入队，界面线程只出队）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentQueue<GestureMath.Pt> _hookPoints = new();
 
-    /// <summary>UI 侧从钩子取走的点数（诊断"采样为什么只有两个点"用）。</summary>
+    /// <summary>界面线程从钩子取走的点数（诊断"采样为什么只有两个点"用）。</summary>
     private long _moveEventCount;
+
+    /// <summary>上次实时识别时的点数与时刻（节流用：见 OnPoll 里的 previewDue）。</summary>
+    private int _lastPreviewPoints;
+    private long _lastPreviewAt;
 
     /// <summary>覆盖层看门狗（见 <see cref="OnOverlayGuard"/>）：100ms 兜一次底。</summary>
     private DispatcherTimer? _overlayGuard;
@@ -1934,8 +1938,8 @@ public sealed partial class GestureService : IDisposable
         {
             if (!_active) continue;
             double dx = pt.X - _last.X, dy = pt.Y - _last.Y;
-            if (dx * dx + dy * dy < 4) continue;     // 2px 一处，和轮询同一口径
-            if (_points.Count >= 4096) break;        // 一笔最多 4096 点，别让它无限长
+            if (dx * dx + dy * dy < 64) continue;    // 8px 一处（WG2 也是按最小距离过滤，见 A/D.cs:186）
+            if (_points.Count >= 600) break;         // 一笔最多 600 点：覆盖层每 8ms 重画一次，点越多越卡
             _points.Add(pt);
             _last = pt;
             _lastMoveAt = Environment.TickCount64;
@@ -2008,7 +2012,7 @@ public sealed partial class GestureService : IDisposable
             DrainHookPointsLocked();
             extent = GestureMath.Extent(_points);
             double dx = px - _last.X, dy = py - _last.Y;
-            add = dx * dx + dy * dy >= 4;   // 2px 一处，够画圆也够省内存
+            add = dx * dx + dy * dy >= 64;  // 8px 一处（和钩子采样同一口径）
             long now = Environment.TickCount64;
             if (add)
             {
@@ -2090,13 +2094,23 @@ public sealed partial class GestureService : IDisposable
         if (Settings().GestureOptions.ShowPath)
             _overlay?.AddPoint(px, py);
 
-        /* 画到能认出来就先显示名称，并且随形状变化实时换；
-         * 真正命中/松手时再用最终名称覆盖（名字和轨迹一起留到点，见 ShowLabel）。 */
-        if (snapshot is not null) UpdatePreview(vk, app, snapshot, px, py);
-
-        /* 这一条开了「识别手势立即执行」：这一笔刚够像某条手势就直接执行，
-         * 不再等鼠标抬起。覆盖层只显示最终手势名。 */
-        if (snapshot is not null && TryImmediate(vk, app, snapshot, px, py)) return;
+        /* 实时识别要**节流**：这一段每次都要把当前这一笔和 52 条模板逐条比对
+         * （PickStroke 是 DP 匹配），而轮询是 8ms 一次 —— 等于每秒 125 轮全量匹配，
+         * 全压在界面线程上。用户感受到的就是"手势能用但非常卡"。
+         * 现在只在"又多了 6 个点"或"过了 60ms"时才重算一次，名字照样跟手，
+         * 计算量降一个量级。（WG2 也是增量识别，不是每帧全量比对。） */
+        bool previewDue = snapshot is not null
+                          && (snapshot.Count - _lastPreviewPoints >= 6
+                              || Environment.TickCount64 - _lastPreviewAt >= 60);
+        if (previewDue)
+        {
+            _lastPreviewPoints = snapshot!.Count;
+            _lastPreviewAt = Environment.TickCount64;
+            UpdatePreview(vk, app, snapshot, px, py);
+            /* 这一条开了「识别手势立即执行」：这一笔刚够像某条手势就直接执行，
+             * 不再等鼠标抬起。覆盖层只显示最终手势名。 */
+            if (TryImmediate(vk, app, snapshot, px, py)) return;
+        }
     }
 
     private void UpdatePreview(int vk, string app, List<GestureMath.Pt> points, double px, double py)
