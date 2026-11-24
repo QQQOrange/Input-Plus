@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -39,7 +39,13 @@ public sealed partial class GestureService : IDisposable
     private GestureOverlayWindow? _overlay;
     private DispatcherTimer? _poll;
 
-    /// <summary>钩子移动回调被调用的累计次数（诊断"手势采样为什么是 2 个点"用）。</summary>
+    /// <summary>是否正在记一笔（钩子线程只读这一个 volatile 标志，不加锁）。</summary>
+    private volatile bool _capturing;
+
+    /// <summary>钩子线程攒下的原始移动点（无锁队列：钩子只入队，界面线程只出队）。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentQueue<GestureMath.Pt> _hookPoints = new();
+
+    /// <summary>UI 侧从钩子取走的点数（诊断"采样为什么只有两个点"用）。</summary>
     private long _moveEventCount;
 
     /// <summary>覆盖层看门狗（见 <see cref="OnOverlayGuard"/>）：100ms 兜一次底。</summary>
@@ -494,7 +500,7 @@ public sealed partial class GestureService : IDisposable
         {
             _recordDone = done;
             IsRecording = true;
-            _active = false;
+            _active = false; _capturing = false;
             _points.Clear();
             _tracker = null;
         }
@@ -1052,7 +1058,7 @@ public sealed partial class GestureService : IDisposable
 
             lock (_gate)
             {
-                _active = true;
+                _active = true; _capturing = true;
                 _activeSince = Environment.TickCount64;
                 _lastMoveAt = _activeSince;
                 _activeInjected = injected;
@@ -1176,7 +1182,7 @@ public sealed partial class GestureService : IDisposable
 
         lock (_gate)
         {
-            _active = false;
+            _active = false; _capturing = false;
             _tracker = null;
             _chordSwallow = chordVk;
             /* 组合手势在第二颗键按下时就执行，此时起始键还按着。
@@ -1197,7 +1203,7 @@ public sealed partial class GestureService : IDisposable
             var (px, py) = CursorPos();
             lock (_gate)
             {
-                _active = true;
+                _active = true; _capturing = true;
                 _vk = vk;
                 _points.Clear();
                 _start = new GestureMath.Pt(px, py);
@@ -1760,7 +1766,7 @@ public sealed partial class GestureService : IDisposable
         _wheelPressSwallowedVk = 0;
         lock (_gate)
         {
-            _active = false;
+            _active = false; _capturing = false;
             _activeInjected = false;
             _tracker = null;
             _cornerCandidate = null;
@@ -1897,29 +1903,44 @@ public sealed partial class GestureService : IDisposable
     }
 
     /// <summary>
-    /// 钩子线程上来的鼠标移动：直接记进当前这一笔。
+    /// 钩子线程上来的鼠标移动：**只发布一个最新坐标，不加锁、不碰列表**。
     ///
-    /// 轨迹采样以前只靠 8ms 的 DispatcherTimer，实测在扫索引/重扫期间被饿到
-    /// "一笔只采到 2 个点"，而 DrawnStroke 要求 ≥3 点 —— 用户看到的就是
-    /// "手势全失效（偏差 1.000）"。钩子本身消息驱动，每来一条移动就记一点，
-    /// 跟定时器彻底解耦。口径和轮询一致：2px 一处。
+    /// 上一版这里直接 `lock (_gate)` 然后往 `_points` 里追加 —— 移动事件每秒几百上千条，
+    /// 而界面线程在算轨迹长度（`GestureMath.Extent`）时握着同一把锁：钩子回调一堵，
+    /// 超过系统的 LowLevelHooksTimeout（300ms）整只鼠标钩子就被**静默摘掉**，
+    /// 之后按键、中键、滚轮全都收不到 —— 用户看到的就是"手势和中键菜单一起失效"。
+    ///
+    /// 现在钩子里只做两次 Volatile 写（亚微秒），采样交给界面线程的 8ms 轮询去取。
     /// </summary>
     private void OnHookMouseMove(int x, int y)
     {
-        Interlocked.Increment(ref _moveEventCount);
-        try
+        /* 钩子里只做：一次 volatile 读 + 一次无锁入队。不取任何锁、不碰状态。
+         * 上一版在这里 lock(_gate) 改列表，界面线程一算轨迹长度就把钩子堵住，
+         * 堵过系统的 300ms 就直接摘掉整只鼠标钩子 —— 按键/中键/滚轮全部失联。 */
+        if (!_capturing) return;
+        _hookPoints.Enqueue(new GestureMath.Pt(x, y));
+    }
+
+    /// <summary>
+    /// 把钩子线程攒下的移动点灌进当前这一笔（调用方必须已经持有 <see cref="_gate"/>）。
+    ///
+    /// 钩子只负责"发布"，列表只有界面线程改 —— 上一版在钩子里加锁改列表，
+    /// 界面线程一算轨迹长度就把钩子堵住，堵过 300ms 系统直接摘掉整只鼠标钩子，
+    /// 按键/中键/滚轮全部失联。
+    /// </summary>
+    private void DrainHookPointsLocked()
+    {
+        while (_hookPoints.TryDequeue(out var pt))
         {
-            lock (_gate)
-            {
-                if (!_active) return;
-                double dx = x - _last.X, dy = y - _last.Y;
-                if (dx * dx + dy * dy < 4) return;
-                _points.Add(new GestureMath.Pt(x, y));
-                _last = new GestureMath.Pt(x, y);
-                _lastMoveAt = Environment.TickCount64;
-            }
+            if (!_active) continue;
+            double dx = pt.X - _last.X, dy = pt.Y - _last.Y;
+            if (dx * dx + dy * dy < 4) continue;     // 2px 一处，和轮询同一口径
+            if (_points.Count >= 4096) break;        // 一笔最多 4096 点，别让它无限长
+            _points.Add(pt);
+            _last = pt;
+            _lastMoveAt = Environment.TickCount64;
+            Interlocked.Increment(ref _moveEventCount);
         }
-        catch (Exception ex) { CoreLog.Swallow(ex, "钩子轨迹采样"); }
     }
 
     private void OnPoll(object? sender, EventArgs e)
@@ -1982,6 +2003,9 @@ public sealed partial class GestureService : IDisposable
         lock (_gate)
         {
             if (!_active) return;
+            /* 先把钩子线程攒下的移动点灌进来：采样主要靠它，
+             * 下面的轮询只补"钩子没覆盖到"的那些。 */
+            DrainHookPointsLocked();
             extent = GestureMath.Extent(_points);
             double dx = px - _last.X, dy = py - _last.Y;
             add = dx * dx + dy * dy >= 4;   // 2px 一处，够画圆也够省内存
@@ -2168,7 +2192,7 @@ public sealed partial class GestureService : IDisposable
                 Interlocked.Exchange(ref _swallowUpVk, 0);
                 return false;
             }
-            _active = false;
+            _active = false; _capturing = false;
             _activeInjected = false;
             _tracker = null;
             _cornerCandidate = null;
@@ -2202,13 +2226,15 @@ public sealed partial class GestureService : IDisposable
         MiddleTap middleTap;
         lock (_gate)
         {
-            _active = false;
+            _active = false; _capturing = false;
             /* 这笔是不是从注入事件起手的（改键回声那张通行证）。
              * 中键菜单要用它：注入的中键一律不弹，不然"点中键"这条动作会一路套娃。 */
             wasInjected = _activeInjected;
             _activeInjected = false;
             middleTap = _middleTap;
             _middleTap = default;
+            /* 收笔这一刻把钩子队列里剩下的点也灌进来（最后那几个点往往决定形状）。 */
+            DrainHookPointsLocked();
             points = new List<GestureMath.Pt>(_points);
             _points.Clear();
             vk = _vk;
