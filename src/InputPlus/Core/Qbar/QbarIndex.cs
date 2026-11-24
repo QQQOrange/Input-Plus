@@ -76,6 +76,15 @@ internal static class QbarIndex
     private static int _building;
     private static int _starting;
     private static int _ready;
+
+    /// <summary>连续提交失败次数（成功一次清零）。</summary>
+    private static int _commitFailStreak;
+
+    /// <summary>熔断到期时刻（TickCount64）：这之前不再尝试写入。</summary>
+    private static long _commitBlockedUntil;
+
+    /// <summary>熔断日志只打一次，成功后再复位。</summary>
+    private static int _commitBlockedNoticed;
     private static long _docs;
     private static long _files;
     private static long _dirs;
@@ -824,19 +833,45 @@ internal static class QbarIndex
     /// </param>
     private static bool ApplyAndCommitLocked(List<IndexDoc> docs, List<string> stale, bool jsonLegacy = false)
     {
+        /* 熔断期内直接丢批次：这一段在写线程上，不能让它一直烧 CPU 去撞同一堵墙。 */
+        if (Environment.TickCount64 < Volatile.Read(ref _commitBlockedUntil)) return false;
+
         if (stale.Count > 0 && TantivyApi.DeletePaths(stale) < 0)
         {
             /* 删不掉旧条目最多是"同一路径两条"，写不进去才是"没有" —— 留痕后继续。 */
             CoreLog.Warn("删除旧索引条目失败：" + TantivyApi.LastError);
         }
         if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) return false;
-        if (TantivyApi.Commit()) return true;
+        if (TantivyApi.Commit())
+        {
+            Interlocked.Exchange(ref _commitFailStreak, 0);
+            Volatile.Write(ref _commitBlockedNoticed, 0);
+            return true;
+        }
 
         /* 走到这里：这一批已经被失败的 commit 取走，而且 writer 的内部状态也不再可信
          * （本机实测过：失败之后同一个 writer 再 commit 会"成功"却什么都没写进去）。
          * 所以不是原地重试，而是**关掉重开**，把 writer 换成一个干净的，再把这一批重放一次。 */
         string dir = TantivyApi.CurrentDir;
         CoreLog.Warn("提交索引失败，重开索引后重放这一批：" + TantivyApi.LastError);
+
+        /* 熔断：连续失败太多次就别再一轮轮重试了。
+         *
+         * 真机现场（用户数据目录）：每批 commit 都 PermissionDenied（段文件被外部占用），
+         * 于是"失败 → 重开 → 重放"每秒跑一轮，进程稳定烧掉 60% 一个核 —— 而钩子回调、
+         * 手势的 8ms 采样、拖拽看门狗全在等 CPU，用户看到的就是"手势和拖拽都失效"。
+         * 这里失败 3 次就闭嘴 5 分钟：这期间的批次直接丢（本来也写不进去），
+         * 索引保持打开、查询照旧可用。 */
+        if (Interlocked.Increment(ref _commitFailStreak) >= 3)
+        {
+            Volatile.Write(ref _commitBlockedUntil, Environment.TickCount64 + 5 * 60 * 1000);
+            if (Interlocked.CompareExchange(ref _commitBlockedNoticed, 1, 0) == 0)
+            {
+                CoreLog.Warn("索引写入连续失败 3 次：暂停写入 5 分钟（查询不受影响），"
+                             + "先排查索引目录是不是被杀软/同步盘占着。最后一条错误：" + TantivyApi.LastError);
+            }
+        }
+
         TantivyApi.Close();
         if (dir.Length == 0) return false;
 
@@ -854,7 +889,12 @@ internal static class QbarIndex
             if (TantivyApi.OpenEx(dir) != 0) continue;
             if (stale.Count > 0) TantivyApi.DeletePaths(stale);
             if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) continue;
-            if (TantivyApi.Commit()) return true;
+            if (TantivyApi.Commit())
+            {
+                Interlocked.Exchange(ref _commitFailStreak, 0);
+                Volatile.Write(ref _commitBlockedNoticed, 0);
+                return true;
+            }
             TantivyApi.Close();
         }
         /* 三次都没成：至少把索引重新打开 —— 一个坏批次不该让后面**所有**写入都变成
