@@ -289,6 +289,7 @@ public static partial class SelfTest
 
         Section("界面文案");
         T(nameof(TestUiText), TestUiText);
+        T(nameof(TestQbarMaterial), TestQbarMaterial);
         T(nameof(TestThemeMetrics), TestThemeMetrics);
         T(nameof(TestKeyboardFit), TestKeyboardFit);
 
@@ -570,6 +571,23 @@ public static partial class SelfTest
     {
         bool ok = EqualityComparer<T>.Default.Equals(actual, expected);
         Check(name, ok, ok ? null : $"期望 {expected}，实际 {actual}");
+    }
+
+    /// <summary>
+    /// 浮点近似比较。磨砂那些 0.306 / 0.485 / 0.29376 都是乘出来的，
+    /// 用 == 钉会因为最后一位差一个 ULP 莫名其妙变红。
+    /// </summary>
+    private static void CheckNear(string name, float actual, float expected, float eps = 1e-4f)
+    {
+        bool ok = Math.Abs(actual - expected) <= eps;
+        Check(name, ok, ok ? null : $"期望 {expected}（±{eps}），实际 {actual}");
+    }
+
+    private static void CheckNear(string name, System.Numerics.Vector3 actual, System.Numerics.Vector3 expected,
+        float eps = 1e-4f)
+    {
+        bool ok = (actual - expected).Length() <= eps;
+        Check(name, ok, ok ? null : $"期望 {expected}（±{eps}），实际 {actual}");
     }
 
     private static bool TryCreateDataDir()

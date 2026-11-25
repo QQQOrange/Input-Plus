@@ -37,6 +37,7 @@ use tantivy::schema::{
     FAST, INDEXED, STORED,
 };
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, RemoveLongFilter, TextAnalyzer};
+use tantivy::indexer::{IndexWriterOptions, LogMergePolicy};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, Order};
 
 /// 落盘 schema 版本。字段布局一变就加一，老索引会被整体重建（`state.json` 里也记一份）。
@@ -876,20 +877,51 @@ pub unsafe extern "C" fn ipidx_open(dir_ptr: *const u8, dir_len: usize) -> i32 {
             set_last_error(format!("注册分词器失败：{e}"));
             return -5;
         }
-        /* 4 个写入线程：建索引时 add_document 只是把文档塞进队列，真正贵的是索引
-         * 那一段（分词 + 倒排 + 段合并），而它按写入线程并行。单线程时 67 万条要 22 s，
-         * 索引线程成了唯一的瓶颈（实测写索引段 = 1.68 倍墙钟）。内存预算不变，
-         * 由这 4 个线程分（tantivy 的 256 MB 是总额）。 */
-        let writer = match index.writer_with_num_threads(4, 256 * 1024 * 1024) {
+        /* 2 个写入线程 / 每线程 64 MB；**合并线程不动，走上游默认 4**。
+         *
+         * 为什么只收 worker 数：`writer_with_num_threads(4, 256MB)` 会把 worker 定成 4、
+         * 每线程 64 MB，而 `num_merge_threads` 保持默认 4 —— 4 + 4 = 8 条线程抢核
+         * （实测建索引峰值 201%）。把 worker 收到 2，总量就降到 2 + 4 = 6。
+         *
+         * **不要跟着把 num_merge_threads 也调成 1**（2026-11-25 试过，当天回退）：
+         * 合并是"读完 N 个段、写出 1 个新段、删掉 N 个"，输入是积压的段数。
+         * 合并线程从 4 降到 1 之后，产出速度掉到四分之一，段越积越多、
+         * 每一轮要合并的段也越来越多 —— 实测段数在 100~345 之间反复震荡、
+         * 稳定吃满 4 个核、整个进程像在空转。**合并线程数不是"越省越好"，
+         * 它要和写入量匹配；写得多就得给合并留够手。**
+         *
+         * 内存是**每线程**额度：2 × 64 MB = 128 MB 总额，是改造前 256 MB 的一半。
+         * 不要再往下砍：段越小合并越频繁，省下来的内存会换成更高的 CPU。 */
+        let writer_options = IndexWriterOptions::builder()
+            .num_worker_threads(2)
+            .memory_budget_per_thread(64 * 1024 * 1024)
+            .build();
+        let writer = match index.writer_with_options(writer_options) {
             Ok(w) => w,
             Err(e) => {
                 set_last_error(format!("创建写入器失败：{e}"));
                 return -6;
             }
         };
+        /* 【暂不启用】按删除比例合并：`set_del_docs_ratio_before_merge(0.3)`
+         *
+         * 打开它之后（2026-11-25 那次部署实测）进程工作集冲到 **22.6 GB**、CPU **417%**、
+         * 四十秒不落。原因：默认策略给出的 11 个段里只要有几个被删过三成，就会同时
+         * 进入合并候选，而**合并的内存不受 `memory_budget_per_thread` 约束** ——
+         * 那是 writer 缓冲的额度，k 路归并是另一笔账。47.7 GB 的机器扛住了，
+         * 小内存机器上就是一次 OOM。
+         *
+         * 要重新开这条，先满足两条：① `meta.json` 里的段数已经收干净；
+         * ② 单独量过"开这一项之后的工作集"，而不是套用默认值就发。
+         * 在那之前显式保持上游默认（1.0 = 不按删除比例触发合并）。 */
+        writer.set_merge_policy(Box::new(LogMergePolicy::default()));
+        /* `Manual` 而不是 `OnCommitWithDelay`：两者是"自动 + 手动"双份。
+         * `ipidx_commit` 每次提交完都会 `reader.reload()`（为了 commit 返回即可搜到的
+         * 确定性），自动那条只会额外养一个后台线程 + 一次重复 reload。
+         * 打开索引时那一次 `reader.reload()` 保留 —— 那是初始加载，不是节流。 */
         let reader = match index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()
         {
             Ok(r) => r,
@@ -2015,18 +2047,25 @@ pub unsafe extern "C" fn ipidx_content_open(dir_ptr: *const u8, dir_len: usize) 
             set_last_error(format!("注册路径分词器失败：{e}"));
             return -5;
         }
-        /* 2 个写入线程 / 128 MB：正文段的合并比文件名索引贵得多，
-         * 线程再多只会在这个进程里和 UI、和文件名索引抢 CPU。 */
-        let writer = match index.writer_with_num_threads(2, 128 * 1024 * 1024) {
+        /* 正文索引：2 worker / 每线程 64 MB / 1 merge —— 与文件名索引同一套参数，
+         * 理由见 `ipidx_open` 里那段注释。正文段的合并比文件名索引更贵，
+         * 所以合并线程只能是 1：多一条就从 UI 和设备钩子那里抢走一个核。 */
+        let body_options = IndexWriterOptions::builder()
+            .num_worker_threads(2)
+            .memory_budget_per_thread(64 * 1024 * 1024)
+            .build();
+        let writer = match index.writer_with_options(body_options) {
             Ok(w) => w,
             Err(e) => {
                 set_last_error(format!("创建正文写入器失败：{e}"));
                 return -6;
             }
         };
+        /* 同 ipidx_open：按删除比例合并暂不启用，理由见那里（22.6 GB 工作集那次）。 */
+        writer.set_merge_policy(Box::new(LogMergePolicy::default()));
         let reader = match index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()
         {
             Ok(r) => r,

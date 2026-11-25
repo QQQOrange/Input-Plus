@@ -1,325 +1,153 @@
-<Window x:Class="InputPlus.UI.Windows.QbarWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization"
-             xmlns:w="clr-namespace:InputPlus.UI.Windows"
-        Title="Qbar" Width="760" SizeToContent="Height"
-        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
-        WindowStartupLocation="Manual" ShowActivated="True"
-        FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
-
-    <Grid Margin="18">
-        <!-- 不画投影底衬。
-             用户反馈：面板外框有一圈"线性光晕"，日夜两套主题都不想要。
-             那圈东西原来就是这里的三块半透明底衬（Brush.OverlayShadow，圆角 26/23/20、
-             各自往外撑 -8/-4/-1 DIP）叠出来的：三层同心圆角在面板外侧压出一圈
-             由深到浅的带状阴影。浅色照片壁纸上它像一圈脏灰边，深色壁纸上又几乎看不见，
-             两头不讨好。现在直接不画了，面板靠自己的 1.5px 描边和圆角跟背景分开，
-             窗口留白（Margin 18）不动，面板本身的尺寸和排版跟以前完全一样。 -->
-
-        <!-- 面板 -->
-        <Border x:Name="Panel" CornerRadius="{DynamicResource Radius.All}" BorderThickness="1.5"
-                Background="Transparent"
-                BorderBrush="{DynamicResource Brush.OverlayBorder}">
-            <Border.RenderTransform>
-                <TranslateTransform x:Name="Slide" Y="10" />
-            </Border.RenderTransform>
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <!-- 新增一行给搜索联想；下面各行顺延，布局仍是自动高度 -->
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-
-                <!-- 模糊底衬：BackdropFill 垫"抓到的背后屏幕 + 模糊"（强度由「背景模糊」设置决定），
-                     TintFill 是主题色的一层薄纱、alpha 由「面板不透明度」决定。
-                     两块都铺满整个面板、不吃鼠标。模糊强度设成 0 时 BackdropFill 是空的，
-                     退化成纯色面板。 -->
-                <Border x:Name="BackdropFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="{DynamicResource Radius.All}"
-                        IsHitTestVisible="False" />
-                <Border x:Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="{DynamicResource Radius.All}"
-                        IsHitTestVisible="False" Background="{DynamicResource Brush.OverlayCard}" />
-
-                <!-- 输入行：标签 + 输入框 -->
-                <Grid Grid.Row="0" Margin="18,16,18,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-
-                    <Border x:Name="ModeIconBox" Grid.Column="0" Width="30" Height="30" CornerRadius="{DynamicResource Radius.All}" VerticalAlignment="Center"
-                            Visibility="Collapsed"
-                            Background="{DynamicResource Brush.OverlayRowHover}">
-                        <TextBlock x:Name="ModeIcon" Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   FontSize="14" Foreground="{DynamicResource Brush.OverlayText}" HorizontalAlignment="Center"
-                                   VerticalAlignment="Center" />
-                    </Border>
-
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,10,0"
-                                VerticalAlignment="Center">
-                        <!-- 关键词标签：输入 "bd " 后出现。
-                             圆角走 Radius.Chip(8)，不是 Radius.All(16)：这个标签 32 高，
-                             16 正好是半高 → 两端变半圆（用户 2026-11-24 报的就是这个）。 -->
-                        <Border x:Name="ChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32"
-                                Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
-                                Background="{DynamicResource Brush.OverlayAccentSoft}" BorderThickness="1"
-                                BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <!-- 有图标：显示图标 -->
-                                <Border x:Name="ChipIconBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.All}"
-                                        Visibility="Collapsed" ClipToBounds="True">
-                                    <Image x:Name="ChipIcon" Stretch="UniformToFill" />
-                                </Border>
-                                <!-- 没有图标：显示首字色块 -->
-                                <Border x:Name="ChipInitialBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.All}"
-                                        Visibility="Collapsed">
-                                    <TextBlock x:Name="ChipInitial" FontSize="10.5" FontWeight="SemiBold"
-                                               Foreground="White" HorizontalAlignment="Center"
-                                               VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock x:Name="ChipLabel" Text="{loc:T '百度'}" FontSize="13" Margin="7,0,0,0"
-                                           VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayText}" />
-                                <Button x:Name="ChipClose" Content="&#xE711;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9"
-                                        Foreground="{DynamicResource Brush.OverlayTextSecondary}" Background="Transparent" BorderThickness="0"
-                                        Margin="7,0,-2,0" Padding="2" Cursor="Hand"
-                                        ToolTip="{loc:T '移除标签（Backspace）'}" Click="OnChipClose"
-                                        WindowChrome.IsHitTestVisibleInChrome="True" />
-                            </StackPanel>
-                        </Border>
-
-                        <!-- 过滤器 chip：输入 "doc:" 并选中命中项后出现在这里。
-                             它和上面那个关键词 chip 是两回事：关键词 chip 改的是"去哪儿搜"，
-                             这个改的是"搜什么"（扩展名/范围/时间），所以两个可以同时存在。 -->
-                        <Border x:Name="FilterChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32"
-                                Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center"
-                                Background="{DynamicResource Brush.OverlayRowHover}" BorderThickness="1"
-                                BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="&#xE71C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                           FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center"
-                                           Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                                <TextBlock x:Name="FilterChipLabel" Text="{loc:T '文档'}" FontSize="13"
-                                           VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayText}" />
-                                <Button x:Name="FilterChipClose" Content="&#xE711;"
-                                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9"
-                                        Foreground="{DynamicResource Brush.OverlayTextSecondary}" Background="Transparent" BorderThickness="0"
-                                        Margin="7,0,-2,0" Padding="2" Cursor="Hand"
-                                        ToolTip="{loc:T '清除过滤器（Esc）'}" Click="OnFilterChipClose"
-                                        WindowChrome.IsHitTestVisibleInChrome="True" />
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Qbar 输入框：字号可在设置里调到 30，
-                             所以高度给足（字号 + 上下各 8px），否则大字号下文字会被裁掉上下缘。 -->
-                        <TextBox x:Name="Input" FontSize="21" Background="Transparent" BorderThickness="0"
-                                 Foreground="{DynamicResource Brush.OverlayText}" CaretBrush="{DynamicResource Brush.OverlayText}"
-                                 VerticalContentAlignment="Center"
-                                 Padding="0,4" MinHeight="42" MinWidth="120" TextChanged="OnInputChanged"
-                                 PreviewKeyDown="OnInputKeyDown" FontFamily="{DynamicResource Font.Ui}" />
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border CornerRadius="{DynamicResource Radius.All}" Padding="8,4" VerticalAlignment="Center"
-                                Background="{DynamicResource Brush.OverlayRowHover}">
-                            <TextBlock x:Name="HintText" Text="{loc:T 'Enter 执行'}" FontSize="11"
-                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                        </Border>
-                        <!-- 展开：把当前查询搬到独立的大窗口里，左侧分面筛选、右侧名称/路径两列。
-                             按钮放在输入行右端而不是底部：Listary 用户的第一反应就是"往上点"，
-                             而且底部已经有分面计数和快捷键提示，再塞一个按钮会挤。 -->
-                        <Button x:Name="ExpandButton" Margin="6,0,0,0" Width="30" Height="30" Padding="0"
-                                Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                ToolTip="{loc:T '展开为文件搜索窗口'}" Click="OnExpandClick"
-                                WindowChrome.IsHitTestVisibleInChrome="True">
-                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="13" Foreground="{DynamicResource Brush.OverlayTextSecondary}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Button>
-                    </StackPanel>
-                </Grid>
-
-                <Border x:Name="SepLine" Grid.Row="2" Height="1"
-                        Background="{DynamicResource Brush.OverlayBorder}" Margin="16,0" />
-
-                <!-- 搜索联想：紧贴输入框下方、结果列表之上，默认收起。
-                     这里用 Grid 加行而不是 Popup —— Qbar 是 AllowsTransparency + SizeToContent=Height
-                     的自绘面板，Popup 是独立 HWND：点它会让主窗口吃到 Deactivated（面板直接淡出），
-                     键盘焦点还要在两个 HWND 之间来回切，↑↓/Enter 很容易丢。同 Grid 加行由布局
-                     自动把面板撑高，输入框永远在最上面，最稳，也不会挡输入框。 -->
-                <Border x:Name="SuggestBox" Grid.Row="1" Visibility="Collapsed"
-                        Margin="16,0,16,8" Padding="6,4" CornerRadius="{DynamicResource Radius.All}"
-                        Background="{DynamicResource Brush.OverlayRowHover}">
-                    <ListBox x:Name="SuggestList" Background="Transparent" BorderThickness="0"
-                             MaxHeight="248" Padding="0" SelectionMode="Single"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ItemContainerStyle="{StaticResource QbarRow}"
-                             PreviewMouseLeftButtonUp="OnSuggestionClick">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <!-- 数据就是字符串本身，所以 Text="{Binding}" -->
-                                <Grid Height="30">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="&#xE721;"
-                                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                               FontSize="11" Margin="2,0,10,0" VerticalAlignment="Center"
-                                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
-                                    <TextBlock Grid.Column="1" Text="{Binding}" FontSize="13.5"
-                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource Brush.OverlayText}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Window x:Class="InputPlus.UI.Windows.QbarWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:loc="clr-namespace:InputPlus.UI.Markup;assembly=InputPlus.Localization" xmlns:w="clr-namespace:InputPlus.UI.Windows" Title="Qbar" Width="760" SizeToContent="Height" WindowStyle="None" AllowsTransparency="False" Background="#00FFFFFF" ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize" WindowStartupLocation="Manual" ShowActivated="True" FontFamily="{DynamicResource Font.Ui}" UseLayoutRounding="True">
+  <Grid Margin="0">
+    <Border Name="Panel" CornerRadius="8" BorderThickness="1.5" Background="#00FFFFFF" BorderBrush="{DynamicResource Brush.OverlayBorder}">
+      <UIElement.RenderTransform>
+        <TranslateTransform x:Name="Slide" Y="10" />
+      </UIElement.RenderTransform>
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Border Name="TintFill" Grid.Row="0" Grid.RowSpan="5" CornerRadius="8" IsHitTestVisible="False" Background="{DynamicResource Brush.OverlayCard}" />
+        <Grid Row="0" Margin="18,16,18,12">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <Border Name="ModeIconBox" Grid.Column="0" Width="30" Height="30" CornerRadius="{DynamicResource Radius.All}" VerticalAlignment="Center" Visibility="Collapsed" Background="{DynamicResource Brush.OverlayRowHover}">
+            <TextBlock Name="ModeIcon" Text="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Foreground="{DynamicResource Brush.OverlayText}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
+            <Border Name="ChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32" Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center" Background="{DynamicResource Brush.OverlayAccentSoft}" BorderThickness="1" BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Name="ChipIconBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed" ClipToBounds="True">
+                  <Image Name="ChipIcon" Stretch="UniformToFill" />
                 </Border>
-
-                <!-- 结果区：列表 + （文件菜单模式下的）目标文件抬头 -->
-                <Grid Grid.Row="3">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-
-                    <!-- 右键某个文件后，列表整块变成针对它的操作菜单；
-                         这个抬头显示"现在这些操作是给谁的"。 -->
-                    <Border x:Name="MenuHeaderBox" Grid.Row="0" Visibility="Collapsed"
-                            Margin="16,4,16,0" Padding="10,7" CornerRadius="{DynamicResource Radius.All}"
-                            Background="{DynamicResource Brush.OverlayRowHover}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                       FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                            <TextBlock x:Name="MenuHeaderText" FontSize="11.5" MaxWidth="600"
-                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                                       Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                        </StackPanel>
-                    </Border>
-
-                <StackPanel Grid.Row="1">
-                <!-- 分组标题：空态带"搜索前建议"时显示一行"最近文件"。
-                     建议项和搜索结果共用这一个列表（红线 6：不许两套列表同时出现），
-                     所以标题只是给建议那一档加个抬头，不影响后续查询结果。 -->
-                <Border x:Name="GroupHeaderBox" Visibility="Collapsed" Margin="16,4,16,2">
-                    <TextBlock x:Name="GroupHeaderText" FontSize="11.5" FontWeight="SemiBold"
-                               TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                <Border Name="ChipInitialBox" Width="18" Height="18" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed">
+                  <TextBlock Name="ChipInitial" FontSize="10.5" FontWeight="SemiBold" Foreground="#FFFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <ListBox x:Name="Results" Margin="8,8,8,4" Background="Transparent"
-                         PreviewMouseRightButtonDown="OnResultsRightClick"
-                         BorderThickness="0" MaxHeight="420"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.CanContentScroll="True"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling"
-                         VirtualizingPanel.ScrollUnit="Pixel"
-                         PreviewMouseLeftButtonUp="OnResultClick"
-                         ItemContainerStyle="{StaticResource QbarRow}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Height="42">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 结果图标：有条目图标就显示图标，否则用品牌色首字 -->
-                                <Grid Grid.Column="0" Width="28" Height="28" Margin="0,0,11,0"
-                                      VerticalAlignment="Center">
-                                    <Border x:Name="IconTile" CornerRadius="{DynamicResource Radius.All}"
-                                            Background="{DynamicResource Brush.OverlayRowHover}">
-                                        <TextBlock Text="{Binding IconGlyph}"
-                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="12.5" Foreground="{DynamicResource Brush.OverlayTextSecondary}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
-                                    <Border x:Name="IconImageTile" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed"
-                                            ClipToBounds="True">
-                                        <Image Source="{Binding IconSource}" Stretch="UniformToFill" />
-                                    </Border>
-                                    <Border x:Name="IconLetterTile" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed"
-                                            Background="{Binding LetterBrush}">
-                                        <TextBlock Text="{Binding Letter}" FontSize="12" FontWeight="SemiBold"
-                                                   Foreground="White" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" />
-                                    </Border>
-                                </Grid>
-
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <!-- 标题不绑 Text，改由附加属性把命中段铺成 Inlines：
-                                         高亮区间来自搜索引擎，数据层只给偏移，不拼标记字符串。 -->
-                                    <TextBlock FontSize="14" Foreground="{DynamicResource Brush.OverlayText}"
-                                               TextTrimming="CharacterEllipsis"
-                                               w:QbarTitleHighlight.Segments="{Binding TitleSegments}" />
-                                    <TextBlock Text="{Binding Subtitle}" FontSize="11.5" Foreground="{DynamicResource Brush.OverlayTextSecondary}"
-                                               TextTrimming="CharacterEllipsis" Margin="0,1,0,0" />
-                                </StackPanel>
-
-                                <!-- 徽标：文件操作菜单那些行没有徽标文本，空着会剩一个空心胶囊，所以空串时整块收起来 -->
-                                <Border x:Name="BadgeChip" Grid.Column="2" CornerRadius="{DynamicResource Radius.All}" Padding="7,2"
-                                        Background="{DynamicResource Brush.OverlayRowHover}"
-                                        VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Badge}" FontSize="10.5"
-                                               Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
-                                </Border>
-                            </Grid>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding Badge}" Value="">
-                                    <Setter TargetName="BadgeChip" Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding HasIcon}" Value="True">
-                                    <Setter TargetName="IconTile" Property="Visibility" Value="Collapsed" />
-                                    <Setter TargetName="IconImageTile" Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                                <MultiDataTrigger>
-                                    <MultiDataTrigger.Conditions>
-                                        <Condition Binding="{Binding HasIcon}" Value="False" />
-                                        <Condition Binding="{Binding HasLetter}" Value="True" />
-                                    </MultiDataTrigger.Conditions>
-                                    <Setter TargetName="IconTile" Property="Visibility" Value="Collapsed" />
-                                    <Setter TargetName="IconLetterTile" Property="Visibility" Value="Visible" />
-                                </MultiDataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-                </StackPanel>
-
-                    <!-- 查询调试面板：翻译层每一层的中间结果 + 请求参数 + 命中数与耗时。
-                         默认收起，设置里打开或用 Ctrl+D 就地切换。 -->
-                    <Border x:Name="DebugBox" Grid.Row="2" Visibility="Collapsed"
-                            Margin="16,2,16,8" Padding="10,7" CornerRadius="{DynamicResource Radius.All}"
-                            Background="{DynamicResource Brush.OverlayRowHover}">
-                        <TextBlock x:Name="DebugText" FontFamily="Consolas, Cascadia Mono" FontSize="10.5"
-                                   TextWrapping="Wrap" MaxHeight="170"
-                                   Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
-                    </Border>
+                <TextBlock Name="ChipLabel" FontSize="13" Margin="7,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayText}" Text="{loc:T 百度}" />
+                <Button Name="ChipClose" Content="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource Brush.OverlayTextSecondary}" Background="#00FFFFFF" BorderThickness="0" Margin="7,0,-2,0" Padding="2" Cursor="Hand" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{loc:T 移除标签（Backspace）}" Click="OnChipClose" />
+              </StackPanel>
+            </Border>
+            <Border Name="FilterChipBox" Visibility="Collapsed" CornerRadius="{DynamicResource Radius.Chip}" Height="32" Padding="8,0" Margin="0,0,8,0" VerticalAlignment="Center" Background="{DynamicResource Brush.OverlayRowHover}" BorderThickness="1" BorderBrush="{DynamicResource Brush.OverlayBorderAccent}">
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+                <TextBlock Name="FilterChipLabel" FontSize="13" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayText}" Text="{loc:T 文档}" />
+                <Button Name="FilterChipClose" Content="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource Brush.OverlayTextSecondary}" Background="#00FFFFFF" BorderThickness="0" Margin="7,0,-2,0" Padding="2" Cursor="Hand" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{loc:T 清除过滤器（Esc）}" Click="OnFilterChipClose" />
+              </StackPanel>
+            </Border>
+            <TextBox Name="Input" FontSize="21" Background="#00FFFFFF" BorderThickness="0" Foreground="{DynamicResource Brush.OverlayText}" CaretBrush="{DynamicResource Brush.OverlayText}" VerticalContentAlignment="Center" Padding="0,4" MinHeight="42" MinWidth="120" FontFamily="{DynamicResource Font.Ui}" TextChanged="OnInputChanged" PreviewKeyDown="OnInputKeyDown" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+            <Border CornerRadius="{DynamicResource Radius.All}" Padding="8,4" VerticalAlignment="Center" Background="{DynamicResource Brush.OverlayRowHover}">
+              <TextBlock Name="HintText" FontSize="11" Foreground="{DynamicResource Brush.OverlayTextSecondary}" Text="{loc:T Enter 执行}" />
+            </Border>
+            <Button Name="ExpandButton" Margin="6,0,0,0" Width="30" Height="30" Padding="0" Background="#00FFFFFF" BorderThickness="0" Cursor="Hand" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{loc:T 展开为文件搜索窗口}" Click="OnExpandClick">
+              <TextBlock Text="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Brush.OverlayTextSecondary}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Button>
+          </StackPanel>
+        </Grid>
+        <Border Name="SuggestBox" Grid.Row="1" Visibility="Collapsed" Margin="16,0,16,8" Padding="6,4" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.OverlayRowHover}">
+          <ListBox Name="SuggestList" Background="#00FFFFFF" BorderThickness="0" MaxHeight="248" Padding="0" SelectionMode="Single" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ItemContainerStyle="{StaticResource QbarRow}" PreviewMouseLeftButtonUp="OnSuggestionClick">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid Height="30">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Margin="2,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayTextTertiary}" />
+                  <TextBlock Grid.Column="1" FontSize="13.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Brush.OverlayText}" Text="{Binding}" />
                 </Grid>
-
-                <!-- 底部提示 -->
-                <Grid Grid.Row="4" Margin="20,4,20,14">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="FooterHint" Grid.Column="0" Text="{loc:T '↑↓ 选择    Enter 执行    Tab 补全    Esc 关闭'}"
-                               FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}"
-                               TextTrimming="CharacterEllipsis" />
-                    <!-- 分面计数：口径由 FacetsAreGlobal 决定（索引直出 = 全部命中 →「全部：」，退回按页 →「本页：」），文案由 FacetSummary 统一生成 -->
-                    <TextBlock x:Name="FacetText" Grid.Column="1" Visibility="Collapsed" Margin="12,0,0,0"
-                               FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}"
-                               TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" />
-                </Grid>
-            </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ListBox>
         </Border>
-    </Grid>
+        <Grid Row="3">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <Border Name="MenuHeaderBox" Grid.Row="0" Visibility="Collapsed" Margin="16,4,16,0" Padding="10,7" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.OverlayRowHover}">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+              <TextBlock Name="MenuHeaderText" FontSize="11.5" MaxWidth="600" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+            </StackPanel>
+          </Border>
+          <StackPanel Grid.Row="1">
+            <Border Name="GroupHeaderBox" Visibility="Collapsed" Margin="16,4,16,2">
+              <TextBlock Name="GroupHeaderText" FontSize="11.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+            </Border>
+            <ListBox Name="Results" Margin="8,8,8,4" Background="#00FFFFFF" BorderThickness="0" MaxHeight="420" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" ItemContainerStyle="{StaticResource QbarRow}" PreviewMouseRightButtonDown="OnResultsRightClick" PreviewMouseLeftButtonUp="OnResultClick">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Grid Height="42">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid Column="0" Width="28" Height="28" Margin="0,0,11,0" VerticalAlignment="Center">
+                      <Border Name="IconTile" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.OverlayRowHover}">
+                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12.5" Foreground="{DynamicResource Brush.OverlayTextSecondary}" HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding IconGlyph}" />
+                      </Border>
+                      <Border Name="IconImageTile" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed" ClipToBounds="True">
+                        <Image Stretch="UniformToFill" Source="{Binding IconSource}" />
+                      </Border>
+                      <Border Name="IconLetterTile" CornerRadius="{DynamicResource Radius.All}" Visibility="Collapsed" Background="{Binding LetterBrush}">
+                        <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Text="{Binding Letter}" />
+                      </Border>
+                    </Grid>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                      <TextBlock FontSize="14" Foreground="{DynamicResource Brush.OverlayText}" TextTrimming="CharacterEllipsis" w:QbarTitleHighlight.Segments="{Binding TitleSegments}" />
+                      <TextBlock FontSize="11.5" Foreground="{DynamicResource Brush.OverlayTextSecondary}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0" Text="{Binding Subtitle}" />
+                    </StackPanel>
+                    <Border Name="BadgeChip" Grid.Column="2" CornerRadius="{DynamicResource Radius.All}" Padding="7,2" Background="{DynamicResource Brush.OverlayRowHover}" VerticalAlignment="Center">
+                      <TextBlock FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}" Text="{Binding Badge}" />
+                    </Border>
+                  </Grid>
+                  <DataTemplate.Triggers>
+                    <DataTrigger Value="" Binding="{Binding Badge}">
+                      <Setter TargetName="BadgeChip" Property="UIElement.Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                    <DataTrigger Value="True" Binding="{Binding HasIcon}">
+                      <Setter TargetName="IconTile" Property="UIElement.Visibility" Value="Collapsed" />
+                      <Setter TargetName="IconImageTile" Property="UIElement.Visibility" Value="Visible" />
+                    </DataTrigger>
+                    <MultiDataTrigger>
+                      <MultiDataTrigger.Conditions>
+                        <Condition Value="False" Binding="{Binding HasIcon}" />
+                        <Condition Value="True" Binding="{Binding HasLetter}" />
+                      </MultiDataTrigger.Conditions>
+                      <Setter TargetName="IconTile" Property="UIElement.Visibility" Value="Collapsed" />
+                      <Setter TargetName="IconLetterTile" Property="UIElement.Visibility" Value="Visible" />
+                    </MultiDataTrigger>
+                  </DataTemplate.Triggers>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ListBox>
+          </StackPanel>
+          <Border Name="DebugBox" Grid.Row="2" Visibility="Collapsed" Margin="16,2,16,8" Padding="10,7" CornerRadius="{DynamicResource Radius.All}" Background="{DynamicResource Brush.OverlayRowHover}">
+            <TextBlock Name="DebugText" FontFamily="Consolas, Cascadia Mono" FontSize="10.5" TextWrapping="Wrap" MaxHeight="170" Foreground="{DynamicResource Brush.OverlayTextSecondary}" />
+          </Border>
+        </Grid>
+        <Grid Row="4" Margin="20,4,20,14">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Name="FooterHint" Grid.Column="0" FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}" TextTrimming="CharacterEllipsis" Text="{loc:T ↑↓ 选择    Enter 执行    Tab 补全    Esc 关闭}" />
+          <TextBlock Name="FacetText" Grid.Column="1" Visibility="Collapsed" Margin="12,0,0,0" FontSize="10.5" Foreground="{DynamicResource Brush.OverlayTextTertiary}" TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" />
+        </Grid>
+      </Grid>
+    </Border>
+  </Grid>
 </Window>

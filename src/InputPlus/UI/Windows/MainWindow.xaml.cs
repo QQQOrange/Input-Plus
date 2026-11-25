@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -105,6 +105,7 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+
         /* ApplyShell 而不是 Apply：后者会把系统可见边框压成 0，Win11 的圆角
          * 正好画在那圈边框上，主窗口就成了直角（见 WindowChrome.ApplyShell 注释）。 */
         WindowChrome.ApplyShell(this, ThemeManager.Current == ThemeManager.Mode.Dark ||

@@ -28,11 +28,11 @@
          老版本线停在 5.15.x（KeyboardEnhance），所以 1.0 不是"倒退"而是新品牌的第一版；
          设置文件里 Global.LastVersion 记录的旧号回退逻辑仍然按字符串比较，
          不会把 5.15.0 当成"比 1.0 新"。 -->
-    <Version>1.6.3</Version>
-    <FileVersion>1.6.3</FileVersion>
+    <Version>1.6.6</Version>
+    <FileVersion>1.6.6</FileVersion>
     <!-- AssemblyVersion 必须跟 <Version> 一致：UpdateService.CurrentVersion 读的是
          Assembly.GetName().Version（三段式），漏改的话发布包会自己弹一次「发现新版本」。 -->
-    <AssemblyVersion>1.6.3</AssemblyVersion>
+    <AssemblyVersion>1.6.6</AssemblyVersion>
     <!-- 不要把源码 commit 拼进 ProductVersion。
          默认行为会生成 "4.5.0+2c574eb…"，而发布时那个 commit 通常**还没包含**
          本次改动（先构建、后提交），用户看文件属性会以为装的是旧版。
@@ -113,8 +113,7 @@
          用 EmbeddedResource 而不是 content 文件 —— 单文件发布后磁盘上没有这个
          文件，只有嵌进程序集才读得到。LogicalName 写死，避免 RID 构建时
          清单名变成 命名空间.目录.文件 之外的样子。 -->
-    <EmbeddedResource Include="Assets\gestures-builtin.json"
-                      LogicalName="InputPlus.Assets.gestures-builtin.json" />
+    <EmbeddedResource Include="Assets\gestures-builtin.json" LogicalName="InputPlus.Assets.gestures-builtin.json" />
     <!-- 界面语言包已经挪到 InputPlus.Localization 工程（Assets\Lang），
          原因见该工程 csproj 顶部：XAML 里的 {loc:T} 一旦引用**本程序集**的类型，
          WPF 就必须先编一个临时程序集再跑第二趟标记编译，那趟临时编译会和正式产物
@@ -127,12 +126,7 @@
          构建方式见 BUILD.md：在 src/ipidx 下执行 cargo 的 release 构建，
          产物 target\release\ipidx.dll 会被这里拷到输出目录与发布目录。
          单文件发布时由 IncludeNativeLibrariesForSelfExtract 一起打包。 -->
-    <Content Include="$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll"
-             Link="ipidx.dll"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest"
-             Visible="false"
-             Condition="Exists('$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll')" />
+    <Content Include="$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll" Link="ipidx.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" Condition="Exists('$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll')" />
   </ItemGroup>
 
   <ItemGroup>
@@ -169,10 +163,8 @@
        搜索永远没结果"，那种错误用户报不上来、我们也复现不了，必须在构建期拦住。
        Debug 只报警告，方便没装 Rust 工具链的人只看 C# 侧。 -->
   <Target Name="EnsureIpIdxNative" BeforeTargets="Build" Condition="!Exists('$(MSBuildThisFileDirectory)..\ipidx\target\release\ipidx.dll')">
-    <Message Importance="high"
-             Text="缺少 ipidx.dll：先在 src\ipidx 下跑 cargo build --release（见 BUILD.md）。" />
-    <Error Condition="'$(Configuration)' == 'Release'"
-           Text="Release 构建需要 ipidx.dll（Rust 侧文件索引内核）。请在 src\ipidx 下执行 cargo build --release。" />
+    <Message Importance="high" Text="缺少 ipidx.dll：先在 src\ipidx 下跑 cargo build --release（见 BUILD.md）。" />
+    <Error Condition="'$(Configuration)' == 'Release'" Text="Release 构建需要 ipidx.dll（Rust 侧文件索引内核）。请在 src\ipidx 下执行 cargo build --release。" />
   </Target>
 
 </Project>

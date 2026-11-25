@@ -1292,17 +1292,31 @@ public sealed class Macro
 public sealed class QbarOptions
 {
     public string PanelColor { get; set; } = "auto";   // auto = 跟随主题
+
+    /// <summary>
+    /// 面板外观**没有档位**：颜色分层是 Files 的薄亚克力，模糊交给系统亚克力。
+    /// 以前那个 0/1/2 的「面板样式」（原生 / 磨砂 / 液态玻璃）已经删了。
+    ///
+    /// 字段留着只为**读旧配置时整份设置还能原样回写**（internal：新代码别碰它）；
+    /// 界面和渲染都不再读它，升级上来的用户看到的永远是同一套材质。
+    /// 不加 [Obsolete]：序列化器/反射扫到属性会带出 CS0612 警告，而这里并没有调用方需要被劝退。
+    /// </summary>
+    internal int SurfaceStyle { get; set; } = 0;
+
+    /// <summary>
+    /// 面板不透明度（0.3~1）。面板只有一套材质，这个值是 Files 亮度层 / 底色 alpha 的倍率
+    /// （100% = Files 原值：亮压白 44%、暗压黑 64%）。
+    /// </summary>
     public string PanelOpacity { get; set; } = "0.96";
 
     /// <summary>
-    /// 面板背后的毛玻璃强度（0~100）。0 = 不模糊也不抓屏。
-    ///
-    /// 以前这是写死的（`BackdropBlur.Capture` 默认 radius=30），用户没法调；而且那张
-    /// 模糊图会把"面板不透明度"夹死在 0.72 —— 所以整段删过一次。现在恢复，但强度交给用户，
-    /// 并且不透明度不再被夹：模糊图垫在底下，底色 alpha 完全按 PanelOpacity 来。
-    /// 50 ≈ 原来那个手感的 30px 半径。
+    /// 背景模糊（0~100）。0 = 连系统亚克力都不开，只留面板底色；
+    /// 大于 0 就尝试开系统亚克力（Win11 的 Acrylic backdrop / 老系统的 accent policy），
+    /// 开不起来就退到 Files 的自绘分层。
+    /// 15:20 那版就是这一个旋钮（那时还叫"背景模糊强度"）。
     /// </summary>
     public int BlurStrength { get; set; } = 50;
+
     public double TextFontSize { get; set; } = 20;
     public int ListCount { get; set; } = 6;
     public double LineHeight { get; set; } = 38;

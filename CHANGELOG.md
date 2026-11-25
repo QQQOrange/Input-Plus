@@ -1,3 +1,131 @@
+## v1.6.6 — 撤掉自建 GPU 玻璃；Qbar 外观按安装包里的 exe 反编译回来重写
+
+这一版做两件事：把 v1.6.5 后期那条自建玻璃链路整条拆掉，然后**拿着安装目录里那个
+15:20 的 exe 反编译，把 qbar 的外观部分逐行对回去**（ilspycmd，`--bundle-entry InputPlus.dll`）。
+
+**拆掉了什么**
+1. `Core/Glass/GlassBackdrop.cs`（DXGI Desktop Duplication + Dual Kawase + PS_Glass 合成）、
+   `GlassSurface.cs`（D3D9Ex 共享纹理 + D3DImage）、`SpringEase.cs`（弹簧入场）整体删除；
+   `Vortice.Direct3D11 / Direct3D9 / D3DCompiler` 三个包从 csproj 移除。
+2. `QbarWindow` 里那一整段玻璃底（`StartGlass / StopGlass / TearDownGlass / PumpGlass /
+   EnsureGlassCanvas / DumpGlassFrames / OnCompositionRendering` 与全部 D3D 字段）整段删除，
+   XAML 的 `GlassFill` 层一并去掉。
+3. 随之消失的还有：抓屏排除（`WDA_EXCLUDEFROMCAPTURE`）、画布重建、10/30Hz 抓屏节拍、
+   阴影余量 24 DIP、`WM_NCHITTEST` 的穿透死区处理 —— 面板开着时**又能被截图/录屏拍到了**。
+
+**外观部分按 exe 重写（这一段是从二进制里抠出来的，不是凭印象）**
+4. 染色层 `TintFill`：`alpha = clamp(0.7 × 面板不透明度, 0.15, 1.0) × 255`，颜色取
+   `ThemePanelColor()` / 用户选的「主色调」；「背景模糊」= 0 时给 `byte.MaxValue`（不透明底）。
+5. 亚克力：`SetWindowCompositionAttribute` + `AccentState = 4`
+   （`ACCENT_ENABLE_ACRYLICBLURBEHIND`）、`AccentFlags = 2`、
+   渐变 `0x40 | B<<16 | G<<8 | R`（`0xAABBGGRR`，alpha 恒 0x40）。
+   `ApplyPanelTint → ApplyAccent → EnableAccent` 三层调用与 exe 里逐行一致。
+6. 面板恢复 1.5px 描边（`Panel.BorderBrush = Brush.OverlayBorder`，厚度在 XAML 里）；
+   原来的 `AcrylicFill` + `NoiseFill` 两层与 `AcrylicMaterial.cs` / `SystemAcrylic.cs` 一并删除 ——
+   15:20 那个 exe 里也没有这两个类型。
+7. 设置项跟着回到那一版的形状：删掉「磨砂程度 / 饱和度 / 面板边缘光」，
+   恢复「背景模糊 0~100」。旧配置里的 `GlassSpread / SurfaceSaturation / SurfaceEdgeGlow` 读出来直接忽略。
+8. 入场动画回到 v1.6.3 的 150ms 滑入 12px + 淡入（弹簧那版是玻璃链路一起进来的）。
+9. 版本号定为 `1.6.6`。安装目录里那个构建是 `1.6.5`（`InputPlus.exe.manual-20261125-154824`），本次内容进 1.6.6。
+
+**没能从 exe 里拿回来的**
+10. `QbarWindow.xaml`：WPF 的 XAML 编译成 BAML，反编译拿不回来。`TintFill`（一个 12 圆角的 Border）
+    和 `Panel` 的 1.5px 厚度是按 code-behind 引用 + 反编译出来的 `TintFill.Background=…` 反推的，
+    其它控件原样保留。
+11. 窗口圆角仍走 `SetWindowRgn`（12px）；exe 里那句 `WindowChrome.EnableRounded(this)` 走的是
+    DWM 原生 8px 圆角。要换成原生 8px 说一声，一行的事。
+
+**发版前补齐（1.6.6 实际落地的形态）**
+
+12. Qbar 端按安装包里的 exe **整段反编译覆盖**：`QbarWindow.xaml`、`QbarWindow.xaml.cs`、
+    `QbarExpandWindow.xaml`、`QbarExpandWindow.xaml.cs`、`QbarTitleHighlight.cs`，
+    外加反编译拆出来的 `QbarTitleSegment.cs`。1.6.6 开发期在这几个文件上的改动不再保留，
+    Qbar 以 exe 里那套为准（少掉的界面元素见下一条说明的代价）。
+13. **修「点面板外面不收起」**：原来只订阅 `_host.Engine.MouseDownEvent`，
+    而宿主模式（`--hookhost`）下主进程**根本没装钩子**
+    （`AppHost`: `Engine.Start(installHook: !hookHostReady)`）—— 订阅的是空气。
+    面板只剩 `Deactivated` 一条路，点到不换前台的地方（任务栏、桌面、被权限挡住的前台切换）
+    就挂在那儿不动。现在 Qbar 自己持一颗 `KeyboardHook`（`Start(mouseOnly: true)`，
+    只在面板打开期间订阅，收起即退订），再叠一层 120 ms 前台兜底巡检：
+    面板抢到过前台之后，前台一旦变成别的进程就收起；本进程自己的右键菜单不算「外面」。
+14. 已知代价：11 条里说「XAML 原样保留」只对 1.6.5 之前成立 ——
+    本次是整段覆盖，1.6.6 开发期在 `QbarWindow.xaml` 上新增的那批控件不在包里。
+
+## v1.6.5 — Qbar 面板收成一套材质：Files 的薄亚克力 + liquidDX11 的磨砂
+
+这一轮只做一件事：把面板外观从"三选一"收成"就长这样"，并把用户提了三次的那圈外圈实线从根上去掉。
+
+**外观**
+1. **「面板样式」选择器删掉**：原生 / 磨砂 / 液态玻璃三档合并成唯一一套 ——
+   颜色分层照 Files（`AppSystemBackdrop.cs` 的 Thin Acrylic：亮 `#D3D3D3` + 亮度层 0.44 +
+   fallback `#99D3D3D3`，暗 `#545454` + 0.64 + `#FF202020`），
+   模糊磨砂照 liquidDX11 的 `Material::Thin`。升级上来的配置里那个 `SurfaceStyle` 字段
+   只保留读回能力，界面和渲染都不再看它。
+2. **「液态玻璃」那一档整段删除**：`AcrylicMaterial.Regular()` 连同它自带的 tint 一起没了。
+   那一档就是用户说的"液态玻璃外观"。
+3. **磨砂的数值改成照着 liquidDX11 跑起来的样子**（以前用的是库的出厂值，所以"糊得不够"）：
+   `blur_mix` 0.28 → **1.0**（heavy 全开，以前是 28%）、`saturation` 1.65 → **1.35**、
+   `refr_strength` 16 → **24.49**、`chroma` 1 → **30**、`sheen_amt` 1 → 1.056、
+   `grain_amt` 1 → **4**、`edge_shadow` 0.45 → **2.0**、`bevel_scale` 0.6 → 1.0、
+   `fresnel_exp` 2.5 → 2.551、`lip` 0.16 → 0.6、`specular_exp` 40 → 62.42、
+   `front_spread` / `back_spread` 1.0 → **4.305 / 3.417**、`panel_br_spread/smooth` → **4.377 / 4.0**、
+   双灯 341°/161°（第二盏关着）→ **308.6°/0.474 + 130.4°/0.490**、
+   面板轮廓光 135° → **330.6°**、`lens_amount/power` 0/2 → **1.0/4.0**、`liquid flow` 0 → **16**。
+   出处：`examples/example_win32_directx11/src/app/config/glass_config.inc:13-19` +
+   `src/glass/glass.cpp:285-293`（`SetGlobalMaterial`）+ `src/app/main.cpp:380-398`。
+4. **外圈那圈实线删掉**：它在 shader 里是四个来源叠出来的 —— 环境光边
+   `ambient_rim`、TR/BL 补光 `tbl_fill`、不受 `highlight` 约束的 `sheen` 亮带、
+   呼吸光带 `glow_weight`。这四项默认全 0（折射、内侧阴影、颗粒、模糊这些"磨砂"本体一个没动），
+   描边 `border_intensity` 永远是 0。想要回来就调新滑条「面板边缘光」（0~100）。
+5. **面板不再设 `BorderBrush`**：以前即使 `BorderThickness=0` 也一直挂着一支
+   `Brush.OverlayBorder`，模板一捡回去就成了一条实线。现在连 Brush 都置 null。
+6. **DWM 那圈 1px 边框改成反复关**：`ApplyDwmChrome()` 在 `OnSourceInitialized`、
+   每次 `Activated`、`DpiChanged` 各设一遍（DWM 在激活/失焦/换 DPI 时会把它刷回默认值，
+   深色主题下那圈白框"时有时无"就是这条）。
+7. **窗口区域外扩 1px**：`SetWindowRgn` 是二分遮罩、没有抗锯齿，区域边界外侧直接没有窗口，
+   面板最后一行像素就是一条硬边。区域往外放 1 个物理像素，让 `PS_Glass` 自己的
+   `smoothstep(-aa, aa, d)` 收边。
+8. **新增两个旋钮**（Qbar → 外观）：「饱和度」0~200%（100% = liquidDX11 的 1.35）、
+   「面板边缘光」0~100%（0 = 外圈没有实线，100 = 原项目运行期强度）。
+
+**动效与投影（第二轮补齐）**
+
+9. **入场弹簧换成原项目那条曲线**：`SpringEase`（`Core/Glass/SpringEase.cs`）是
+   `spring.h` 里 `SpringStyle::Bouncy` 的解析解（k=320、ζ=0.55），位移 `(1-ent)*18` px。
+   以前是 WPF 的 150ms `CubicEase`、只落 12px —— 起手硬、落地也硬。
+   现在位移、WPF 透明度、喂给 `PS_Glass` 的 `fade` 三处共用一个值，磨砂层和文字永远同进同出。
+   `--render` 离屏时直接定格终态（否则截图会拍在弹簧的 0.4 上，出图是半透明的）。
+10. **GPU 投影回来了**：窗口区域从"裁到面板"改成"面板 + 10px 投影余量"
+    （`GlassShadowMargin`），`PS_Glass` 用原项目的 `shadow 0.046 / 28px / y+9` 画的那圈
+    柔和投影终于落得下来 —— 它是**渐变**，和用户要删的那条**实线**不是一回事。
+    区域仍然只在磨砂真跑起来时扩（没跑起来就只留 1px 抗锯齿）。
+11. **投影余量不吃点击**：`WM_NCHITTEST` 对面板矩形之外的点回 `HTTRANSPARENT`，
+    点面板旁边 10px 会照常落到下面的窗口 —— 以前靠把区域裁到面板来回避这个问题，
+    代价就是投影被裁掉。
+12. **视差 tilt 接上了**：窗口一移动，倾角按 `clamp(-位移*0.05, ±1.2)` 反向推、再按 `dt*9`
+    平滑（main.cpp:342-352），shader 里两盏灯跟着偏。拖 Qbar 时高光会游。
+13. **抓屏节流到 10fps**：合成仍按 30fps 跑（颗粒/折射/呼吸都是时间函数，卡到 10fps 会一顿一顿），
+    只有抓屏每 3 拍做一次 —— 对齐原项目 `blurFps = 10`（ui_state.inc:44）。
+14. **首帧预热**：`StartGlass` 里在设好 `WDA_EXCLUDEFROMCAPTURE` 之后连抓最多 8 帧
+    （backdrop.cpp:49 的同一手法），第一次唤出不会再"先灰一下再糊开"。
+15. **窗口区域去重**：同一次唤出里 `SizeToContent` 会触发十几次 `SizeChanged`，
+    形状没变就不再调 `SetWindowRgn`（实测一轮 20 次白扔）。
+16. **圆角保持 12，不跟原项目的 26**：全局 `Radius.All` 就是 12（v1.6.1 定的），
+    Qbar 跟着变 26 会在一堆 12 的卡片里显得像另一个程序。记录在此，别再反复。
+
+**修 bug**
+17. **磨砂会"冻住"**：锁屏 / UAC / 改分辨率 / 全屏游戏切回来之后，
+   `AcquireNextFrame` 会回 `DXGI_ERROR_ACCESS_LOST`。原逻辑在这里把 duplication 放掉，
+   但重建只在首帧前调用过一次 —— 于是 `IsReady` 永远 false，面板停在最后一帧，
+   只能换样式才恢复。现在按原项目的写法：只要 duplication 没了就重建（重建时按窗口矩形
+   重新挑显示器），并且 `ReleaseDuplication()` 不再顺手把共享输出层一起 Dispose。
+
+**自检**
+18. 新增 26 项：`TestQbarMaterial`（21 项，默认边缘光/环境光边/补光/呼吸光带/sheen 全 0、
+    描边恒 0、`blur_mix`/`saturation`/`chroma`/`refr`/双灯强度跟运行期一致、
+    边缘光 100 时各项回到运行期强度、Files 的 0.44/0.64 与两个 fallback 色没被改掉）
+    + 弹簧 5 项（起手 0、会过冲、0.9s 收敛到 1、`Clamped` 不越界、rise = 18）。
+
 ## v1.6.3 — 让"自己身上也能用"：手势 / 拖拽 / 别名，外加一次收形
 
 这一轮的主题是**边界**：功能在自己的界面上为什么失灵，以及几处"看着能用其实没接线"的判定。

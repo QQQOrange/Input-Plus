@@ -9,6 +9,8 @@ x86/
 [Aa][Rr][Mm]64/
 publish/
 dist/
+dist-build*/
+dist-deploy/
 *.dll
 *.pdb
 *.mdb

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     出一个发布形态（Windows 10 1809+ / Windows 11，x64），并生成可直接上传 GitHub Release 的资产。
 

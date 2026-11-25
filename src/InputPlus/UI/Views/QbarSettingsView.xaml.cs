@@ -211,11 +211,13 @@ public partial class QbarSettingsView : UserControl
         ListCountSlider.Value = _host.Settings.Qbar.ListCount;
         RecentCountSlider.Value = _host.Settings.Qbar.RecentCount;
         UpdateRecentCountLabel();
-        FontSizeSlider.Value = _host.Settings.Qbar.TextFontSize;
-        PanelOpacitySlider.Value = PanelOpacityPercent(_host.Settings.Qbar.PanelOpacity);
-        UpdatePanelOpacityLabel();
+        PanelOpacitySlider.Value = double.TryParse(_host.Settings.Qbar.PanelOpacity, out double panelOpacity)
+            ? Math.Clamp(panelOpacity, 0.3, 1.0) * 100
+            : 96;
         BlurStrengthSlider.Value = Math.Clamp(_host.Settings.Qbar.BlurStrength, 0, 100);
         UpdateBlurStrengthLabel();
+        UpdatePanelOpacityLabel();
+        FontSizeSlider.Value = _host.Settings.Qbar.TextFontSize;
         UpdateFontPreview();
         ShowIconsBox.IsChecked = _host.Settings.Qbar.ShowIcons;
         ImeOnOpenBox.IsChecked = _host.Settings.Qbar.SwitchToEnglishOnOpen;
@@ -1369,17 +1371,41 @@ public partial class QbarSettingsView : UserControl
         _host.Settings.Qbar.ListCount = (int)ListCountSlider.Value;
         _host.Settings.Qbar.RecentCount = (int)RecentCountSlider.Value;
         UpdateRecentCountLabel();
-        _host.Settings.Qbar.TextFontSize = FontSizeSlider.Value;
-        _host.Settings.Qbar.PanelOpacity = (PanelOpacitySlider.Value / 100.0)
-            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+        /* 面板不透明度按 0.3~1 的字符串存（老配置里就是这个格式）。
+         * 面板只有一套材质，这个值就是材质的浓度倍率 —— 磨砂时是亮度层浓度，
+         * 没磨砂时是底色 alpha，两条路共用。 */
+        _host.Settings.Qbar.PanelOpacity =
+            (PanelOpacitySlider.Value / 100.0).ToString("0.##");
         UpdatePanelOpacityLabel();
         _host.Settings.Qbar.BlurStrength = (int)Math.Round(BlurStrengthSlider.Value);
         UpdateBlurStrengthLabel();
+        _host.Settings.Qbar.TextFontSize = FontSizeSlider.Value;
         _host.Settings.Qbar.ShowIcons = ShowIconsBox.IsChecked == true;
         _host.Settings.Qbar.SwitchToEnglishOnOpen = ImeOnOpenBox.IsChecked == true;
         _host.Settings.Qbar.SwitchBackOnEngine = ImeBackBox.IsChecked == true;
         UpdateFontPreview();
         _host.SaveSettings();
+    }
+
+    /// <summary>「背景模糊」的实时读数。0 = 关掉系统亚克力。</summary>
+    private void UpdateBlurStrengthLabel()
+    {
+        if (BlurStrengthValue == null) return;
+        int blur = (int)Math.Round(BlurStrengthSlider.Value);
+        BlurStrengthValue.Text = blur <= 0
+            ? Loc.T("当前 0：不开系统亚克力，只留底色")
+            : Loc.F("当前 {0}", blur);
+    }
+
+    /// <summary>「面板不透明度」的实时读数。</summary>
+    private void UpdatePanelOpacityLabel()
+    {
+        /* 换算成实际的亮度层 alpha：100% 就是 Files 原值（亮压白 44% / 暗压黑 64%），
+         * 写出来免得用户以为还是"越往右越不透明"那种老口径。 */
+        double density = Math.Clamp(PanelOpacitySlider.Value / 100.0, 0.3, 1.0);
+        PanelOpacityValue.Text = Loc.F("当前 {0}%（亮度层 {1:P0} / {2:P0}）",
+            (int)Math.Round(PanelOpacitySlider.Value), 0.44 * density, 0.64 * density);
     }
 
     /// <summary>
@@ -1395,42 +1421,7 @@ public partial class QbarSettingsView : UserControl
         RecentCountValue.Text = count <= 0 ? Loc.T("不显示") : Loc.F("显示 {0} 条", count);
     }
 
-    /// <summary>
-    /// 面板不透明度的滑杆读数 → 百分比。
-    ///
-    /// 存在设置里的是字符串（历史格式 "0.96"），这里夹到滑杆允许的 30%~100%：
-    /// 手改过 settings.json 的 0.1 或 3 都落到可操作区间，不会让滑杆跳出去。
-    /// </summary>
-    private static double PanelOpacityPercent(string? raw)
-    {
-        double value = 0.96;
-        if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double parsed))
-            value = parsed;
-        else if (double.TryParse(raw, out double local))
-            value = local;
-        return Math.Clamp(value * 100.0, 30, 100);
-    }
 
-    /// <summary>面板不透明度的实时读数：只说百分比，别让人猜"0.96 是什么"。</summary>
-    private void UpdatePanelOpacityLabel()
-    {
-        if (PanelOpacityValue == null) return;
-        int percent = (int)Math.Round(PanelOpacitySlider.Value);
-        PanelOpacityValue.Text = percent >= 100
-            ? Loc.T("100% = 完全不透明")
-            : Loc.F("{0}% 不透明（越低越透，能看见后面的内容）", percent);
-    }
-
-    /// <summary>背景模糊强度的读数：0 明确写"不模糊"，别让人以为"少糊了一点"。</summary>
-    private void UpdateBlurStrengthLabel()
-    {
-        if (BlurStrengthValue == null) return;
-        int v = (int)Math.Round(BlurStrengthSlider.Value);
-        BlurStrengthValue.Text = v <= 0
-            ? Loc.T("0 = 不模糊（纯色面板，也不再抓屏）")
-            : Loc.F("强度 {0}（越大越糊）", v);
-    }
 
     /// <summary>字号预览：让用户直接看到调大字号后的实际效果。</summary>
     private void UpdateFontPreview()

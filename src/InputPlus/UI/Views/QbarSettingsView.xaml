@@ -1208,24 +1208,25 @@
                             </ItemsControl>
                         </StackPanel>
 
+                        <TextBlock Text="{loc:T '面板材质'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                        <TextBlock Text="{loc:T '薄亚克力（Files 的分层配方）+ 系统亚克力：模糊由 Windows 给，面板上叠一层亮度层和颗粒。'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" />
+
+                        <TextBlock Text="{loc:T '面板不透明度（亮度层浓度：100% = Files 原值）'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
+                        <Slider x:Name="PanelOpacitySlider" Minimum="30" Maximum="100" TickFrequency="1"
+                                IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
+                        <TextBlock x:Name="PanelOpacityValue" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0" />
+
+                        <TextBlock Text="{loc:T '背景模糊（0 = 关掉系统亚克力，只留底色）'}"
+                                   Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,12,0,0" />
+                        <Slider x:Name="BlurStrengthSlider" Minimum="0" Maximum="100" TickFrequency="5"
+                                IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
+                        <TextBlock x:Name="BlurStrengthValue" Style="{StaticResource Text.Tertiary}" Margin="0,2,0,0" />
+
                         <TextBlock Text="{loc:T '列表显示行数'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
                         <Slider x:Name="ListCountSlider" Minimum="3" Maximum="12" TickFrequency="1"
                                 IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
 
-                        <!-- 面板底衬的不透明度。设置项一直存在（QbarOptions.PanelOpacity），
-                             但界面上一直没有入口，用户只能手改 settings.json。 -->
-                        <TextBlock Text="{loc:T '面板不透明度'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
-                        <Slider x:Name="PanelOpacitySlider" Minimum="30" Maximum="100" TickFrequency="1"
-                                IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
-                        <TextBlock x:Name="PanelOpacityValue" Style="{StaticResource Text.Tertiary}"
-                                   TextWrapping="Wrap" Margin="0,4,0,0" />
-
-                        <!-- 背景模糊强度：0 = 不抓屏也不模糊（纯色面板）。 -->
-                        <TextBlock Text="{loc:T '背景模糊'}" Style="{StaticResource Text.Secondary}" Margin="0,14,0,6" />
-                        <Slider x:Name="BlurStrengthSlider" Minimum="0" Maximum="100" TickFrequency="1"
-                                IsSnapToTickEnabled="True" ValueChanged="OnAppearanceChanged" />
-                        <TextBlock x:Name="BlurStrengthValue" Style="{StaticResource Text.Tertiary}"
-                                   TextWrapping="Wrap" Margin="0,4,0,0" />
 
                         <!-- 空面板最上面的「最近打开」：只影响直接唤出 Qbar 时的样子 -->
                         <StackPanel Orientation="Horizontal" Margin="0,14,0,6">

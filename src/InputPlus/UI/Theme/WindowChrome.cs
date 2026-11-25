@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using InputPlus.Core;
@@ -185,6 +185,38 @@ public static class WindowChrome
     /// </summary>
     public static void ApplyShell(Window window, bool dark)
         => Apply(window, dark, BackdropType.Mica, zeroFrame: false);
+
+    /// <summary>
+    /// 系统支不支持 DWM 真背景（Mica/Acrylic）。
+    ///
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` 是 Win11 22621（22H2）才有的；22000 只有非公开的
+    /// `DWMWA_MICA_EFFECT`，Win10 完全没有。WPF-UI 的 FluentWindow 也是这么判的：
+    /// 不支持时它退回纯色，而不是留一个透明窗口漏出桌面。
+    /// </summary>
+    public static bool SupportsSystemBackdrop
+        => Environment.OSVersion.Version.Build >= 22621;
+
+    /// <summary>
+    /// 只请求背景类型，返回系统到底接不接受。
+    ///
+    /// 调用方（主窗口）要拿这个返回值决定"窗口底色要不要改成透明" ——
+    /// 系统拒绝时还设透明，就等于把一个没画背景的窗口直接盖在桌面上。
+    /// </summary>
+    public static bool TrySetBackdrop(Window window, BackdropType type)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return false;
+            int value = (int)type;
+            return DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref value, sizeof(int)) == 0;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "请求系统背景");
+            return false;
+        }
+    }
 
     /// <summary>
     /// 主窗口外框圆角，半径读 <see cref="ThemeMetrics.Radius"/>。

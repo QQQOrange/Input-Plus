@@ -58,8 +58,38 @@ public static partial class SelfTest
             !UI.Windows.MainWindow.ShouldExitOnClose(closeToTray: false, exiting: true));
     }
 
-    private static void TestScreenPlacement()
+    /// <summary>
+    /// Qbar 面板外观：Files 的薄亚克力（Thin Acrylic）—— 模糊由系统给，
+    /// 面板上只盖一层亮度层（亮压白 44% / 暗压黑 64%）。这里钉住配方常量与两层换算。
+    /// </summary>
+    private static void TestQbarMaterial()
     {
+        var def = new QbarOptions();
+        Check("Qbar 材质：背景模糊默认开着（50）", def.BlurStrength == 50);
+        Check("Qbar 材质：默认不透明度 96%", Math.Abs(double.Parse(def.PanelOpacity) - 0.96) < 1e-6);
+
+        /* Files 的 Thin Acrylic 配方（AppSystemBackdrop.cs SetThinAcrylicBackdropProperties）。 */
+        CheckNear("Qbar 材质：亮色 LuminosityOpacity 0.44",
+            (float)InputPlus.Core.Glass.ThinAcrylic.LightLuminosity, 0.44f);
+        CheckNear("Qbar 材质：暗色 LuminosityOpacity 0.64",
+            (float)InputPlus.Core.Glass.ThinAcrylic.DarkLuminosity, 0.64f);
+        CheckEqual("Qbar 材质：亮色 TintColor #D3D3D3",
+            InputPlus.Core.Glass.ThinAcrylic.LightTint, Color.FromRgb(0xD3, 0xD3, 0xD3));
+        CheckEqual("Qbar 材质：暗色 TintColor #545454",
+            InputPlus.Core.Glass.ThinAcrylic.DarkTint, Color.FromRgb(0x54, 0x54, 0x54));
+        CheckEqual("Qbar 材质：亮色兜底 #99D3D3D3",
+            InputPlus.Core.Glass.ThinAcrylic.LightFallback, Color.FromArgb(0x99, 0xD3, 0xD3, 0xD3));
+        CheckEqual("Qbar 材质：暗色兜底 #FF202020",
+            InputPlus.Core.Glass.ThinAcrylic.DarkFallback, Color.FromArgb(0xFF, 0x20, 0x20, 0x20));
+
+        /* 亮度层 alpha = LuminosityOpacity × 浓度；浓度拉满时就是 0.64 → 163。 */
+        var dark = (SolidColorBrush)InputPlus.Core.Glass.ThinAcrylic.MaterialBrush(true, true, 1.0, null);
+        CheckEqual("Qbar 材质：暗色亮度层 alpha = 163", dark.Color.A, (byte)163);
+        var light = (SolidColorBrush)InputPlus.Core.Glass.ThinAcrylic.MaterialBrush(true, false, 1.0, null);
+        CheckEqual("Qbar 材质：模糊关掉 → 走暗色兜底 #FF202020", light.Color, Color.FromArgb(0xFF, 0x20, 0x20, 0x20));
+    }
+
+    private static void TestScreenPlacement()    {
         static Core.Interop.NativeMethods.RECT R(int l, int t, int r, int b) =>
             new() { Left = l, Top = t, Right = r, Bottom = b };
 

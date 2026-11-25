@@ -318,30 +318,56 @@ internal static class QbarIndex
         {
             var token = Volatile.Read(ref _cts)?.Token ?? CancellationToken.None;
             IndexState? state = ReadState();
-            bool reusable = state != null
-                            && state.Version == SchemaVersion
-                            && state.Done
-                            && SameRoots(state.Roots, roots)
-                            && Directory.Exists(IndexDir);
+            bool stateOk = state != null
+                           && state.Version == SchemaVersion
+                           && SameRoots(state.Roots, roots)
+                           && Directory.Exists(IndexDir);
 
-            /* 顺序很关键：**先清空目录，再打开索引**。
-             * 反过来（先 Open 拿到含旧段的 meta、再删文件、再 commit）会写出一份
-             * meta 里仍引用已删除段文件的索引 —— 下一个进程打开时直接
-             * `FileDoesNotExist("*.term")`。这个坑在 748k 条那一轮踩过一次。 */
-            if (!reusable)
-            {
-                TantivyApi.Close();
-                TryClearIndex();
-            }
-
+            /* ── 判据看三样，不再只看 state.Done ────────────────────────
+             *
+             * 以前：`Done == true` 就沿用，`false` 就"清空重建"。问题在于 Done=true
+             * **并不等于索引真的能用** —— state.json 是独立于索引目录的一个小文件，
+             * 索引目录被清空 / 段文件被杀软删掉之后，它照样在那里说 Done=true，
+             * 于是程序"沿用"了一份空索引：状态页写着"N 个文件"，搜索永远没结果。
+             *
+             * 现在多两道验证：meta 能打开（OpenEx 的返回码，它内部已经把读 meta /
+             * 校验 schema / 建 writer+reader 全做完了，不用我们再解一遍 JSON）
+             * + 真的有内容（docs > 0）。
+             *
+             * 【明确不做"续扫"】Done=false 说明上次没扫完，一律清空重建。
+             * 曾经试过用 state.Completed 记"哪些根已经整棵入库"、启动时只补没扫完的根，
+             * 但那条路（idempotent:true，每批先 delete_term 再 add）在"上次留下几十个段"
+             * 的情况下会把工作集打到 4.7 GB 以上（隔离环境 100% 复现，第 40 秒炸开），
+             * 根因在段合并那一层、还没定位。在那之前用"删掉重建"换确定性：
+             * 全量重建扫完整盘只要 40 秒、峰值 537 MB，比一次不可预测的内存爆炸便宜。 */
             int rc = OpenIndexWithRecovery(IndexDir, out bool healed);
-            if (healed) reusable = false;
             if (rc != 0)
             {
                 _status = "索引打开失败";
                 _problem = TantivyApi.LastError;
                 Volatile.Write(ref _starting, 0);
                 return;
+            }
+
+            long docs = CurrentDocCount();
+            bool reusable = stateOk && !healed && docs > 0 && state!.Done;
+
+            /* 走到这里才是"真的用不了"：清空重建。
+             * 顺序仍然必须是**先 Close 再删**——反过来（先 Open 拿到含旧段的 meta、
+             * 再删文件、再 commit）会写出一份 meta 里仍引用已删除段文件的索引，
+             * 下一个进程打开时直接 `FileDoesNotExist("*.term")`。748k 条那轮踩过。 */
+            if (!reusable)
+            {
+                TantivyApi.Close();
+                TryClearIndex();
+                rc = OpenIndexWithRecovery(IndexDir, out healed);
+                if (rc != 0)
+                {
+                    _status = "索引打开失败";
+                    _problem = TantivyApi.LastError;
+                    Volatile.Write(ref _starting, 0);
+                    return;
+                }
             }
 
             if (reusable)
@@ -527,6 +553,13 @@ internal static class QbarIndex
         return rc;
     }
 
+    /// <summary>当前索引里有多少条文档（读不到就当 0）。</summary>
+    private static long CurrentDocCount()
+    {
+        IndexStats stats = TantivyApi.Stats();
+        return stats.Ok ? stats.Docs : 0;
+    }
+
     /// <summary>
     /// 枚举节流器：按**实测速度**自适应，把索引线程压到大约一半的占空比。
     ///
@@ -621,6 +654,19 @@ internal static class QbarIndex
                 }
                 else
                 {
+                    /* 自己的数据目录里的**文件**也必须跳过。
+                     *
+                     * 目录那一支早就有这道闸（见上面 isDir 分支），文件这一支一直漏着 ——
+                     * 于是 `InputPlus Data\file-index-tantivy\*.idx / *.term / *.store`
+                     * 这些段文件被写进了索引本身。而它们每 commit 一次都会改 mtime，
+                     * 下一次校准的 mtime diff 就认为"D 盘变了" → 重扫 → 重写索引 →
+                     * 段文件又变 …… **自激回路**：实测稳定吃满 4 个核、段数在 54~198
+                     * 之间来回震荡、`Done=true` 之后 CPU 还在涨，用户看到的是"开了索引
+                     * 整个软件就卡"。watcher 那条路有 `IsOwnData` 过滤，扫描/校准这条
+                     * 路的文件分支没有，两边不对称才是这个 bug 的根。
+                     *
+                     * 放在尺寸判断之前：`MaxFiles` 的配额不该被自己的段文件占掉。 */
+                    if (QbarRoots.IsOwnData(path)) continue;
                     if (Interlocked.Read(ref _files) + files >= MaxFiles) continue;
                     files++;
                     long docTick = Stopwatch.GetTimestamp();
@@ -733,12 +779,70 @@ internal static class QbarIndex
 
     private static void MaybeCommit()
     {
-        int pending = Volatile.Read(ref _pendingSinceCommit);
-        if (pending >= CommitBatchDocs) { Flush(force: false); return; }   // 攒够了就提交
-        if (SinceCommit.ElapsedMilliseconds < CommitIntervalMs) return;    // 还没到点
-        if (pending < MinDocsForTimedCommit) return;                       // 到点但没什么内容：继续攒，别空转合并
+        if (!ShouldCommit(Volatile.Read(ref _pendingSinceCommit), incremental: false)) return;
         Flush(force: false);
-        Flush(force: false);
+    }
+
+    /// <summary>
+    /// 攒够了没有（攒够 = 该提交了）。真正的提交由调用方做。
+    /// </summary>
+    /// <param name="incremental">
+    /// true = watcher 的增量批次，false = 全量扫描的批次。
+    ///
+    /// 两者只差一条：**增量路径不设"最少 200 条"那道闸**。
+    ///
+    /// 为什么分开：`MinDocsForTimedCommit` 本来是给扫描路径防"空转提交"的 ——
+    /// 建索引时每秒几千条，15 秒闸形同虚设，加一道 200 条的下限能省掉小批合并。
+    /// 但 watcher 的典型批次只有几条：改一个文件 → pending=1，条数闸永远过不去，
+    /// 那一条就要一直等到后面另有一次 200 条以上的流量 —— 用户改完文件名搜不到，
+    /// 而且看起来和"索引坏了"一模一样。增量这一侧有 15 秒的时间闸兜着，
+    /// 一秒不会提交多次，不需要条数下限。
+    /// </param>
+    private static bool ShouldCommit(int pending, bool incremental)
+    {
+        if (pending <= 0) return false;
+        /* 自检进程：每次写都立刻提交。
+         *
+         * 断言是"写完立刻能搜到"，让它等 15 秒既拖时间又不确定；更重要的是
+         * 自检里那道"commit 失败 → 关掉重开 → 重放这一批"的自愈链路只在
+         * ApplyAndCommitLocked 里，绕过它就等于把容错也绕掉了。
+         * 这个分支在正常运行（含全部生产写路径）里**恒为假**。 */
+        if (IsSelfTestProcess()) return true;
+        if (pending >= CommitBatchDocs) return true;                     // 攒够了：立刻提交
+        if (SinceCommit.ElapsedMilliseconds < CommitIntervalMs) return false;   // 还没到点
+        return incremental || pending >= MinDocsForTimedCommit;          // 到点了
+    }
+
+    /// <summary>
+    /// 真的提交一次。<b>调用方必须已经持有 <see cref="WriteGate"/>。</b>
+    ///
+    /// 为什么要求持锁：pending 有两个写入方（扫描批次、watcher 增量批次），
+    /// "谁清零、谁提交"必须原子。锁外 Exchange(0) 会出现这种情况：
+    /// 增量线程刚把文档 add 进 writer、还没到提交条件，另一个线程的 Flush
+    /// 在锁外把 pending 清成 0 —— 那批文档要再等一整个 15 秒窗口才可能被提交。
+    /// </summary>
+    private static bool CommitLocked()
+    {
+        int pending = Interlocked.Exchange(ref _pendingSinceCommit, 0);
+        var watch = Stopwatch.StartNew();
+        bool ok = TantivyApi.Commit();
+        watch.Stop();
+        Volatile.Write(ref _lastCommitMs, (int)watch.ElapsedMilliseconds);
+        /* commit（含段合并）本质上是"写索引"的一部分：只算 add_document 会漏掉
+         * 建索引时最贵的那一段，分段数字就会自相矛盾（各段之和远小于墙钟）。 */
+        if (Volatile.Read(ref _building) == 1) AddMs(ref _flushMs, watch.ElapsedMilliseconds);
+        if (!ok)
+        {
+            _problem = "提交索引失败：" + TantivyApi.LastError;
+            CoreLog.Warn(_problem);
+            Interlocked.Add(ref _pendingSinceCommit, pending);
+            return false;
+        }
+        _problem = "";
+        Interlocked.Exchange(ref _builtAtTicks, DateTime.Now.Ticks);
+        SinceCommit.Restart();
+        RefreshCounters(commit: true);
+        return true;
     }
 
     /// <summary>
@@ -748,30 +852,10 @@ internal static class QbarIndex
     /// </summary>
     internal static bool Flush(bool force)
     {
-        int pending = Interlocked.Exchange(ref _pendingSinceCommit, 0);
-        if (pending == 0 && !force) return true;
-
         lock (WriteGate)
         {
-            var watch = Stopwatch.StartNew();
-            bool ok = TantivyApi.Commit();
-            watch.Stop();
-            Volatile.Write(ref _lastCommitMs, (int)watch.ElapsedMilliseconds);
-            /* commit（含段合并）本质上是"写索引"的一部分：只算 add_document 会漏掉
-             * 建索引时最贵的那一段，分段数字就会自相矛盾（各段之和远小于墙钟）。 */
-            if (Volatile.Read(ref _building) == 1) AddMs(ref _flushMs, watch.ElapsedMilliseconds);
-            if (!ok)
-            {
-                _problem = "提交索引失败：" + TantivyApi.LastError;
-                CoreLog.Warn(_problem);
-                Interlocked.Add(ref _pendingSinceCommit, pending);
-                return false;
-            }
-            _problem = "";
-            Interlocked.Exchange(ref _builtAtTicks, DateTime.Now.Ticks);
-            SinceCommit.Restart();
-            RefreshCounters(commit: true);
-            return true;
+            if (Volatile.Read(ref _pendingSinceCommit) == 0 && !force) return true;
+            return CommitLocked();
         }
     }
 
@@ -838,7 +922,8 @@ internal static class QbarIndex
                 Interlocked.Exchange(ref _ready, 0);
             return 0;
         }
-        AfterImmediateCommit();
+        /* 这里**不再**刷新 builtAt / 计数：这一批可能还没提交（ApplyAndCommitLocked
+         * 只在攒够时才提交），统计要在真正 commit 之后才准。刷新挪进了 CommitLocked。 */
         /* 正文索引跟着文件名索引的增量走：同一个文件变了，两边都要更新。
          * 放这里而不是 watcher 里，是因为校准 / 整根重扫 / 快照 diff 也走这条入口，
          * 只在 watcher 挂一次会漏掉"停机期间改过的文件"。 */
@@ -869,7 +954,6 @@ internal static class QbarIndex
             CoreLog.Warn(_problem);
             return 0;
         }
-        AfterImmediateCommit();
         ContentIndex.NotifyDeleted(unique);
         return unique.Count;
     }
@@ -886,24 +970,40 @@ internal static class QbarIndex
 
         bool ok;
         lock (WriteGate) { ok = ApplyAndCommitLocked(docs, stale, jsonLegacy); }
+
+        /* **先清空，再判成败** —— 顺序不能反。
+         *
+         * 以前 `docs.Clear()` 写在 `if (!ok) return;` 之后，于是写入失败时这一批
+         * 就留在列表里不清：调用方 `ScanRoot` 继续往同一个 batch 里塞，下一次
+         * `batch.Count >= BuildBatchDocs` 又调进来、又失败、又不清 …… 批次越滚越大。
+         * 计数路径上表现不出来（每次只多 2 万条），但一旦进入"commit 连续失败 →
+         * 熔断 5 分钟"的状态，这 5 分钟里每一批都失败、每一批都不清，
+         * 列表跟着目录树一起长 —— 2026-11-25 那次工作集冲到 5 GB 就是这么来的。
+         *
+         * 清空的语义是对的：失败时这批文档本来就已经丢了（`_problem` 记了原因），
+         * 留着它们不会让数据回来，只会让内存跟着目录树涨。 */
+        docs.Clear();
+
         if (!ok)
         {
             _problem = "重扫写入失败：" + TantivyApi.LastError;
             CoreLog.Warn(_problem);
             return;
         }
-        docs.Clear();
-        AfterImmediateCommit();
         ContentIndex.NotifyChanged(stale);
     }
 
     /// <summary>
-    /// 在**已经持有** <see cref="WriteGate"/> 的前提下：删旧条目 → 加新文档 → 提交。
+    /// 在**已经持有** <see cref="WriteGate"/> 的前提下：删旧条目 → 加新文档 →
+    /// **攒够才**提交（判据见 <see cref="ShouldCommit"/>）。
     ///
-    /// 为什么连 commit 一起放进锁里：commit 一旦失败，writer 里待提交的文档就已经被取走了
+    /// 为什么 commit 必须留在锁里：commit 一旦失败，writer 里待提交的文档就已经被取走了
     /// （D62）。如果锁只包到 add，另一个线程的 commit 会把**我的**这一批一起取走 ——
     /// 它成功了、我这边却什么都没提交上，于是"两个线程各写 200 条"最后只有 200 条。
     /// 把提交收进锁里，这一批的"删 + 加 + 提交"才是原子的。
+    ///
+    /// 为什么可以不再每批提交：见方法体里那段（上游 commit = 关 channel + join 全部
+    /// worker + 重开；删除是 opstamp 语义，同批内 d2 能正确吃掉 a1）。
     ///
     /// commit 失败时把这一批重新 add 一遍再提交一次：还持有原始文档的正是这一层，
     /// 重试的责任在这里（Rust 层重试只会提交出一个空索引）。
@@ -922,8 +1022,33 @@ internal static class QbarIndex
             /* 删不掉旧条目最多是"同一路径两条"，写不进去才是"没有" —— 留痕后继续。 */
             CoreLog.Warn("删除旧索引条目失败：" + TantivyApi.LastError);
         }
-        if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) return false;
-        if (TantivyApi.Commit())
+        int added = 0;
+        if (docs.Count > 0)
+        {
+            added = AddBatch(docs, jsonLegacy);
+            if (added < 0) return false;
+        }
+
+        /* ── 攒着，不再每批提交 ────────────────────────────────────────
+         *
+         * 上游的 `commit` 不是"刷一下缓冲区"：它是
+         * `prepare_commit` → 关掉文档 channel → **join 全部索引 worker**
+         * → 再逐个 `add_indexing_worker()` 重开（index_writer.rs:620-651），
+         * 然后才落 meta。watcher 每 1500 ms 出一批，改造前每批一次 commit
+         * = 每 1.5 秒把整组 worker 拆了重建一遍，反过来又保证不了"批内原子"。
+         *
+         * 现在 delete_term / add_document 只入队，提交节流统一交给
+         * `ShouldCommit`（CommitBatchDocs / CommitIntervalMs / MinDocsForTimedCommit
+         * 三个常量，和扫描路径共用同一套）。
+         *
+         * 放宽到"攒够再提"仍然是对的，因为 tantivy 的删除是 opstamp 语义：
+         * `delete_term` 只影响它**之前**的 add（index_writer.rs:686-700）。
+         * 同一路径在一个窗口里 upsert 两次 → d1,a1,d2,a2，d2 会吃掉同批里的 a1，
+         * 最后只剩 a2；结果和"每批一提交"完全一致。 */
+        int pending = Interlocked.Add(ref _pendingSinceCommit, Math.Max(added, 0) + stale.Count);
+        if (!ShouldCommit(pending, incremental: true)) return true;
+
+        if (CommitLocked())
         {
             /* 只有"一次就成"才算健康。靠重开重放救回来的那批仍然说明索引目录有问题，
              * 不能把失败计数清零 —— 否则每批都"失败一次 + 重开一次 492MB 索引"，
@@ -979,7 +1104,11 @@ internal static class QbarIndex
             if (TantivyApi.OpenEx(dir) != 0) continue;
             if (stale.Count > 0) TantivyApi.DeletePaths(stale);
             if (docs.Count > 0 && AddBatch(docs, jsonLegacy) < 0) continue;
-            if (TantivyApi.Commit()) return true;
+            if (TantivyApi.Commit())
+            {
+                Interlocked.Exchange(ref _pendingSinceCommit, 0);
+                return true;
+            }
             TantivyApi.Close();
         }
         /* 三次都没成：至少把索引重新打开 —— 一个坏批次不该让后面**所有**写入都变成
@@ -992,15 +1121,6 @@ internal static class QbarIndex
     /// <summary>一批文档写进去：默认二进制，夹具构建要 JSON 时传 true。</summary>
     private static int AddBatch(List<IndexDoc> docs, bool jsonLegacy)
         => jsonLegacy ? TantivyApi.AddDocs(docs) : TantivyApi.AddDocsBinary(docs);
-
-    /// <summary>立即提交成功之后刷新统计与时间戳（不再走 <see cref="Flush"/>：它在锁里又提交一次）。</summary>
-    private static void AfterImmediateCommit()
-    {
-        _problem = "";
-        Interlocked.Exchange(ref _builtAtTicks, DateTime.Now.Ticks);
-        SinceCommit.Restart();
-        RefreshCounters(commit: true);
-    }
 
     // ─────────────────────────── 查询 ───────────────────────────
 
@@ -1302,7 +1422,7 @@ internal static class QbarIndex
     /// 而它只是启动时的一次 diff，不是索引本体 —— 让它无界增长就是把内存交给用户的磁盘布局。
     /// 截断是**有损**的（被截掉的目录这次比不到），所以截断事实必须能被 --index-status 看到。
     /// </summary>
-    private const int MaxDirStamps = 50000;
+    private const int MaxDirStamps = 200000;
 
     /// <summary>一次快照 diff 最多展开多少个目录（新出现的目录会继续往下走一层）。</summary>
     private const int MaxStampDiffDirs = 20000;
@@ -1467,6 +1587,22 @@ internal static class QbarIndex
             {
                 Parallel.ForEach(file.Dirs, opts, pair =>
                 {
+                    /* 自己的数据目录**整个不参与 diff**。
+                     *
+                     * 这是那条自激回路的最后一环：`InputPlus Data` 下面是
+                     * app.log（每秒都在追加）、keys、settings.json、
+                     * 以及 `file-index-tantivy\*`（每次 commit 都重写段 +
+                     * 连 dirstamps.json 自己也写在这里）。它们每变一次，
+                     * 父目录 mtime 就变一次 —— 于是每次启动的 diff 都判定
+                     * "这个目录变了" → 重扫 → 写索引 → mtime 又变 → 下次再扫。
+                     *
+                     * 实测（2026-11-25）：进程稳定吃满 4 个核、段数在 54~198
+                     * 之间反复震荡、`Done=true` 之后 CPU 还在涨；`CLP_NO_INDEX=1`
+                     * 起同一个 exe，40 秒只烧 4 秒 CPU —— 差值全在索引这一侧。
+                     *
+                     * 扫目录那一侧（`ScanRoot`）的目录分支和文件分支都已有这道闸，
+                     * 唯独 diff 这一侧的遍历漏了，三处不对称才是 bug 的根。 */
+                    if (QbarRoots.IsOwnData(pair.Key)) return;
                     if (!ProbeDir(pair.Key, out long mtime)) { missingDirs.Add(pair.Key); return; }
                     if (mtime != pair.Value.Mtime) changedDirs.Add(pair.Key);
                 });
