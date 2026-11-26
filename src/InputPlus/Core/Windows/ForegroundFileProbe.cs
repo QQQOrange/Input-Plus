@@ -315,6 +315,12 @@ internal static class ForegroundFileProbe
         string? cacheCandidate = FirstCachePath(paths);
         CoreLog.Info($"[收藏] 句柄快照没挑出候选：pid={pid} proc={processName} 原始命中 {paths.Count} 条（{why}）");
 
+        /* ①.5 库型应用（Reeden 这类）：内容被导入程序自己的库里，句柄表里永远是
+         * 它自己的 sqlite/hive，窗口标题也不带文件名 —— 上面那条路必然空手。
+         * 放在命令行与子进程之前：它对非库型应用只是一次字符串比较，代价可忽略。 */
+        if (LibraryApps.CurrentItemFolder(processName) is { } libraryFolder)
+            return Ok(libraryFolder, processName, hwnd, pid, "库型应用目录");
+
         /* ② 窗口进程的命令行。比扫子进程更可信：命令行里的路径就是用户双击的那个
          * （WPS 云文档除外，那种情况它给的是云端 id）。 */
         string? fromCommand = FirstAccepted(PathsInCommandLine(pid, ct));
