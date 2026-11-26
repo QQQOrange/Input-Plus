@@ -241,7 +241,7 @@ public static partial class SelfTest
         T(nameof(TestFavoriteFile), TestFavoriteFile);
 
         Section("笔画平滑");
-        T(nameof(TestSmoothing), TestSmoothing);
+
         T(nameof(TestQbarIndex), TestQbarIndex);
         T(nameof(TestQbarIndexQuery), TestQbarIndexQuery);
 

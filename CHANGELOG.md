@@ -1,3 +1,27 @@
+## v1.7.6 — 手势识别去掉「笔画平滑」与识别前重采样（对齐 WGestures 2）
+
+**依据**（逐行核对 WG2 源码）：它的识别链路是
+`A/U.cs` 20 设备像素采样 → `A/P.cs` 的 18° 合并 → `A/g.cs:300` 的 DP/Fréchet 距离
+（命中门限 0.05 **硬编码**，`A/m.cs:312` 的 setter 无人调用）。**中间没有滑动平均，也没有等距重采样。**
+
+InputPlus 在这条链上多做了两件事：等距 `Resample` + 滑动平均（半径 `count/120`），
+外加一个「笔画平滑」开关（`StrokeSmoother`）。三者都会让"手画的那一笔"和"模板"
+在进识别器之前就被改写 —— 于是阈值没法对着 WG2 校准。
+
+**改动**
+
+1. `GestureEngine.StrokeOf`：删 `SampleCount` / `Resample` / `Smooth`，直接
+   `Normalize` → RDP（RDP 容差仍跟整笔尺度走，与 WG2 `A/g.cs:14` 同义）。
+2. 删 `GestureOptions.SmoothStrokes`、`StrokeSmoother.cs`、选项页那一行开关、
+   `GestureOverlayWindow` 的 `Build(smooth:)` 参数、`GestureOverlayDiag` 里的夹具、
+   `GestureService` 里的平滑调用、`SelfTest.Smoothing.cs`（连同注册）。
+3. `GestureTrail.Build()` 恒定按 WG2：**≤128 点才切角**（Chaikin t=0.5），超过原样折线。
+
+**验证**：`--only=Gesture` **344 项 0 失败**（WG 引擎、模板、闭环、前缀、笔尖全在）。
+
+> 另：WG2 的 0.01（`A/m.cs:129`）不是命中门限，是"两条候选太像时"的并列容差；
+> InputPlus 的 `WgTieMargin` 与它对得上，无需改。
+
 ## v1.7.5 — 平滑滚动的「加速」开关：关着就只平滑，并把两个加速参数置灰
 
 **需求**："加速要有一个按钮，要是按钮没打开，那就只是平滑，打开之后滚动才会加速。"

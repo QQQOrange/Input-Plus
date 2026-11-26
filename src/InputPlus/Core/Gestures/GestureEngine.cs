@@ -172,71 +172,29 @@ public static class GestureEngine
          * 守门不通过时 Canonicalize 原样返回，所以这一步对识别是"只赚不赔"。 */
         if (CanonicalizeEnabled) shape = StrokeCanonicalizer.Canonicalize(shape);
 
-        /* 先按弧长重采样成等距点，再平滑。
+        /* 照抄 WG2：这里**不重采样、不平滑**。
          *
-         * 这一步不能省：模板可能只有 3 个点（一条折线），手绘有几百个点（每 2px 一个）。
-         * 直接按"点数"做滑动平均，同样半径对 3 点模板就是"整条链一起抹"，
-         * 直角会被削成斜坡；对手绘只是抹掉一点毛刺 —— 两侧处理不等价，距离自然下不来
-         * （实测：直角手势自己画自己，距离 0.12，超阈两倍多）。 */
+         * WG2 的识别输入就是「U.cs 那个 20 设备像素采样出来的点」直接过 18° 合并
+         * （A/P.cs 的 A(Vec2)），中间没有任何等距化或滑动平均。
+         * InputPlus 以前多做了 Resample + Smooth 两件事，删掉是为了让"你画什么"
+         * 和"模板是什么"严格同源 —— 平滑会把直角磨圆、重采样会把短手势的折点摊平，
+         * 两边一起偏之后阈值就没法对着 WG2 校准了。 */
         var norm = GestureMath.Normalize(shape);
-        int count = SampleCount(norm);
-        var even = GestureMath.Resample(norm, count);
-        var smoothed = Smooth(even, SmoothWindow(count));
 
         /* 容差跟整笔尺度走（归一化后最长边 1000）：4 个单位 ≈ 千分之四屏宽。 */
-        double epsilon = Math.Max(0.75, GestureMath.Extent(even) * 0.004);
-        var stroke = Build(smoothed, epsilon);
+        double epsilon = Math.Max(0.75, GestureMath.Extent(norm) * 0.004);
+        var stroke = Build(norm, epsilon);
 
-        /* 兜底：再怎么抖也不能把"不可比"留给用户。压完还超上限就加大容差重压，
-         * 直到进入引擎能比的范围（形状会变粗，但比"一律未识别"好得多）。 */
+        /* 兜底：WG2 在 A/P.cs:307 是"模板 >128 点直接不可比"，没有重压这一步。
+         * 这里留着它只是不想让长手势一律判死（输入仍是 20px 采样点，一般情况下碰不到）；
+         * 它只调 RDP 容差，不引入任何平滑。 */
         for (int guard = 0; stroke != null && stroke.Count > MaxTemplatePoints && guard < 8; guard++)
         {
             epsilon *= 1.7;
-            stroke = Build(smoothed, epsilon);
+            stroke = Build(norm, epsilon);
         }
 
         return stroke == null || stroke.Count < 2 ? null : stroke;
-    }
-
-    /// <summary>等距重采样后的点数：每 4 个单位一个点，夹在 24~400 之间。</summary>
-    private static int SampleCount(IReadOnlyList<GestureMath.Pt> even)
-    {
-        double length = 0;
-        for (int i = 1; i < even.Count; i++) length += (even[i] - even[i - 1]).Length;
-        if (!(length > 0)) return 24;
-        return Math.Clamp((int)Math.Round(length / 4.0), 24, 400);
-    }
-
-    /// <summary>平滑半径：点数的 1/120（≈ 笔迹总长的 1.5%），至少 1。</summary>
-    private static int SmoothWindow(int count) => Math.Max(1, count / 120);
-
-    /// <summary>
-    /// 滑动平均（首尾保留原样）。手抖是高频摆动，形状却是低频的 ——
-    /// 不平滑的话，一条本该是直线的"→"会被 18° 合并压成几十个折点，
-    /// 而它的模板只有 2 个点，两条曲线在 (s, θ) 空间里差得很远，
-    /// 结果就是"最简单的手势反而最认不出来"。
-    /// </summary>
-    internal static List<GestureMath.Pt> Smooth(IReadOnlyList<GestureMath.Pt> points, int radius)
-    {
-        int n = points.Count;
-        if (n < 3 || radius < 1) return new List<GestureMath.Pt>(points);
-
-        var result = new List<GestureMath.Pt>(n) { points[0] };
-        for (int i = 1; i < n - 1; i++)
-        {
-            double sx = 0, sy = 0;
-            int count = 0;
-            int from = Math.Max(0, i - radius), to = Math.Min(n - 1, i + radius);
-            for (int k = from; k <= to; k++)
-            {
-                sx += points[k].X;
-                sy += points[k].Y;
-                count++;
-            }
-            result.Add(new GestureMath.Pt(sx / count, sy / count));
-        }
-        result.Add(points[n - 1]);
-        return result;
     }
 
     private static WgStroke? Build(IReadOnlyList<GestureMath.Pt> points, double epsilon)

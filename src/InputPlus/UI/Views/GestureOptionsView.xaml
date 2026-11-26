@@ -227,21 +227,6 @@
 
                     <!-- 笔画平滑（v1.6.3）：只修饰画出来的线条，认手势用的点列照旧 ——
                          所以开关放在「外观」这一组，而不是识别参数那一组。 -->
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,8,16,8">
-                            <TextBlock Text="{loc:T '笔画平滑'}" Style="{StaticResource Text.Body}" />
-                            <TextBlock Text="{loc:T '把手画的抖动修顺，只修饰线条、不改形状。'}"
-                                       Style="{StaticResource Text.Tertiary}" TextWrapping="Wrap" Margin="0,3,0,0" />
-                        </StackPanel>
-                        <CheckBox Grid.Column="1" x:Name="SmoothStrokesBox" Style="{StaticResource ToggleSwitch}"
-                                  VerticalAlignment="Center" Tag="SmoothStrokes" Click="OnWg2ToggleChanged" />
-                    </Grid>
-
-                    <Border Style="{StaticResource Divider}" />
 
                     <Grid>
                         <Grid.ColumnDefinitions>

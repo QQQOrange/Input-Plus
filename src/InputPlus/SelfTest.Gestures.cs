@@ -673,12 +673,7 @@ public static partial class SelfTest
         double denseDistance = GestureEngine.Distance(cornerTpl, dense);
         Check("5.15：画快画慢（采样密度差 4 倍）不影响判定", denseDistance < 0.01, denseDistance.ToString("F4"));
 
-        var smoothIn = new List<GestureMath.Pt> { new(0, 0), new(10, 30), new(20, 0), new(30, 40), new(40, 0) };
-        var smoothOut = GestureEngine.Smooth(smoothIn, 1);
-        Check("5.15：平滑保留首尾点（起手和收笔的位置不能被挪走）",
-            smoothOut.Count == smoothIn.Count && smoothOut[0].Equals(smoothIn[0]) && smoothOut[^1].Equals(smoothIn[^1]),
-            smoothOut.Count.ToString());
-
+        /* v1.7.6：识别前的滑动平均已删（WG2 的 A/P.cs 里没有这一步）。 */
         /* ---- 5.10.6：手势表清理 + 老动作升级 ---- */
         var cleanup = new AppSettings();
         cleanup.GestureOptions.BuiltinsVersion = 8;
@@ -930,18 +925,16 @@ public static partial class SelfTest
         var live = new InputPlus.UI.Windows.GestureTrail();
         live.Add(0, 0);
         live.Tail(0, 12);
-        var withTail = live.Build(smooth: false);
+        var withTail = live.Build();
         CheckEqual("笔尖接在采样点后面", withTail.Count, 2);
         CheckEqual("笔尖坐标就是光标坐标", $"{(int)withTail[^1].X},{(int)withTail[^1].Y}", "0,12");
         live.Add(0, 20);
-        CheckEqual("收下新采样点后笔尖清掉、不重复画", live.Build(smooth: false).Count, 2);
+        CheckEqual("收下新采样点后笔尖清掉、不重复画", live.Build().Count, 2);
         live.Add(20, 20);
-        Check("关掉笔画平滑时原样画采样点（不切角）",
-            live.Build(smooth: false).Count == live.Count,
-            $"{live.Count} → {live.Build(smooth: false).Count}");
-        Check("打开笔画平滑时点变多（切角）",
-            live.Build(smooth: true).Count > live.Count,
-            $"{live.Count} → {live.Build(smooth: true).Count}");
+        /* 照抄 WG2：≤128 点恒定切角，没有开关。这一笔只有 3 个点，切完会变多。 */
+        Check("采样点会自动切角（≤128 点恒定平滑）",
+            live.Build().Count > live.Count,
+            $"{live.Count} → {live.Build().Count}");
 
         // 超过 128 点不平滑（WG2 F() 的 else 分支）
         trail.Clear();

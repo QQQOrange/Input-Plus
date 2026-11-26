@@ -96,7 +96,7 @@ internal sealed class GestureTrail
     ///   关：原样画采样点，锯齿保持原样。
     /// 识别用的点列一直是未平滑的原始采样点，开关不影响认手势。
     /// </summary>
-    internal List<Point> Build(bool smooth = true)
+    internal List<Point> Build()
     {
         var points = new List<Point>(_points.Count + 1);
         points.AddRange(_points);
@@ -116,7 +116,7 @@ internal sealed class GestureTrail
             }
         }
         if (points.Count == 0) return points;
-        if (!smooth) return points;
+        /* 照抄 WG2 的 U.cs：只看点数，没有开关。超过 128 点收益小于开销，直接原样。 */
         if (points.Count > SmoothPointLimit) return points;
         return Chaikin(points, 1);
     }

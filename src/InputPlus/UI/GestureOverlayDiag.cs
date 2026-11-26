@@ -38,7 +38,7 @@ internal static class GestureOverlayDiag
         PathLineWidth = 3,
         TrailOpacity = 1.0,
         ShowPathBorder = false,
-        SmoothStrokes = false,
+
         ShowStartTimeoutIndicator = false,
     };
 

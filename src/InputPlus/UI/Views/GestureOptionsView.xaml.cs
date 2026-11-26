@@ -126,7 +126,7 @@ public partial class GestureOptionsView : UserControl
         PathWidthText.Text = PathWidthSlider.Value.ToString("0.0");
 
         /* 笔画平滑：只影响画出来的那条线，不影响识别（点列照旧）。 */
-        SmoothStrokesBox.IsChecked = o.SmoothStrokes;
+
 
         UpdateWg2Swatches();
     }
@@ -151,7 +151,7 @@ public partial class GestureOptionsView : UserControl
             case "ShowPathBorder": o.ShowPathBorder = on; break;
             case "ShowGestureName": o.ShowGestureName = on; break;
             case "FadeOutExecuted": o.FadeOutExecuted = on; break;
-            case "SmoothStrokes": o.SmoothStrokes = on; break;
+
             case "ShowStartTimeoutIndicator": o.ShowStartTimeoutIndicator = on; break;
             case "DisableInFullscreen": o.DisableInFullscreen = on; break;
             case "PrefWindowTopmost":

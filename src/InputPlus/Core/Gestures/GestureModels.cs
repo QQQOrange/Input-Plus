@@ -329,16 +329,6 @@ public sealed class GestureOptions
     /// 升级后仍然是关的，不必再跑一次迁移。
     /// </summary>
     public bool ShowTrail { get; set; } = true;
-    /// <summary>
-    /// 笔画平滑（v1.6.3）：把手画出来的抖动轨迹修顺。
-    ///
-    /// 人手画线带着一串 1~2 像素的抖，识别器只看方向、抖动不影响它，但回放和
-    /// 缩略图看起来「脏」。打开后记点时顺手做一遍「小步滤波 + 转角保护」：
-    /// 只抹掉相邻点之间的小抖动，真正的拐角（方向变化大）原样保留 ——
-    /// 形状不变，只是线条顺了。出厂开着，可在「鼠标手势 → 手势设置」里关掉。
-    /// </summary>
-    public bool SmoothStrokes { get; set; } = true;
-
     /// <summary>轨迹颜色（#RRGGBB）。</summary>
     public string TrailColor { get; set; } = "#3B82F6";
 

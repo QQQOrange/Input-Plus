@@ -365,7 +365,7 @@ public sealed partial class GestureOverlayWindow : Window
         _lastPaintAt = now;
 
         Geometry? geometry = GestureTrail.ToGeometry(
-            _trail.Build(smooth: _opts.SmoothStrokes), ToCanvasPointOf);
+            _trail.Build(), ToCanvasPointOf);
         Trail.Data = geometry;
         TrailBorder.Data = geometry;
         TrailShadow.Data = geometry;

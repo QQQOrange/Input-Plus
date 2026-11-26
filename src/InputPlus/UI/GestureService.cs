@@ -1929,7 +1929,7 @@ public sealed partial class GestureService : IDisposable
          * 也就是接下来比对形状、存进手势、回放和缩略图用的那份点。
          * 放在 extent 之后是故意的 —— 最小识别距离、起始超时在记点时已经判过，
          * 平滑不能反过来影响「这算不算画了一笔」。关掉时这里整段跳过，逐点不变。 */
-        if (opts.SmoothStrokes) points = StrokeSmoother.Smooth(points, opts);
+
 
         /* 不是录制、也不是松手结算：这是滚轮在跟踪中途按到了动作，
          * 只停止这一笔并保留一下名称。以前这里会误走录制分支。 */
