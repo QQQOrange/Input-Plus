@@ -462,6 +462,19 @@ public sealed partial class GestureOverlayWindow : Window
     /// </summary>
     public void MarkRecognized() => ApplyPathColor(RecognizedColor());
 
+    /// <summary>
+    /// 未识别收尾：把轨迹换成"未识别"配色。
+    ///
+    /// 照抄 WG2 <c>A/T.cs:506</c> 的 <c>A_f3.A(gestureIntent != null ? c() : C())</c>——
+    /// 识别结果一出来，轨迹窗口先按结果换色，再在 <c>:511</c> 把不透明度归零。
+    /// 以前 InputPlus 的未命中分支直接 <c>Clear + Hide</c> 同一拍，屏幕上连
+    /// "变灰"的那一帧都没有，看起来就是"划完凭空消失"。
+    ///
+    /// 这里只负责换色；什么时候收、怎么让那一帧真的画出去，由
+    /// <see cref="GestureService"/> 的未命中分支决定。
+    /// </summary>
+    public void MarkUnrecognized() => ApplyPathColor(NormalColor());
+
     // ───────────────── 结果 ─────────────────
 
     /// <summary>起始超时：鼠标尖端一个红色实心圆。只画圆，不显示文字和轨迹。</summary>

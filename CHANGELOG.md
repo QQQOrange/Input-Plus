@@ -1,3 +1,32 @@
+## v1.7.7 — 未识别的手势先"灰一下"再消失（对齐 WG2 的收尾顺序）
+
+**报障**：一笔没认出来的手势，轨迹是"凭空消失"的；WG2 会先变成未识别色再收。
+
+**证据**：WG2 `A/T.cs:506` 在识别结果出来时先做
+`A_f3.A(gestureIntent != null ? c() : C())` —— 轨迹窗口按结果换色；
+紧接着 `:511` 把 `ExOpacity` 归零。以前 InputPlus 的未命中分支是
+`ClearTrail()` 紧跟 `HideOverlay(0)`，同一拍里清空+隐藏，屏幕上连"灰的那一帧"都没有。
+
+**改法**
+
+1. `GestureOverlayWindow.MarkUnrecognized()`：把轨迹换成 `NormalColor()`（新入口，与
+   `MarkRecognized()` 对称）。
+2. `GestureService` 的未命中分支：改成"先换色 → 投到 `DispatcherPriority.Render` 让这一帧
+   合成出去 → 再 `HideOverlay(0)`"。WG2 是同一拍赋值、靠渲染时序看到那一帧；这里显式让一帧，
+   保证"灰一下"稳定可见。
+
+**顺带更正上一轮的三个误报**（当时拿反编译代码里的字段初值当出厂值，错了）：
+按随包 `full/Resources/prefs.json`，`PathLineWidth = 1.5`、`GestureNamePos = 0.25`、
+`StartDragTimeout = 500`、`FadeOutExecuted = true`、`ShowPath/ShowGestureName = true`、
+四色 `#00000030` / `#FF5900FF` —— **这些 InputPlus 现在全部一致，不需要改**。
+`StrokeMinMove = 30`、`LabelBorderWidth = 1` 也一致。
+
+**验证**：`--only=Gesture` **344 项 0 失败**。
+
+**仍未对齐（需要单独一轮，会改变识别行为）**：① WG2 的候选排序按 `target.Level()`
+（应用手势优先于全局），InputPlus 是纯距离 + 歧义拒判；② InputPlus 多出的容错分支
+`ClosedVariants` / `PrefixPath` / `AwaitsLonger` / `TrimTail` 在 WG2 里没有。
+
 ## v1.7.6 — 手势识别去掉「笔画平滑」与识别前重采样（对齐 WGestures 2）
 
 **依据**（逐行核对 WG2 源码）：它的识别链路是

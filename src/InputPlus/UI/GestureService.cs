@@ -1935,10 +1935,25 @@ public sealed partial class GestureService : IDisposable
          * 只停止这一笔并保留一下名称。以前这里会误走录制分支。 */
         if (!execute && !recording)
         {
-            /* 这一笔到此结束：轨迹按 WG2 立刻清空，名称该闪就闪，不拖着线一起留。 */
-            Ui(() => _overlay?.ClearTrail());
-            if (string.IsNullOrWhiteSpace(keepOverlayFor)) HideOverlay(0);
-            else ShowLabel(keepOverlayFor!, px, py);
+            /* 这一笔到此结束。顺序照抄 WG2：先换"未识别"配色（A/T.cs:506），
+             * 再让这一帧合成出去，最后才清空+隐藏（:511 的归零）。
+             * 以前这里是 Ui(ClearTrail) 紧跟 HideOverlay(0)，两件事同一拍 ——
+             * 用户看到的是"划完凭空消失"，而 WG2 会先灰一下。 */
+            Ui(() =>
+            {
+                _overlay?.MarkUnrecognized();
+                if (string.IsNullOrWhiteSpace(keepOverlayFor))
+                {
+                    /* 投到 Render 优先级：同一拍里改色 + 隐藏，WPF 只会提交最终状态。 */
+                    _overlay?.Dispatcher.BeginInvoke(
+                        System.Windows.Threading.DispatcherPriority.Render,
+                        new Action(() => HideOverlay(0)));
+                }
+                else
+                {
+                    ShowLabel(keepOverlayFor!, px, py);
+                }
+            });
             return;
         }
 
