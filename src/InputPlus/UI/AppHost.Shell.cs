@@ -62,8 +62,8 @@ public sealed partial class AppHost
     {
         try
         {
-            if (!System.Windows.Clipboard.ContainsText()) return;
-            string text = System.Windows.Clipboard.GetText();
+            if (!ClipboardAccess.ContainsText()) return;
+            string text = ClipboardAccess.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
             /* 「直接搜索」取不到选区时会挂一条"等用户按 Ctrl+C"的待办（见 ActionContext.CaptureThen）。

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Text;
 using System.Windows;
 using System.Xml.Linq;
@@ -183,27 +183,51 @@ public static partial class SelfTest
     ///
     /// 这条链路是"取词 / 替换选区 / 算式结果写回"的中转站：中转完必须把用户
     /// **原来**的剪贴板内容还回去。早先只记纯文本，原内容是截图或一批文件时
-    /// 会被 `Clipboard.Clear()` 永久删掉 —— 所以这里重点验证位图与文件列表，
+    /// 会被 `ClipboardAccess.Clear()` 永久删掉 —— 所以这里重点验证位图与文件列表，
     /// 而不是"文字能还回去"（那是最容易也对的那一半）。
     ///
     /// 自检会临时改写剪贴板，结束时把用户原来的内容还回去（用同一套快照机制）。
     /// </summary>
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern uint GetClipboardSequenceNumber();
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern IntPtr GetOpenClipboardWindow();
-
     /// <summary>当前是否有别的窗口正独占剪贴板（OpenClipboard 未释放）。</summary>
     private static bool ClipboardBusy()
     {
-        try { return GetOpenClipboardWindow() != IntPtr.Zero; } catch { return false; }
+        try { return Core.Text.ClipboardAccess.IsOpenByOther(); } catch { return false; }
     }
 
-    /// <summary>剪贴板序号：任何程序改动内容都会变。</summary>
+    /// <summary>
+    /// 剪贴板序号：任何程序改动内容都会变。
+    ///
+    /// 走 <see cref="Core.Text.ClipboardAccess"/> 而不是直接 P/Invoke：自检默认跑在
+    /// 内存后端上，序号必须由后端发号 —— 否则用例会拿"系统剪贴板的序号"去判断
+    /// 一件只发生在内存里的事，永远判不出变化。
+    /// </summary>
     private static uint ClipboardSeq()
     {
-        try { return GetClipboardSequenceNumber(); } catch { return 0; }
+        try { return Core.Text.ClipboardAccess.SequenceNumber(); } catch { return 0; }
+    }
+
+    /// <summary>
+    /// 给剪贴板用例造一个"用户剪贴板里本来有东西"的起始状态，结束时原样还回去。
+    ///
+    /// **这是三条租约用例的外框，别再在用例体里直接写剪贴板来"假装用户内容"。**
+    /// 2026-11-26 的事故就是那么来的：用例自己 `Clipboard.SetText("用户原内容-回归")`，
+    /// 把真剪贴板顶掉，跑完道具串留下，自检却是全绿 —— 它测的是自己造的假用户内容。
+    ///
+    /// 外框用 <see cref="ClipboardBackup"/> 存进入时的真实内容：默认（内存后端）
+    /// 只影响本进程；万一有人 `--real-clipboard` 跑真机模式，用户的剪贴板也照样还原。
+    /// </summary>
+    private static void WithUserClipboard(string fixture, Action body)
+    {
+        var backup = Core.Text.ClipboardBackup.Capture();
+        try
+        {
+            Core.Text.ClipboardAccess.SetText(fixture);
+            body();
+        }
+        finally
+        {
+            backup.Restore();
+        }
     }
 
     private static void TestClipboardBackup()
@@ -245,7 +269,7 @@ public static partial class SelfTest
 
         static string ReadText()
         {
-            try { return Clipboard.ContainsText() ? Clipboard.GetText() : ""; }
+            try { return ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : ""; }
             catch { return ""; }
         }
 
@@ -270,7 +294,7 @@ public static partial class SelfTest
         {
             for (int i = 0; i < 6; i++)
             {
-                try { return Clipboard.ContainsImage() ? "yes" : "no"; }
+                try { return ClipboardAccess.ContainsImage() ? "yes" : "no"; }
                 catch { System.Threading.Thread.Sleep(60); }
             }
             return null;
@@ -281,13 +305,13 @@ public static partial class SelfTest
          * 那会变成一条假的崩溃（不是被测逻辑的错）。 */
         static string SafeFormats()
         {
-            try { return string.Join(",", Clipboard.GetDataObject()?.GetFormats() ?? Array.Empty<string>()); }
+            try { return string.Join(",", ClipboardAccess.GetDataObject()?.GetFormats() ?? Array.Empty<string>()); }
             catch { return "(剪贴板被占用)"; }
         }
 
         static int SafeFileCount()
         {
-            try { return Clipboard.GetFileDropList()?.Count ?? -1; }
+            try { return ClipboardAccess.GetFileDropList()?.Count ?? -1; }
             catch { return -1; }
         }
 
@@ -338,10 +362,10 @@ public static partial class SelfTest
             for (int i = 0; i < pixels.Length; i++) pixels[i] = 0x60;
             bmp.WritePixels(new Int32Rect(0, 0, 8, 8), pixels, 8 * 4, 0);
 
-            if (TryOp(() => Clipboard.SetImage(bmp)))
+            if (TryOp(() => ClipboardAccess.SetImage(bmp)))
             {
                 var imageBackup = Core.Text.ClipboardBackup.Capture();
-                if (TryOp(() => Clipboard.SetText("中转文字C")))
+                if (TryOp(() => ClipboardAccess.SetText("中转文字C")))
                 {
                     imageBackup.Restore();
                     /* 剪贴板是所有程序共享的：被别的程序长时间占住时，"读不到图片"可能只是
@@ -465,7 +489,7 @@ public static partial class SelfTest
             string got = "";
             for (int i = 0; i < 8; i++)
             {
-                try { got = Clipboard.GetText(); } catch { got = ""; }
+                try { got = ClipboardAccess.GetText(); } catch { got = ""; }
                 if (got == "selftest-copy-slot") break;
                 System.Threading.Thread.Sleep(60);
             }
@@ -502,37 +526,47 @@ public static partial class SelfTest
     private static void TestSelfTestDoesNotLeakSentinel()
     {
         const string userText = "用户原内容-回归";
-        try { Clipboard.SetText(userText); }
-        catch { Check("（环境限制）剪贴板被占用，跳过哨兵泄漏回归", true); return; }
-
-        using (var lease = new Core.Text.ClipboardLease())
-        {
-            if (!lease.WriteText("selftest-copy-slot"))
-            {
-                Check("（环境限制）剪贴板被占用，跳过哨兵泄漏回归", true);
-                return;
-            }
-        }
-
-        /* 剪贴板写入是异步落地的：Dispose 里刚写完就读，偶尔会读到上一次的尾巴。
-         * 400ms 内稳定下来都算通过（和 TestClipboardBackup 里 WaitText 的理由一样）。 */
         string got = "";
-        long deadline = Environment.TickCount64 + 400;
-        while (Environment.TickCount64 < deadline)
+        WithUserClipboard(userText, () =>
         {
-            try { got = Clipboard.GetText(); } catch { got = ""; }
-            if (got == userText) break;
-            Thread.Sleep(40);
+            using (var lease = new Core.Text.ClipboardLease())
+            {
+                if (!lease.WriteText("selftest-copy-slot"))
+                {
+                    got = "(环境限制)";
+                    return;
+                }
+            }
+
+            /* 剪贴板写入是异步落地的：Dispose 里刚写完就读，偶尔会读到上一次的尾巴。
+             * 400ms 内稳定下来都算通过（和 TestClipboardBackup 里 WaitText 的理由一样）。 */
+            long deadline = Environment.TickCount64 + 400;
+            while (Environment.TickCount64 < deadline)
+            {
+                got = Core.Text.ClipboardAccess.GetText();
+                if (got == userText) break;
+                Thread.Sleep(40);
+            }
+        });
+
+        if (got == "(环境限制)")
+        {
+            Check("（环境限制）剪贴板被占用，跳过哨兵泄漏回归", true);
+            return;
         }
 
-        /* 判据改成"**我们的哨兵**不许留在剪贴板上"，不再要求"内容必须逐字不变"。
+        /* 判据两条：
+         *   ① **我们的哨兵**不许留下 —— 11-23 那次事故的原始诉求；
+         *   ② 内存后端下再加一条逐字的：租约必须把外框放进去的内容原样还回来。
+         *      真机模式（--real-clipboard）下这台机器有剪贴板工具会不停改内容，
+         *      逐字断言只会随机变红，所以那条只在内存后端下要求。
          *
-         * 为什么：这台机器上有个剪贴板工具（QSELF 那个注射器）在不停 Ctrl+C，
-         * 两次读取之间它就把剪贴板换了内容 —— 逐字相等的断言于是随机变红，
-         * 部署门跟着红（实际功能没问题）。真正要守的只有一条：
-         * 我们写进去的 "selftest-" 哨兵不能被留在用户的剪贴板里。 */
-        bool leaked = got != null && got.Contains("selftest", StringComparison.OrdinalIgnoreCase);
-        Check("自检不把哨兵留在用户剪贴板上", !leaked, got ?? "");
+         * 之前这里只有 ①，而 ① 是拿"用例自己 SetText 的假用户内容"当基准的 ——
+         * 真实剪贴板被道具顶掉了它也照样绿。② 才是真正在测"用户的剪贴板"。 */
+        bool leaked = got.Contains("selftest", StringComparison.OrdinalIgnoreCase);
+        Check("自检不把哨兵留在用户剪贴板上", !leaked, got);
+        if (Core.Text.ClipboardAccess.IsMemory)
+            Check("租约把外框里的内容原样还回来", got == userText, got);
     }
 
     /* 管理器把内容包了一层（文字整体变了，但我们的内容还在里面）：仍然要还原。
@@ -540,43 +574,60 @@ public static partial class SelfTest
     private static void TestLeaseSurvivesManagerRewrite()
     {
         const string userText = "用户原内容-改写道具";
-        try { Clipboard.SetText(userText); }
-        catch { Check("（环境限制）剪贴板被占用，跳过改写还原回归", true); return; }
-
-        using (var lease = new Core.Text.ClipboardLease())
+        string got = "";
+        WithUserClipboard(userText, () =>
         {
-            if (!lease.WriteText("selftest-copy-slot"))
+            using (var lease = new Core.Text.ClipboardLease())
             {
-                Check("（环境限制）剪贴板被占用，跳过改写还原回归", true);
-                return;
+                if (!lease.WriteText("selftest-copy-slot"))
+                {
+                    got = "(环境限制)";
+                    return;
+                }
+
+                /* 模拟剪贴板管理器：整串文字被包装过（加了引号和来源），但我们的内容还在里面。 */
+                Core.Text.ClipboardAccess.SetText("「selftest-copy-slot」 · 来自剪贴板管理器");
             }
 
-            /* 模拟剪贴板管理器：整串文字被包装过（加了引号和来源），但我们的内容还在里面。 */
-            try { Clipboard.SetText("「selftest-copy-slot」 · 来自剪贴板管理器"); }
-            catch { Check("（环境限制）剪贴板被占用，跳过改写还原回归", true); return; }
+            got = Core.Text.ClipboardAccess.GetText();
+        });
+
+        if (got == "(环境限制)")
+        {
+            Check("（环境限制）剪贴板被占用，跳过改写还原回归", true);
+            return;
         }
 
-        string got;
-        try { got = Clipboard.GetText(); } catch { got = ""; }
         Check("内容被管理器包装过也要把用户剪贴板还回来", got == userText, got);
     }
 
     /* 反向用例：守卫不能退化成"永远不还原" */
     private static void TestLeaseYieldsToUserCopy()
     {
-        using (var lease = new Core.Text.ClipboardLease())
+        string got = "";
+        /* 外框：进入用例前剪贴板里也是"用户的东西"。
+         * 这条用例本来不需要它（它只关心租约让不让位），但外框顺手保证
+         * 真机模式下也不会把用户剪贴板留在"用户后来复制"这种道具上。 */
+        WithUserClipboard("用户进入用例前的剪贴板", () =>
         {
-            if (!lease.WriteText("selftest-copy-slot"))
+            using (var lease = new Core.Text.ClipboardLease())
             {
-                Check("（环境限制）剪贴板被占用，跳过租约让位回归", true);
-                return;
+                if (!lease.WriteText("selftest-copy-slot"))
+                {
+                    got = "(环境限制)";
+                    return;
+                }
+                Core.Text.ClipboardAccess.SetText("用户后来复制");
             }
-            try { Clipboard.SetText("用户后来复制"); }
-            catch { Check("（环境限制）剪贴板被占用，跳过租约让位回归", true); return; }
-        }
 
-        string got;
-        try { got = Clipboard.GetText(); } catch { got = ""; }
+            got = Core.Text.ClipboardAccess.GetText();
+        });
+
+        if (got == "(环境限制)")
+        {
+            Check("（环境限制）剪贴板被占用，跳过租约让位回归", true);
+            return;
+        }
 
         /* 读到第三样东西（既不是"用户后来复制"，也不是我们那个哨兵串）时，
          * 只可能是**自检之外**的程序在这几毫秒里动了剪贴板：剪贴板管理器、

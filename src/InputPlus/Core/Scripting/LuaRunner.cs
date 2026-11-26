@@ -513,8 +513,8 @@ ip.notify(""剪贴板已整理："" .. string.sub(cleaned, 1, 20))
         {
             try
             {
-                if (!System.Windows.Clipboard.ContainsText()) return "";
-                return System.Windows.Clipboard.GetText() ?? "";
+                if (!ClipboardAccess.ContainsText()) return "";
+                return ClipboardAccess.GetText() ?? "";
             }
             catch (Exception)
             {

@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using InputPlus.Core.Text;
@@ -66,7 +66,7 @@ public partial class MathBoardWindow : Window
         History.ItemsSource = _history;
         Expression.Text = _lastResult;
         Expression.CaretIndex = Expression.Text.Length;
-        try { System.Windows.Clipboard.SetText(_lastResult); } catch { }   /* 预期内：清理动作，失败无副作用 */
+        try { ClipboardAccess.SetText(_lastResult); } catch { }   /* 预期内：清理动作，失败无副作用 */
     }
 
     private void OnEquals(object sender, RoutedEventArgs e) => Commit();
@@ -99,7 +99,7 @@ public partial class MathBoardWindow : Window
         if (_lastResult.Length == 0) return;
         try
         {
-            System.Windows.Clipboard.SetText(_lastResult);
+            ClipboardAccess.SetText(_lastResult);
             ErrorText.Text = Loc.T("已复制到剪贴板");
         }
         catch (Exception ex)

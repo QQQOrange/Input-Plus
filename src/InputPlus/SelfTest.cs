@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows;
 using System.Windows.Media;
 using InputPlus.Core;
 using InputPlus.Core.Actions;
@@ -49,17 +50,52 @@ public static partial class SelfTest
     /// <summary>还没打印的章节名。过滤时整章一个用例都不跑，就不该留一个空标题。</summary>
     private static string _pendingSection = "";
 
-    /// <summary>由命令行入口在 <see cref="Run"/> 之前调用一次。</summary>
-    public static void Configure(string? only)
+    /// <summary>
+    /// 由命令行入口在 <see cref="Run"/> 之前调用一次。
+    /// </summary>
+    /// <param name="only">`--only` 子集过滤串。</param>
+    /// <param name="realClipboard">
+    /// `--real-clipboard`：剪贴板用例改跑真机（动真的系统剪贴板）。
+    ///
+    /// 默认是 **false**，也就是自检全程跑内存后端。这个开关只在"要验的正是
+    /// Win32 剪贴板本身"时用（例如怀疑 GetClipboardSequenceNumber 的语义变了），
+    /// 平时跑自检、部署门、CI 都不该碰用户的剪贴板。
+    /// </param>
+    public static void Configure(string? only, bool realClipboard = false)
     {
         _only = (only ?? "").Trim();
+        _realClipboard = realClipboard;
     }
+
+    /// <summary>本次是否显式要求用真实系统剪贴板（`--real-clipboard`）。</summary>
+    private static bool _realClipboard;
 
     /// <summary>本次是否子集模式。</summary>
     internal static bool SubsetMode => _only.Length > 0;
 
     public static int Run()
     {
+        /* 剪贴板后端在这里定死：自检默认跑内存实现，一个字节都不进系统剪贴板。
+         *
+         * 为什么放在 Run 而不是 App 入口：自检的每条入口最终都走这里
+         * （--only 子集也是），少一个"某个入口忘了切"的缝隙。
+         *
+         * 2026-11-26 的现场：部署脚本每跑一次自检，用户剪贴板就被用例道具
+         * （`用户原内容-回归` / `用户原内容-改写道具`）顶掉一次，哨兵串
+         * `selftest-copy-slot` 还进了剪贴板历史和 Win+V —— 他只是发现
+         * "剪贴板里老是出现这一条"，功能本身没坏。 */
+        Core.Text.ClipboardAccess.UseSystem();
+        if (!_realClipboard) Core.Text.ClipboardAccess.UseMemory();
+
+        /* 护栏：不管用例怎么写，真实剪贴板的内容都不许变。
+         * 它挡的是"未来有人又直连 Clipboard.SetText 写用例"这一类复发 ——
+         * 内存后端管不到那些人的手，但能管住自检的结论（红了就不许部署）。 */
+        RealClipboardGuard? guard = _realClipboard ? null : RealClipboardGuard.Begin();
+
+        Log.AppendLine(_realClipboard
+            ? "剪贴板后端：系统剪贴板（--real-clipboard，会真的动剪贴板）"
+            : "剪贴板后端：内存（不碰系统剪贴板）");
+
         // 整体包一层：自检里任何一步意外抛异常，也要保证写出报告并返回退出码，
         // 否则命令行会一直等（之前写 %TEMP% 失败就出现过挂死）。
         try
@@ -75,12 +111,97 @@ public static partial class SelfTest
             CoreLog.Error("自检中断", ex);
         }
 
+        /* 护栏放在所有用例之后、写报告之前：它是整轮自检的"总闸"，
+         * 哪怕前面全绿，只要它红了这一轮就不许过。 */
+        if (guard != null)
+        {
+            string detail = guard.Unchanged() ? "" : guard.Detail();
+            Check("自检没有改动真实系统剪贴板", detail.Length == 0, detail);
+        }
+
         Log.AppendLine();
         if (SubsetMode)
             Log.AppendLine($"（子集模式 --only={_only}：执行 {_ran} 个用例方法，跳过其余）");
         Log.AppendLine($"==== 通过 {_passed} 项，失败 {_failed} 项 ====");
         WriteReport();
         return _failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 真实剪贴板的进/出快照。自检跑内存后端时，进和出必须一模一样。
+    ///
+    /// 判据只认"内容"（文字 + 格式名集合），不认"序号"：序号只能证明"有人写过"，
+    /// 而这台机器上本来就常驻着剪贴板工具（它会不停写），拿序号判会天天误红。
+    /// 内容没变就是没被我们改动 —— 这正是要守的那条线。
+    /// </summary>
+    private sealed class RealClipboardGuard
+    {
+        private readonly SystemClipboardBackend _real = new();
+        private readonly string _text;
+        private readonly string _formats;
+
+        private RealClipboardGuard(string text, string formats)
+        {
+            _text = text;
+            _formats = formats;
+        }
+
+        public static RealClipboardGuard? Begin()
+        {
+            try
+            {
+                var real = new SystemClipboardBackend();
+                return new RealClipboardGuard(
+                    real.ContainsText() ? real.GetText() : "",
+                    DescribeFormats(real));
+            }
+            catch
+            {
+                /* 剪贴板被占用读不到：不设护栏，但也别因此判失败。 */
+                return null;
+            }
+        }
+
+        public bool Unchanged()
+        {
+            try
+            {
+                string now = _real.ContainsText() ? _real.GetText() : "";
+                return string.Equals(now, _text, StringComparison.Ordinal)
+                       && DescribeFormats(_real) == _formats;
+            }
+            catch
+            {
+                return true;   /* 读不到 ≠ 被我们改了 */
+            }
+        }
+
+        public string Detail()
+        {
+            string nowText;
+            try { nowText = _real.ContainsText() ? _real.GetText() : "(空)"; }
+            catch { nowText = "(读不到)"; }
+            return $"进=[{Clip(_text)}] 出=[{Clip(nowText)}] 格式 {_formats} → {DescribeFormats(_real)}";
+        }
+
+        private static string Clip(string text)
+            => text.Length <= 40 ? text : text[..40] + "…";
+
+        private static string DescribeFormats(SystemClipboardBackend real)
+        {
+            try
+            {
+                IDataObject? data = real.GetDataObject();
+                if (data == null) return "(空)";
+                string[] formats = data.GetFormats(autoConvert: false);
+                Array.Sort(formats, StringComparer.Ordinal);
+                return string.Join(",", formats);
+            }
+            catch
+            {
+                return "(读不到)";
+            }
+        }
     }
 
     private static void RunAll()

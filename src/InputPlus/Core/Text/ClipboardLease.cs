@@ -52,7 +52,7 @@ internal sealed class ClipboardLease : IDisposable
             {
                 var data = new DataObject();
                 fill(data);
-                Clipboard.SetDataObject(data, copy: true);
+                ClipboardAccess.SetDataObject(data, copy: true);
                 _lastText = null;
                 _seqAfterWrite = Seq();
                 return true;
@@ -108,7 +108,7 @@ internal sealed class ClipboardLease : IDisposable
     /// <summary>当前剪贴板的文字；读不到（被占用 / 没有文字）返回空串。</summary>
     private static string SafeGetText()
     {
-        try { return Clipboard.ContainsText() ? Clipboard.GetText() : ""; }
+        try { return ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : ""; }
         catch { return ""; }
     }
 
@@ -119,6 +119,6 @@ internal sealed class ClipboardLease : IDisposable
 
     private static uint Seq()
     {
-        try { return GetClipboardSequenceNumber(); } catch { return 0; }
+        try { return ClipboardAccess.SequenceNumber(); } catch { return 0; }
     }
 }

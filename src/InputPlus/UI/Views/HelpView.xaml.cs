@@ -747,7 +747,7 @@ public partial class HelpView : UserControl
 
         try
         {
-            Clipboard.SetText(sb.ToString());
+            ClipboardAccess.SetText(sb.ToString());
             CopySheetButton.Content = Loc.T("已复制");
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.6) };
             timer.Tick += (_, _) =>

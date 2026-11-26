@@ -691,7 +691,7 @@ public partial class QbarExpandWindow : Window, IComponentConnector
 		{
 			if (ResultList.SelectedItem is Row row)
 			{
-				Clipboard.SetText(row.Path);
+				ClipboardAccess.SetText(row.Path);
 			}
 			e.Handled = true;
 		}

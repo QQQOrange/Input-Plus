@@ -1,3 +1,47 @@
+## v1.7.1 — 自检不再碰用户剪贴板（剪贴板后端可注入 + 护栏）
+
+**用户的报障**：剪贴板里老是冒出 `selftest-copy-slot` 这一条，不知道哪来的、是不是 bug。
+
+查下来是自检自己写的。`dist/deploy.ps1` 每次部署都跑一次 `--selftest`，而剪贴板那几条
+用例是直接拿**真实系统剪贴板**当试验台的：
+
+- `TestSelfTestDoesNotLeakSentinel` / `TestLeaseSurvivesManagerRewrite` 先
+  `Clipboard.SetText("用户原内容-回归")` —— 拿道具串顶掉用户正在复制的内容，跑完不还。
+  它断言的是"哨兵没留下"，留下的却是另一个道具串，所以自检一直是绿的；
+- `TestClipboardBackup` 往系统剪贴板写哨兵、位图、文件列表；
+- 这些写入又被常驻实例的剪贴板监听（`AppHost.OnClipboardChanged`）和 Win+V 历史各记一条
+  —— 还原只还原"当前内容"，还原不了历史条目，于是用户看到的是"总是出现"。
+
+实测现场：把剪贴板设成 `USER-REAL-TEXT-…` → 跑 `--selftest --only=Lease` →
+剪贴板变成 `用户原内容-改写道具`，而自检 5 项全 PASS。
+
+**改法：把剪贴板后端抽出来，自检整体跑内存实现**
+
+1. 新增 `Core/Text/ClipboardAccess.cs`：`IClipboardBackend` + 两个实现。
+   `SystemClipboardBackend` 转发 WPF `Clipboard` 与 user32 的序号/占用查询；
+   `MemoryClipboardBackend` 是进程内的 `DataObject` + 自增序号（写进去能原样读出来、
+   每次写序号 +1、Clear 之后为空 —— 用例要验的就是这几条）。
+2. 全仓 20 个文件、60 余处直连 `Clipboard.*` 的调用改走 `ClipboardAccess.*`
+   （取词、替换选区、输入文本、宏、Lua 脚本、Qbar、设置页复制按钮、剪贴板历史……）。
+   产品运行时门面只是转发，行为不变。
+3. `SelfTest.Run()` 一开始就 `ClipboardAccess.UseMemory()`；只有显式
+   `--selftest --real-clipboard` 才用真剪贴板（要验 Win32 语义时才用）。
+4. 三条租约用例套上 `WithUserClipboard(...)` 外框：进入时用 `ClipboardBackup` 存真内容，
+   退出还原。真机模式下也不会把用户剪贴板留在道具串上。
+5. 新增护栏断言「自检没有改动真实系统剪贴板」：跑前跑后快照真实剪贴板的文字与格式名集合，
+   变了就红。以后谁再直连 `Clipboard.SetText` 写用例，部署门会当场拦下。
+6. 自检报告首行写明本轮用的哪个后端。
+
+**验证**
+
+| 跑法 | 结果 | 真实剪贴板 |
+|---|---|---|
+| `--only=Lease` | 6 项全过（含新护栏） | `USER-REAL-TEXT-…` 原样不动 |
+| `--only=Clipboard` | 23 项全过 | 不动 |
+| `--only=Text` | 191 项全过 | 不动 |
+| `--only=Lease --real-clipboard` | 5 项全过 | 被用例改名后又还回 `USER-REAL-…` |
+| 全量 `--selftest` | **7514 项 0 失败** | 跑前跑后一字未变 |
+
 ## v1.7.0 — 附加菜单多级下钻 + 正文索引不再读云占位文件
 
 这一版把 2026-11-26 的两件事合成一个版本发出去（1.6.7 / 1.6.8 只在开发机上验过，没有线上版本）：

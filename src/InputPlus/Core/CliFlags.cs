@@ -50,6 +50,7 @@ public static class CliFlags
         "  自检与诊断（跑完即退，不装托盘、不弹启动密码）\n" +
         "  --selftest                      跑全部自检；退出码 0 = 全过（日志在数据目录 selftest.log）\n" +
         "  --only <片段>                    配合 --selftest：只跑用例方法名含该片段的项（例如 --only=Qbar）\n" +
+        "  --real-clipboard                配合 --selftest：剪贴板用例改跑真机（默认为内存后端，绝不碰系统剪贴板）\n" +
          "  --diag                          环境诊断（钩子、前台会话、注入链路）；发现问题时退出码非 0\n" +
          "  --hooktest                      只装键盘钩子并自己敲两下，检查钩子是否真的能收到按键\n" +
          "  --dump-triggers                 打印解密后的触发键/层配置（排查触发键不生效时用）\n" +

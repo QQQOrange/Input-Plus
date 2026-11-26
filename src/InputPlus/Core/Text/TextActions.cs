@@ -178,7 +178,7 @@ public static class TextActions
                 if (!string.IsNullOrEmpty(text))
                 {
                     copiedByUs = text;
-                    ownedSequence = GetClipboardSequenceNumber();
+                    ownedSequence = ClipboardAccess.SequenceNumber();
                     return text;
                 }
 
@@ -187,7 +187,7 @@ public static class TextActions
                 if (!string.IsNullOrEmpty(text))
                 {
                     copiedByUs = text;
-                    ownedSequence = GetClipboardSequenceNumber();
+                    ownedSequence = ClipboardAccess.SequenceNumber();
                     return text;
                 }
 
@@ -198,7 +198,7 @@ public static class TextActions
                 if (!string.IsNullOrEmpty(viaThread))
                 {
                     copiedByUs = viaThread;
-                    ownedSequence = GetClipboardSequenceNumber();
+                    ownedSequence = ClipboardAccess.SequenceNumber();
                     return viaThread;
                 }
 
@@ -208,7 +208,7 @@ public static class TextActions
                 if (!string.IsNullOrEmpty(last))
                 {
                     copiedByUs = last;
-                    ownedSequence = GetClipboardSequenceNumber();
+                    ownedSequence = ClipboardAccess.SequenceNumber();
                 }
                 return last;
             }
@@ -268,7 +268,7 @@ public static class TextActions
     private static string TryCopyVia(Action sendCopy, int timeoutMs)
     {
         uint before;
-        try { before = GetClipboardSequenceNumber(); }
+        try { before = ClipboardAccess.SequenceNumber(); }
         catch { return string.Empty; }
 
         try { sendCopy(); } catch { return string.Empty; }
@@ -284,7 +284,7 @@ public static class TextActions
         uint afterSeq = before;
         while (true)
         {
-            try { afterSeq = GetClipboardSequenceNumber(); } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
+            try { afterSeq = ClipboardAccess.SequenceNumber(); } catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
             if (afterSeq != before) break;
             if (Environment.TickCount64 >= deadline) break;
             Thread.Sleep(5);
@@ -300,9 +300,9 @@ public static class TextActions
         {
             try
             {
-                if (Clipboard.ContainsText())
+                if (ClipboardAccess.ContainsText())
                 {
-                    string s = Clipboard.GetText();
+                    string s = ClipboardAccess.GetText();
                     if (!string.IsNullOrEmpty(s)) return s;
                 }
             }
@@ -314,7 +314,7 @@ public static class TextActions
 
     private static string SafeContainsText()
     {
-        try { return Clipboard.ContainsText() ? Clipboard.GetText() : "(无文本)"; }
+        try { return ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : "(无文本)"; }
         catch (Exception ex) { return "(异常:" + ex.Message + ")"; }
     }
 
@@ -333,10 +333,10 @@ public static class TextActions
         {
             try
             {
-                if (GetClipboardSequenceNumber() != before)
+                if (ClipboardAccess.SequenceNumber() != before)
                 {
                     // 序号变了，再确认内容可读（有些程序会先置空再写入）
-                    if (Clipboard.ContainsText()) return true;
+                    if (ClipboardAccess.ContainsText()) return true;
                 }
             }
             catch { }   /* 预期内：探测/重试型，失败即视为无结果 */
@@ -352,7 +352,7 @@ public static class TextActions
         lock (ClipGate)
         {
             /* 整份备份：原来是什么（图片 / 文件 / 富文本）就还什么。
-             * 旧实现只认纯文本，没有文本时 finally 里 Clipboard.Clear() ——
+             * 旧实现只认纯文本，没有文本时 finally 里 ClipboardAccess.Clear() ——
              * 用户刚截的图就这么没了。 */
             var backup = ClipboardBackup.Capture();
             if (!backup.IsUsable)
@@ -364,8 +364,8 @@ public static class TextActions
             uint? expectedSequence = null;
             try
             {
-                Clipboard.SetText(text);
-                expectedSequence = GetClipboardSequenceNumber();
+                ClipboardAccess.SetText(text);
+                expectedSequence = ClipboardAccess.SequenceNumber();
                 Thread.Sleep(18);
                 InputSender.Shift(VK.Insert);   // Shift+Insert == 粘贴
                 Thread.Sleep(40);
@@ -446,10 +446,10 @@ public static class TextActions
             uint? expectedSequence = null;
             try
             {
-                Clipboard.Clear();
+                ClipboardAccess.Clear();
                 InputSender.Shift(VK.Home);
                 Thread.Sleep(12);
-                uint before = GetClipboardSequenceNumber();
+                uint before = ClipboardAccess.SequenceNumber();
                 InputSender.Ctrl(VK.Insert);
                 if (!WaitForClipboardChange(before, 240))
                 {
@@ -457,8 +457,8 @@ public static class TextActions
                     InputSender.Tap(VK.Right);   // 取消选择，避免影响用户
                     return;
                 }
-                expectedSequence = GetClipboardSequenceNumber();
-                text = Clipboard.GetText();
+                expectedSequence = ClipboardAccess.SequenceNumber();
+                text = ClipboardAccess.GetText();
             }
             catch
             {
@@ -485,7 +485,7 @@ public static class TextActions
     public static string WaitForManualCopy(int timeoutMs = 4000)
     {
         uint seq;
-        try { seq = GetClipboardSequenceNumber(); }
+        try { seq = ClipboardAccess.SequenceNumber(); }
         catch { return string.Empty; }
 
         long deadline = Environment.TickCount64 + timeoutMs;
@@ -494,7 +494,7 @@ public static class TextActions
             Thread.Sleep(40);
 
             uint now;
-            try { now = GetClipboardSequenceNumber(); }
+            try { now = ClipboardAccess.SequenceNumber(); }
             catch { return string.Empty; }
             if (now == seq) continue;
 
@@ -507,9 +507,9 @@ public static class TextActions
                 Thread.Sleep(40);
                 try
                 {
-                    if (Clipboard.ContainsText())
+                    if (ClipboardAccess.ContainsText())
                     {
-                        string text = Clipboard.GetText();
+                        string text = ClipboardAccess.GetText();
                         if (!string.IsNullOrWhiteSpace(text))
                         {
                             CoreLog.Info($"[取词] 手动复制成功 长度={text.Length} 内容={Trim4(text)}");
@@ -527,9 +527,6 @@ public static class TextActions
         CoreLog.Info("[取词] 等待手动复制超时");
         return string.Empty;
     }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern uint GetClipboardSequenceNumber();
 
     public enum CaseMode { Upper, Lower, Title }
 }

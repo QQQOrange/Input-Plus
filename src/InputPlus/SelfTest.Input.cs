@@ -680,7 +680,7 @@ public static partial class SelfTest
         /* 记下测试前剪贴板里的内容：如果最后取到的还是它，说明 Ctrl+C 根本没生效
          * （前台被别的程序抢走 / 输入被拦），这是环境问题，不该算成功能坏了。 */
         string preClip = "";
-        try { preClip = System.Windows.Clipboard.GetText() ?? ""; } catch { }
+        try { preClip = ClipboardAccess.GetText() ?? ""; } catch { }
         win.Content = box;
         win.Show();
         DoEvents(250);

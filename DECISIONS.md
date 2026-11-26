@@ -628,3 +628,34 @@
 - **验证**：`SelfTest.ExternalLaunch.cs` 29 项（判定规则、取值、拼出的 `ProcessStartInfo`、
   以及"目标的工作目录绝不等于我们的当前目录"这条回归守卫），
   Release 构建 0 错误，`artifacts\InputPlus.exe --selftest --only=ExternalLaunch` 29/29 通过。
+
+## 十一、自检不许碰真实剪贴板：后端可注入 + 护栏（2026-11-26）
+
+**起因**：用户报"剪贴板里老是出现 `selftest-copy-slot`，哪来的？是 bug 吗"。
+
+实测坐实：把剪贴板设成 `USER-REAL-TEXT-…`，跑 `--selftest --only=Lease`，
+剪贴板变成 `用户原内容-改写道具`，而自检 5 项全 PASS。原因是那三条租约用例
+直接在真实系统剪贴板上做实验，其中两条先 `Clipboard.SetText("用户原内容-回归")`
+把用户内容顶掉（不备份、不还原），再断言"我们的哨兵没留下" —— 拿自己造的道具
+当基准，所以永远绿。哨兵串还会被常驻实例的剪贴板监听和 Win+V 历史各记一条，
+还原还原不了历史条目 —— 这就是"总是出现"。
+
+### D11-01 剪贴板读写统一走 ClipboardAccess，自检进程整体换内存后端
+- **决定**：新增 `Core/Text/ClipboardAccess.cs`（`IClipboardBackend` +
+  `SystemClipboardBackend` + `MemoryClipboardBackend`），全仓 20 个文件、60 余处
+  直连 `Clipboard.*` 的调用改走门面；`SelfTest.Run()` 默认 `UseMemory()`，
+  只有 `--selftest --real-clipboard` 才用真剪贴板；三条租约用例套
+  `WithUserClipboard(...)` 外框（进时 `ClipboardBackup.Capture()`，出时 `Restore()`）；
+  新增护栏断言「自检没有改动真实系统剪贴板」。
+- **理由**：光改用例不够 —— 只要还有一处 `Clipboard.SetText` 直连系统，下一个人
+  加用例时又会踩，而"自检摸没摸用户剪贴板"这件事根本没法靠 review 保证。
+  后端注入把这个进程级事实收成一个开关；护栏则把"未来有人绕过去"变成一条能拦住
+  部署的红断言（它比任何注释都硬）。
+- **代价**：多一层间接，剪贴板调用要记得走门面。护栏只比"内容 + 格式名"，不比序号 ——
+  这台机器上常驻剪贴板工具会不停写，比序号会天天误红。
+- **放弃**：① 只修那三条用例（治不了复发）；② 在每条用例里 `if (自检) return;`
+  （漏一条就白干，而且用例变成永远跳过）；③ 给真机剪贴板加一个"自检期间禁用"的
+  全局开关（产品和自检同进程时会把产品功能也禁掉）。
+- **验证**：`--only=Lease` 6/6、`--only=Clipboard` 23/23、`--only=Text` 191/191 全过，
+  且三次跑完真实剪贴板内容一字未变；`--only=Lease --real-clipboard` 5/5 过、
+  剪贴板被还原成进入时的内容；全量 `--selftest` **7514 项 0 失败**，跑前跑后剪贴板一致。

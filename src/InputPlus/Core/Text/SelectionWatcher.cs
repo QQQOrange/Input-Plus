@@ -171,7 +171,7 @@ public sealed class SelectionWatcher : IDisposable
             bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             if (!ctrlDown) return;
 
-            uint before = GetClipboardSequenceNumber();
+            uint before = ClipboardAccess.SequenceNumber();
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
                 await System.Threading.Tasks.Task.Delay(180);
@@ -203,7 +203,7 @@ public sealed class SelectionWatcher : IDisposable
                 if (isCopyKey && ctrlDown)
                 {
                     // 同步取"复制前"的序号（关键：此刻还没复制）
-                    uint before = GetClipboardSequenceNumber();
+                    uint before = ClipboardAccess.SequenceNumber();
 
                     // 目标程序处理按键后序号会变，等一会儿再比对
                     _ = System.Threading.Tasks.Task.Run(async () =>
@@ -229,7 +229,7 @@ public sealed class SelectionWatcher : IDisposable
             // 最多等 1 秒（浏览器写剪贴板可能有延迟）
             for (int i = 0; i < 10; i++)
             {
-                uint now = GetClipboardSequenceNumber();
+                uint now = ClipboardAccess.SequenceNumber();
                 if (now != before)
                 {
                     string text = await ReadClipboardOnSta();
@@ -261,7 +261,7 @@ public sealed class SelectionWatcher : IDisposable
         {
             try
             {
-                tcs.SetResult(Clipboard.ContainsText() ? Clipboard.GetText() : "");
+                tcs.SetResult(ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : "");
             }
             catch (Exception ex)
             {

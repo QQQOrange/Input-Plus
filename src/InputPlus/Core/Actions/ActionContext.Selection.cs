@@ -668,13 +668,13 @@ public sealed partial class ActionContext
 
         try
         {
-            if (System.Windows.Clipboard.ContainsFileDropList())
+            if (ClipboardAccess.ContainsFileDropList())
             {
-                var files = System.Windows.Clipboard.GetFileDropList();
+                var files = ClipboardAccess.GetFileDropList();
                 if (files is { Count: > 0 }) return files[0];
             }
-            if (System.Windows.Clipboard.ContainsText())
-                return System.Windows.Clipboard.GetText();
+            if (ClipboardAccess.ContainsText())
+                return ClipboardAccess.GetText();
         }
         catch (Exception ex)
         {

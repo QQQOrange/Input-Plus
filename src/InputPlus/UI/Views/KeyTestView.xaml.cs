@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -212,7 +212,7 @@ public partial class KeyTestView : UserControl
             foreach (var r in _rows.Take(30))
                 sb.AppendLine($"  {r.Time}  {r.Key}\t{r.Layer}\t{r.Action}");
 
-            Clipboard.SetText(sb.ToString());
+            ClipboardAccess.SetText(sb.ToString());
             StatusText.Text = Loc.T("诊断信息已复制到剪贴板");
         }
         catch (Exception ex)

@@ -15,7 +15,7 @@ namespace InputPlus.Core.Text;
 /// 就没了 —— 而且不会有任何提示。
 ///
 /// 早先这里只记了"纯文本"：原剪贴板是截图 / 一批文件时，
-/// `hadText == false`，还原分支直接 `Clipboard.Clear()` ——
+/// `hadText == false`，还原分支直接 `ClipboardAccess.Clear()` ——
 /// 那张截图或那批文件被**永久删掉**了。
 ///
 /// 现在抓的是完整的 <see cref="DataObject"/>（所有格式，含位图与文件列表），
@@ -85,9 +85,9 @@ internal sealed class ClipboardBackup
         var b = new ClipboardBackup();
         try
         {
-            b._text = Clipboard.ContainsText() ? Clipboard.GetText() : null;
+            b._text = ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : null;
 
-            IDataObject? src = Clipboard.GetDataObject();
+            IDataObject? src = ClipboardAccess.GetDataObject();
             if (src == null) { b._wasEmpty = true; return b; }
 
             string[] formats = src.GetFormats(autoConvert: false);
@@ -119,9 +119,9 @@ internal sealed class ClipboardBackup
             /* 位图单独物化一次，覆盖掉 copy 里的裸 DIB 项。 */
             try
             {
-                if (Clipboard.ContainsImage())
+                if (ClipboardAccess.ContainsImage())
                 {
-                    var img = Clipboard.GetImage();
+                    var img = ClipboardAccess.GetImage();
                     if (img != null)
                     {
                         if (img.CanFreeze) img.Freeze();
@@ -171,7 +171,7 @@ internal sealed class ClipboardBackup
         {
             try
             {
-                if (GetClipboardSequenceNumber() != seq)
+                if (ClipboardAccess.SequenceNumber() != seq)
                 {
                     CoreLog.Info("[剪贴板] 序号已变化，跳过还原，保留用户的新内容");
                     return;
@@ -187,7 +187,7 @@ internal sealed class ClipboardBackup
         {
             try
             {
-                string current = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+                string current = ClipboardAccess.ContainsText() ? ClipboardAccess.GetText() : "";
                 if (!string.Equals(current, currentTextGuard, StringComparison.Ordinal))
                 {
                     CoreLog.Info("[剪贴板] 已被用户/其它程序改写，跳过还原");
@@ -211,11 +211,11 @@ internal sealed class ClipboardBackup
                     var data = _data ?? new DataObject();
                     data.SetData(DataFormats.Bitmap, _image, true);
                     if (!string.IsNullOrEmpty(_text)) data.SetText(_text!);
-                    Clipboard.SetDataObject(data, copy: true);
+                    ClipboardAccess.SetDataObject(data, copy: true);
                 }
-                else if (_data != null) Clipboard.SetDataObject(_data, copy: true);
-                else if (_text != null) Clipboard.SetText(_text);
-                else if (_wasEmpty && expectedSequence != null) Clipboard.Clear();
+                else if (_data != null) ClipboardAccess.SetDataObject(_data, copy: true);
+                else if (_text != null) ClipboardAccess.SetText(_text);
+                else if (_wasEmpty && expectedSequence != null) ClipboardAccess.Clear();
                 return;
             }
             catch (ExternalException) when (attempt < 2)
@@ -229,7 +229,7 @@ internal sealed class ClipboardBackup
                  * 原本没有文字就保持现状，绝不清空（清空就是把内容弄丢了）。 */
                 if (!string.IsNullOrEmpty(_text))
                 {
-                    try { Clipboard.SetText(_text); } catch { }   /* 预期内：清理动作，失败无副作用 */
+                    try { ClipboardAccess.SetText(_text); } catch { }   /* 预期内：清理动作，失败无副作用 */
                 }
                 return;
             }

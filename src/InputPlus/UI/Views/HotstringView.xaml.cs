@@ -179,7 +179,7 @@ public partial class HotstringView : UserControl
         string text = "";
         try
         {
-            if (Clipboard.ContainsText()) text = Clipboard.GetText()?.Trim() ?? "";
+            if (ClipboardAccess.ContainsText()) text = ClipboardAccess.GetText()?.Trim() ?? "";
         }
         catch (Exception ex)
         {
@@ -2004,7 +2004,7 @@ public partial class HotstringView : UserControl
 
         try
         {
-            Clipboard.SetText(value);
+            ClipboardAccess.SetText(value);
             _host?.Notify(doneMessage);
         }
         catch (Exception ex)

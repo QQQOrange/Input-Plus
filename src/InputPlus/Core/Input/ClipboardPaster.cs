@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Windows;
 using static InputPlus.Core.Interop.NativeMethods;
 
@@ -92,13 +92,13 @@ internal static class ClipboardPaster
             var snapshot = Capture();
             if (snapshot == null) return false;
 
-            uint seqBefore = GetClipboardSequenceNumber();
+            uint seqBefore = ClipboardAccess.SequenceNumber();
             if (!SetText(text))
             {
                 /* SetText 一般是"连剪贴板都没打开"就失败了（没动过内容）。
                  * 但万一它是清空之后才失败的，用户的剪贴板就空了 ——
                  * 序号变了说明确实动过，这时无条件还回去。 */
-                if (GetClipboardSequenceNumber() != seqBefore) Restore(snapshot, expectedSeq: null);
+                if (ClipboardAccess.SequenceNumber() != seqBefore) Restore(snapshot, expectedSeq: null);
                 CoreLog.Warn("[输入文本] 剪贴板写入失败，退回逐字注入");
                 return false;
             }
@@ -107,7 +107,7 @@ internal static class ClipboardPaster
             /* 记下写入后的序号：还原前如果它变了，说明这期间用户自己复制了东西
              * （或别的程序写了剪贴板），那时候**不能**还原 —— 否则会把用户刚复制
              * 的内容擦掉。这比对比文本更准：复制了同样的文字也算被改写。 */
-            uint seq = GetClipboardSequenceNumber();
+            uint seq = ClipboardAccess.SequenceNumber();
 
             try
             {
@@ -177,10 +177,10 @@ internal static class ClipboardPaster
         var snap = new Snapshot();
         try
         {
-            IDataObject? src = Clipboard.GetDataObject();
+            IDataObject? src = ClipboardAccess.GetDataObject();
 
             // 原本有文本就记下来，万一完整快照还原失败，至少把文字还回去
-            if (Clipboard.ContainsText()) snap.Text = Clipboard.GetText();
+            if (ClipboardAccess.ContainsText()) snap.Text = ClipboardAccess.GetText();
 
             if (src == null) return snap;                       // 空剪贴板
 
@@ -242,7 +242,7 @@ internal static class ClipboardPaster
     /// </summary>
     private static void Restore(Snapshot snapshot, uint? expectedSeq)
     {
-        if (expectedSeq is { } seq && GetClipboardSequenceNumber() != seq)
+        if (expectedSeq is { } seq && ClipboardAccess.SequenceNumber() != seq)
         {
             CoreLog.Info("[输入文本] 粘贴期间剪贴板被改写，跳过还原");
             return;
@@ -252,8 +252,8 @@ internal static class ClipboardPaster
         {
             try
             {
-                if (snapshot.Data == null) Clipboard.Clear();
-                else Clipboard.SetDataObject(snapshot.Data, copy: true);
+                if (snapshot.Data == null) ClipboardAccess.Clear();
+                else ClipboardAccess.SetDataObject(snapshot.Data, copy: true);
 
                 if (snapshot.Data != null && !string.IsNullOrEmpty(snapshot.Text))
                     TagSelfWrite(snapshot.Text);
@@ -278,7 +278,7 @@ internal static class ClipboardPaster
         if (string.IsNullOrEmpty(text)) return;
         try
         {
-            Clipboard.SetText(text);
+            ClipboardAccess.SetText(text);
             TagSelfWrite(text);
         }
         catch (Exception ex)
@@ -302,7 +302,7 @@ internal static class ClipboardPaster
         {
             try
             {
-                Clipboard.SetText(text);
+                ClipboardAccess.SetText(text);
                 return true;
             }
             catch (ExternalException) when (attempt < RetryCount - 1)
@@ -329,7 +329,7 @@ internal static class ClipboardPaster
     {
         Thread.Sleep(PasteSettleMs);
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (clock.ElapsedMilliseconds < ClipboardIdleWaitMs && GetOpenClipboardWindow() != IntPtr.Zero)
+        while (clock.ElapsedMilliseconds < ClipboardIdleWaitMs && ClipboardAccess.IsOpenByOther())
             Thread.Sleep(20);
     }
 }

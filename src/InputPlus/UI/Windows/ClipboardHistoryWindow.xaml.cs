@@ -64,7 +64,7 @@ public partial class ClipboardHistoryWindow : Window
         if (Items.SelectedItem is not Item item) return;
         try
         {
-            System.Windows.Clipboard.SetText(item.Text);
+            ClipboardAccess.SetText(item.Text);
             StatusText.Text = Loc.T("已复制到系统剪贴板");
         }
         catch (Exception ex)

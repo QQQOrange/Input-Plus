@@ -433,7 +433,7 @@ public partial class AboutView : UserControl
 
         try
         {
-            Clipboard.SetText(sb.ToString());
+            ClipboardAccess.SetText(sb.ToString());
             HelpStatusText.Text = Loc.T("诊断信息已复制，直接粘到 issue 里即可。");
         }
         catch (Exception ex)

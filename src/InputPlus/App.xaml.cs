@@ -558,8 +558,13 @@ public partial class App : Application
             try
             {
                 /* 子集过滤：`--selftest --only=Qbar` 只跑用例方法名含该片段的项。
-                 * 全量行为不受影响（不带 --only 时过滤串为空）。 */
-                SelfTest.Configure(CliFlags.ValueOf(e.Args, "--only"));
+                 * 全量行为不受影响（不带 --only 时过滤串为空）。
+                 *
+                 * `--real-clipboard` 是显式 opt-in：默认自检跑内存剪贴板后端，
+                 * 只有要验 Win32 剪贴板本身时才让它动真剪贴板。 */
+                SelfTest.Configure(
+                    CliFlags.ValueOf(e.Args, "--only"),
+                    e.Args.Any(a => a.Equals("--real-clipboard", StringComparison.OrdinalIgnoreCase)));
                 code = SelfTest.Run();
             }
             catch (Exception ex)

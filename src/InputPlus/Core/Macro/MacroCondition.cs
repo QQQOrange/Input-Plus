@@ -35,9 +35,9 @@ public readonly record struct MacroContext(string Process, string Title, string 
             /* 播放线程被显式设成 STA，所以能直接用 WPF 的 Clipboard。
              * 剪贴板被别的程序锁住时会抛 COMException —— 当作"读不到"而不是失败。 */
             if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA &&
-                System.Windows.Clipboard.ContainsText())
+                ClipboardAccess.ContainsText())
             {
-                clip = System.Windows.Clipboard.GetText() ?? "";
+                clip = ClipboardAccess.GetText() ?? "";
             }
         }
         catch (Exception ex)

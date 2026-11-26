@@ -2892,7 +2892,7 @@ public partial class QbarWindow : Window, IComponentConnector
 					_host.Notify(Loc.T("没有选中项，先选一个文件或文件夹"));
 					break;
 				}
-				Clipboard.SetText(actionPath);
+				ClipboardAccess.SetText(actionPath);
 				_host.Notify(Loc.T("路径已复制"));
 				HideQbar();
 				break;
@@ -3475,7 +3475,7 @@ public partial class QbarWindow : Window, IComponentConnector
 			DataObject dataObject = new DataObject();
 			dataObject.SetFileDropList(new StringCollection { path });
 			dataObject.SetData("Preferred DropEffect", new MemoryStream((!cut) ? new byte[4] { 1, 0, 0, 0 } : new byte[4] { 2, 0, 0, 0 }));
-			Clipboard.SetDataObject(dataObject, copy: true);
+			ClipboardAccess.SetDataObject(dataObject, copy: true);
 			_host.Notify(cut ? Loc.T("已剪切到剪贴板") : Loc.T("已复制到剪贴板"));
 		}
 		catch (Exception ex)
@@ -3488,7 +3488,7 @@ public partial class QbarWindow : Window, IComponentConnector
 	{
 		try
 		{
-			Clipboard.SetText(text);
+			ClipboardAccess.SetText(text);
 			_host.Notify(Loc.T("路径已复制"));
 		}
 		catch (Exception ex)
@@ -3538,7 +3538,7 @@ public partial class QbarWindow : Window, IComponentConnector
 		{
 			try
 			{
-				Clipboard.SetText(text);
+				ClipboardAccess.SetText(text);
 			}
 			catch
 			{
