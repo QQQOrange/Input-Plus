@@ -54,12 +54,6 @@ public static class GestureEngine
     {
         public Signature? Sig;
         public WgPath? Built;
-
-        /// <summary>模板本身是不是闭环（闭环才有"换个起点/反着绕"的容错）。</summary>
-        public bool IsLoop;
-
-        /// <summary>模板里"圈"那一段（去掉 Q 的尾巴）—— 闭环对齐只用它。</summary>
-        public WgPath? LoopHead;
     }
 
     private static readonly ConditionalWeakTable<MouseGesture, Template> Cache =
@@ -124,11 +118,6 @@ public static class GestureEngine
         tpl.Sig = sig;
         tpl.Built = built;
 
-        /* 闭环对齐用"圈那一段"：画圈、画 Q 都是"圈 + 尾巴"，尾巴不该跟着转，
-         * 所以模板这边先把圈摘出来，对齐时只比圈。 */
-        List<GestureMath.Pt>? loop = built != null && shape != null ? SplitLoop(shape)?.Loop : null;
-        tpl.LoopHead = loop == null ? null : PathOf(loop);
-        tpl.IsLoop = tpl.LoopHead != null;
         return tpl;
     }
 
@@ -324,12 +313,6 @@ public static class GestureEngine
         var drawn = DrawnPath(points);
         if (drawn == null) return (null, 1);
 
-        /* 闭环容错：同一个圈换个起点起笔、或者反着绕，弧长参数化的形状距离会差很远。
-         * 只在"按原样比不过阈值"时才生成 8 个起点 ×（正/反）共 16 条变体重比 ——
-         * 正常命中的路径上一分钱都不多花。 */
-        bool drawnLoop = GestureMath.IsLoop(points);
-        List<GestureMath.Pt>? head = null;
-        List<WgPath>? variants = null;
 
         MouseGesture? best = null;
         double bestDistance = double.MaxValue;
@@ -343,19 +326,6 @@ public static class GestureEngine
             if (tpl == null) continue;
 
             double d = tpl.DistanceTo(drawn);
-            if (drawnLoop && entry!.IsLoop && entry.LoopHead != null && !(d <= threshold))
-            {
-                head ??= SplitLoop(points)?.Loop;
-                if (head != null)
-                {
-                    variants ??= ClosedVariants(head);
-                    foreach (var v in variants)
-                    {
-                        double dv = entry.LoopHead.DistanceTo(v);
-                        if (!double.IsNaN(dv) && dv < d) d = dv;
-                    }
-                }
-            }
             if (double.IsNaN(d) || double.IsPositiveInfinity(d)) continue;
 
             if (d < bestDistance)
@@ -383,259 +353,4 @@ public static class GestureEngine
         return (best, score);
     }
 
-    /// <summary>松手那一下"打紧"的尾巴长度（像素）：收笔时鼠标会被手一带、往回收一点。</summary>
-    private const double ReleaseTailPx = 16;
-
-    /// <summary>尾巴最多占整笔的比例 —— 再切就只剩起手那一小截了，那不叫识别。</summary>
-    private const double ReleaseTailMaxShare = 0.25;
-
-    /// <summary>
-    /// 整条比"完美到可以不信切尾结果"的分数上限（分数 = 距离 / 阈值，0.2 即距离 ≤ 0.01）。
-    /// </summary>
-    private const double ReleasePerfectShare = 0.2;
-
-    /// <summary>整条完美、而切尾结果比它差这么多（分数差）时，判整条更可信。</summary>
-    private const double ReleasePerfectMargin = 0.3;
-
-    /// <summary>
-    /// **松手结算用的识别**：把收笔那一下的尾巴切掉再比 —— 这是 WGestures 2 的
-    /// 实时语义在"松手结算"上的等价实现。
-    ///
-    /// 为什么非要这一步：WG2 是一边画一边判，认出来就执行，用户收笔那一下的回勾、
-    /// 过冲、甩尾根本不参与判定；KE 只在松手时整条比，尾巴反向的那几 px 在
-    /// (累计弧长 s, 方向角 θ) 空间里被归一化放大，整条距离会直接顶到 DP 的无解上限
-    /// （实测 0.2，远超 0.05 的阈值），于是"同一笔在 WG2 里成、在 KE 里不成"。
-    ///
-    /// 量化依据（1800 组真实手感样本：8ms 轮询 + 2px 量化 + 手抖 + 弓形 + 收笔回勾）：
-    /// 现状整条比 56.0% 判对 / 34.2% 未识别；切掉尾巴后 85.4% 判对 / 8.3% 未识别，
-    /// 判错反而从 9.8% 降到 6.2%；收笔带 15px 回勾的一组，命中率从 47.4% 回到 90% 以上。
-    /// 尾巴长度取 max(16px, 弧长×4%)：手感上收笔位移是十来像素的量级，长笔画按比例放宽；
-    /// 再往上切（24/32px）只多 0.6% 的召回，却多 1.2% 的误判，不划算。
-    ///
-    /// 判别力不受影响：切完照样走同一条 <see cref="Match"/>，阈值、歧义容差、闭环容错
-    /// 一个都没改；长手势（↑← 之于 ↑）的第二段远长于 16px，切尾巴切不掉它。
-    /// </summary>
-    public static (MouseGesture? Hit, double Score) MatchRelease(
-        IReadOnlyList<MouseGesture> bucket,
-        IReadOnlyList<GestureMath.Pt> points,
-        GestureOptions opts)
-    {
-        if (points == null || points.Count < 3) return (null, 1);
-
-        var cut = TrimTail(points);
-        if (cut == null) return Match(bucket, points, opts);
-
-        var trimmed = Match(bucket, cut, opts);
-        if (trimmed.Hit == null && trimmed.Score >= 1) return Match(bucket, points, opts);
-
-        /* 切尾命中了，但还要问一句：整条是不是本来就"一模一样"？
-         * 真实案例：任务管理器（↑↓↑↓）整条距离 0.0000，切掉尾巴后反而只跟 QQ邮箱
-         * 像（0.047）；照"切尾优先"就把 0.047 的答案盖在 0.0000 上，用户看到的是
-         * "明明画得一模一样却不认"。所以整条完美、且切尾明显更差时，采信整条。
-         * 量化：1800 组真实手感样本上判对率与"切尾优先"持平（92.2%），
-         * 判错不多一条，未识别反而少一条。 */
-        var whole = Match(bucket, points, opts);
-        if (whole.Hit != null && whole.Score <= ReleasePerfectShare
-            && (trimmed.Hit == null || trimmed.Score > whole.Score + ReleasePerfectMargin))
-            return whole;
-
-        return trimmed;
-    }
-
-    /// <summary>
-    /// 从尾巴上切掉"松手那一下"的量：min(max(16px, 弧长×4%), 弧长×25%)。
-    /// 切完剩不到 3 个点、或者本来就没多长，返回 null（调用方按整条比）。
-    /// </summary>
-    private static List<GestureMath.Pt>? TrimTail(IReadOnlyList<GestureMath.Pt> pts)
-    {
-        if (pts == null || pts.Count < 4) return null;
-
-        double total = 0;
-        for (int i = 1; i < pts.Count; i++) total += (pts[i] - pts[i - 1]).Length;
-        if (!(total > 0)) return null;
-
-        double drop = Math.Min(Math.Max(ReleaseTailPx, total * 0.04), total * ReleaseTailMaxShare);
-        double keep = total - drop;
-        if (!(keep > 0)) return null;
-
-        var cut = new List<GestureMath.Pt>(pts.Count) { pts[0] };
-        double acc = 0;
-        for (int i = 1; i < pts.Count; i++)
-        {
-            double seg = (pts[i] - pts[i - 1]).Length;
-            if (acc + seg >= keep)
-            {
-                double t = seg <= 0 ? 0 : (keep - acc) / seg;
-                cut.Add(new GestureMath.Pt(pts[i - 1].X + (pts[i].X - pts[i - 1].X) * t,
-                                           pts[i - 1].Y + (pts[i].Y - pts[i - 1].Y) * t));
-                break;
-            }
-            cut.Add(pts[i]);
-            acc += seg;
-        }
-        return cut.Count >= 3 ? cut : null;
-    }
-
-    /// <summary>
-    /// 画到一半先别急着立即执行：如果某条**更长**的候选，"按已画的弧长截下来的前一段"
-    /// 和手绘的这一段对得上，说明用户多半还要往下画 —— 这时候执行就会把长手势永远截断。
-    /// （v5.11 之前靠方向串前缀比较，方向串退休后按形状比。）
-    ///
-    /// 这不是第二套识别：判据还是同一条形状距离（<see cref="WgPath.DistanceTo"/>），
-    /// 阈值还是立即执行那一档（<see cref="ThresholdOf"/>）。
-    /// </summary>
-    public static bool AwaitsLonger(
-        IReadOnlyList<MouseGesture>? bucket,
-        IReadOnlyList<GestureMath.Pt> points,
-        GestureOptions opts)
-    {
-        if (bucket == null || bucket.Count == 0) return false;
-
-        var drawn = DrawnPath(points);
-        var drawnStroke = DrawnStroke(points);
-        if (drawn == null || drawnStroke == null) return false;
-
-        double drawnLength = drawnStroke.Length;
-        if (!(drawnLength > 0)) return false;
-
-        double threshold = ThresholdOf(opts, immediate: true);
-
-        foreach (var g in bucket)
-        {
-            if (g == null || g.IsWildcard) continue;
-            var shape = ShapeOf(g);
-            if (shape == null) continue;
-
-            var tpl = StrokeOf(shape);
-            if (tpl == null || tpl.Count < 2 || tpl.Count > MaxTemplatePoints) continue;
-            if (!(tpl.Length > drawnLength * 1.02)) continue;   // 不比手绘长，谈不上"还要往下画"
-
-            var prefix = PrefixPath(tpl, drawnLength);
-            if (prefix == null) continue;
-
-            double d = prefix.DistanceTo(drawn);
-            if (!double.IsNaN(d) && d <= threshold) return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// 按弧长从模板上截下前 <paramref name="length"/> 那么长的一段（截在段中间就插一个点）。
-    /// 模板不比 <paramref name="length"/> 长时返回 null —— 调用方已经排除这种情况。
-    /// </summary>
-    private static WgPath? PrefixPath(WgStroke tpl, double length)
-    {
-        var pts = tpl.Points;
-        if (pts.Count < 2 || !(length > 0)) return null;
-
-        var cut = new WgStroke();
-        cut.Add(pts[0].X, pts[0].Y);
-        double acc = 0;
-        for (int i = 1; i < pts.Count; i++)
-        {
-            double seg = (pts[i] - pts[i - 1]).Length;
-            if (acc + seg >= length)
-            {
-                double t = seg <= 0 ? 0 : (length - acc) / seg;
-                cut.Add(pts[i - 1].X + (pts[i].X - pts[i - 1].X) * t,
-                        pts[i - 1].Y + (pts[i].Y - pts[i - 1].Y) * t);
-                return cut.Count >= 2 ? WgPath.FromStroke(cut) : null;
-            }
-            cut.Add(pts[i].X, pts[i].Y);
-            acc += seg;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// 把一笔拆成"圈 + 尾巴"：找一对几乎重合的点，把笔画切成两段，
-    /// 长的那段是圈，短的那段是尾巴（Q 的那一撇、或者从圆上另一个地方起笔时
-    /// 绕回来的那一小段）。开笔手势拆不出来，返回 null。
-    /// </summary>
-    private static (List<GestureMath.Pt> Loop, List<GestureMath.Pt> Tail)? SplitLoop(IReadOnlyList<GestureMath.Pt>? pts)
-    {
-        if (pts is null || pts.Count < 12) return null;
-        int n = pts.Count;
-
-        double tol = Math.Max(8, GestureMath.Extent(pts) * 0.10);
-        int ba = -1, bb = -1;
-        double bestGap = double.MaxValue;
-
-        for (int i = 0; i < n - 6; i++)
-        {
-            for (int j = i + 6; j < n; j++)
-            {
-                double gx = Math.Abs(pts[i].X - pts[j].X), gy = Math.Abs(pts[i].Y - pts[j].Y);
-                if (gx > tol || gy > tol) continue;
-                double gap = gx + gy;
-                if (gap < bestGap) { bestGap = gap; ba = i; bb = j; }
-            }
-        }
-        if (ba < 0) return null;
-
-        var inner = new List<GestureMath.Pt>(bb - ba + 1);
-        for (int k = ba; k <= bb; k++) inner.Add(pts[k]);
-
-        var outer = new List<GestureMath.Pt>(n - (bb - ba));
-        for (int k = bb; k < n; k++) outer.Add(pts[k]);
-        for (int k = 0; k <= ba; k++) outer.Add(pts[k]);
-
-        double lenInner = PolyLength(inner), lenOuter = PolyLength(outer);
-        if (Math.Max(lenInner, lenOuter) < Math.Max(1, GestureMath.Extent(pts)) * 0.5) return null;   // 太小，算不上一个圈
-
-        return lenInner >= lenOuter ? (inner, outer) : (outer, inner);
-    }
-
-    /// <summary>折线长度（像素）。</summary>
-    private static double PolyLength(IReadOnlyList<GestureMath.Pt> pts)
-    {
-        double sum = 0;
-        for (int i = 1; i < pts.Count; i++) sum += (pts[i] - pts[i - 1]).Length;
-        return sum;
-    }
-
-    /// <summary>闭合段的换起点变体：8 个起点 ×（正/反）两条绕向 = 16 条曲线。</summary>
-    private static List<WgPath> ClosedVariants(IReadOnlyList<GestureMath.Pt> head)
-    {
-        var list = new List<WgPath>(16);
-        var norm = GestureMath.Normalize(head);
-        if (norm.Count < 8) return list;
-
-        var rev = new List<GestureMath.Pt>(norm);
-        rev.Reverse();
-
-        for (int k = 0; k < 8; k++)
-        {
-            Add(Shift(norm, k));
-            Add(Shift(rev, k));
-        }
-        return list;
-
-        void Add(List<GestureMath.Pt> pts)
-        {
-            var path = PathOf(pts);
-            if (path != null) list.Add(path);
-        }
-    }
-
-    /// <summary>把一段轨迹压成引擎的路径（点数不合适的返回 null）。</summary>
-    private static WgPath? PathOf(IReadOnlyList<GestureMath.Pt> pts)
-    {
-        var stroke = WgStroke.FromNormalized(pts);
-        if (stroke == null || stroke.Count < 2 || stroke.Count > MaxTemplatePoints) return null;
-        return WgPath.FromStroke(stroke);
-    }
-
-    /// <summary>把闭合轨迹的起点轮转 k/8 圈（k=0 原样返回，不复制）。</summary>
-    private static List<GestureMath.Pt> Shift(List<GestureMath.Pt> src, int k)
-    {
-        int n = src.Count;
-        if (k <= 0 || n < 8) return src;
-        int off = (int)((long)n * k / 8) % n;
-        if (off == 0) return src;
-
-        var dst = new List<GestureMath.Pt>(n);
-        for (int i = 0; i < n; i++) dst.Add(src[(i + off) % n]);
-        return dst;
-    }
 }

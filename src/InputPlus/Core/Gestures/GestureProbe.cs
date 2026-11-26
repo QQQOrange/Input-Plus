@@ -216,7 +216,7 @@ internal static class GestureProbe
         foreach (var round in new[] { scoped, global })
         {
             if (round.Count == 0) continue;
-            var (hit, score) = GestureEngine.MatchRelease(round, drawn, opts);
+            var (hit, score) = GestureEngine.Match(round, drawn, opts);
             if (hit != null) return (hit, score);
         }
         return (null, 1);

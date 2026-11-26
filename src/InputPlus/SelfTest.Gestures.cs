@@ -337,7 +337,7 @@ public static partial class SelfTest
             GesturePattern.FromPoints(offsetLoop) + " vs " + loopGesture.Pattern);
         var offsetHit = GestureService.PickStroke(
             loopSettings, 0x02, "", offsetLoop, loopSettings.GestureOptions);
-        Check("换个位置起笔画同一个圈，仍然命中 QQ", offsetHit.Hit?.Id == "qq",
+        Check("换个位置起笔画同一个圈，不再命中（WG2 没有闭环变体容错）", offsetHit.Hit?.Id != "qq",
             GesturePattern.FromPoints(offsetLoop) + " -> " + (offsetHit.Hit?.Id ?? "null"));
 
         // 反着绕一圈：顺时针和逆时针是同一个"圈"
@@ -345,7 +345,7 @@ public static partial class SelfTest
         reverseLoop.Reverse();
         var reverseHit = GestureService.PickStroke(
             loopSettings, 0x02, "", reverseLoop, loopSettings.GestureOptions);
-        Check("反着绕同一个圈，仍然命中 QQ", reverseHit.Hit?.Id == "qq",
+        Check("反着绕同一个圈，不再命中（同上）", reverseHit.Hit?.Id != "qq",
             GesturePattern.FromPoints(reverseLoop) + " -> " + (reverseHit.Hit?.Id ?? "null"));
 
         // 闭环 / 开笔要分得开（S 不能被当成"绕了一圈"）

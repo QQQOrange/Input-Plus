@@ -1822,7 +1822,7 @@ public sealed partial class GestureService : IDisposable
         /* 画到 ↑ 时如果还配了 ↑→，现在执行就会把长手势永远截断。
          * 等这一笔不再像任何"更长候选的前一段"，才算能确定 —— 判据按形状比，
          * 见 GestureEngine.AwaitsLonger。 */
-        if (GestureEngine.AwaitsLonger(strokes, points, opts)) return false;
+        /* v1.7.8 全抄 WG2：没有"等更长"这条闸。WG2 边画边判，长手势靠默认不立即执行来区分。 */
 
         strokes = strokes.Where(g => g.Immediate).ToList();
         if (strokes.Count == 0) return false;
@@ -2453,7 +2453,7 @@ public sealed partial class GestureService : IDisposable
     internal static (MouseGesture? Hit, double Score) MatchWithScope(
         List<MouseGesture> bucket, IReadOnlyList<GestureMath.Pt> points, GestureOptions opts)
     {
-        var (hit, score) = GestureEngine.MatchRelease(bucket, points, opts);
+        var (hit, score) = GestureEngine.Match(bucket, points, opts);
         if (hit == null) return (null, score);
 
         double threshold = Math.Max(GestureEngine.ThresholdOf(opts, false), 1e-6);
