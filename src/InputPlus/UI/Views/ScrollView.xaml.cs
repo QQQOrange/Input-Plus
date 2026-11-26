@@ -73,7 +73,28 @@ public partial class ScrollView : UserControl
         finally { _sync = false; }
 
         BuildApps();
+        UpdateAccelRows();
         UpdateStatus();
+    }
+
+    /// <summary>
+    /// 加速开关关着时，把两个加速参数（触发间隔 / 最多几倍）置灰并禁用。
+    ///
+    /// 用户 2026-11-26 的要求原话："加速要有一个按钮，要是按钮没打开，那就只是平滑，
+    /// 打开之后滚动才会加速。" 行为本来就是这么判的（<c>SmoothScrollService</c> 里
+    /// 只有 <c>o.Acceleration</c> 为真才算倍数），但界面把两个参数一直画成可用状态，
+    /// 用户看到"最多加速到几倍 = 7"就会以为加速已经在跑 —— 置灰是把这个事实画出来。
+    /// </summary>
+    private void UpdateAccelRows()
+    {
+        bool on = AccelBox.IsChecked == true;
+        foreach (var box in new FrameworkElement[] { AccelDeltaBox, AccelMaxBox })
+        {
+            if (box?.Parent is not FrameworkElement cell) continue;
+            if (cell.Parent is not FrameworkElement row) continue;
+            row.IsEnabled = on;
+            row.Opacity = on ? 1.0 : 0.45;
+        }
     }
 
     // ---------------- 保存 ----------------
@@ -136,6 +157,7 @@ public partial class ScrollView : UserControl
             case "IgnoreTouchpad": o.IgnoreTouchpad = on; break;
             default: return;
         }
+        if (box?.Tag as string == "Acceleration") UpdateAccelRows();
         Save();
     }
 
