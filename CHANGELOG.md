@@ -1,3 +1,39 @@
+## v1.7.2 — 托盘退出不一定退干净：加退出看门狗与全链路兜底
+
+**报障**：在托盘里点了"退出"，图标没了，任务管理器里 `InputPlus.exe` 还在。
+
+**现场**（pid 37644，7:48 启动，一直挂到被发现）：
+
+- 没有任何顶层窗口，托盘图标也已移除 —— 所以用户看到的是"退出了"；
+- 5 秒采样 CPU 增量为 **0**（累计 39 分钟），**1 个线程**停在 `Wait/Executive`；
+- 数据目录里每启动一次就多一个 `crash-context-*.log` —— 说明每次退出都没走到
+  `OnExit` 末尾的"干净退出"标记。
+
+**原因：退出链路上没有任何兜底**
+
+1. 托盘菜单回调跑在 WinForms 的消息线程上，`TrayIcon.ExitApp()` 里没有 try ——
+   第一句 `_icon.Visible = false` 先把图标摘了，后面的异常被消息循环吞掉；
+2. `AppHost.ExitApp()` 里 `SaveSettings()` / `UsageStats.Flush()` 是裸调的（其它收尾都有 try），
+   它们一抛，`Application.Current.Shutdown()` 就永远等不到；
+3. `Application.Current.Shutdown()` 从非界面线程调用会抛 `InvalidOperationException`；
+4. `OnExit` 末尾的 `SingleInstance.Release()` 也是裸调，抛了就打断最后一段收尾；
+5. 就算上面都走过了，CLR 收尾阶段还挂着 UIA/COM、Rust 索引 dll、WinForms NotifyIcon
+   三套 native 组件 —— 任何一处等待都能让进程永远退不完（现场就是 1 线程等内核对象）。
+
+**改法（三层，缺一层都不够）**
+
+1. **退出看门狗**：`ExitApp` 武装一个后台线程，12 秒后进程还在就 `Environment.Exit(0)`。
+   正常情况下 `OnExit` 几百毫秒就完了，看门狗根本不会醒；它只在收尾卡死时动手。
+   时长取 12 秒是因为 `OnExit` 里的退出同步本身有 8 秒硬上限，看门狗必须比它长。
+2. **全链路兜底**：`TrayIcon.ExitApp` 整段 try/catch，异常时强退；`ExitApp` 内部每个收尾步骤
+   逐个 try；`Application.Current` 为空 / 不在界面线程时分别处理（后者用
+   `Dispatcher.BeginInvoke` 投递 `Shutdown`）。
+3. **阶段日志**：`ExitApp` 与 `OnExit` 各段打一行 `[退出] …`。下次真卡住，日志最后一行就是
+   卡住的那一段 —— 不用再靠"无窗口 + 0 CPU"去猜。
+
+**验证**：`dotnet build` 0 错误 0 新增警告；全量 `--selftest` 7511 项 0 失败；
+托盘退出走新链路（`[退出]` 阶段日志 + 看门狗）。
+
 ## v1.7.1 — 自检不再碰用户剪贴板（剪贴板后端可注入 + 护栏）
 
 **用户的报障**：剪贴板里老是冒出 `selftest-copy-slot` 这一条，不知道哪来的、是不是 bug。

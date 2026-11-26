@@ -1165,6 +1165,11 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        /* 阶段日志：退出卡死时（2026-11-26 的现场：托盘点了退出，进程挂成
+         * 无窗口 / 0 CPU / 单线程等待），光看 crash-context 是猜不出停在哪一段的。
+         * 这些行是给下一次排查用的证据，不是噪声。 */
+        CoreLog.Info("[退出] OnExit 进入");
+
         // 退出同步必须放在 Dispose 之前：那之后钩子和设置都拆了。
         // SyncOnExit 内部有 8 秒硬上限，网盘不通也不会卡住关软件。
         try
@@ -1174,16 +1179,20 @@ public partial class App : Application
                 CoreLog.Warn("退出同步未完成：" + r.Message);
         }
         catch (Exception ex) { CoreLog.Warn("退出同步异常：" + ex.Message); }
+        CoreLog.Info("[退出] 同步阶段完成");
 
         /* 退出前补发所有抬起：绝不给系统留下"按着的键/鼠标键"。
          * 放在 Dispose 之前 —— Dispose 会把钩子和引擎一起拆掉。 */
         try { InputPlus.Core.Input.InputSafety.ReleaseAll(); } catch { }
+        CoreLog.Info("[退出] 按键抬起已补发");
 
         /* 索引线程是后台线程，让它自己收尾更干净：把已经扫到的部分落盘，
          * 下次启动就不用从头来。给不了时间也无所谓 —— 下次自己重建。 */
         try { Core.Qbar.QbarIndex.Stop(); } catch { }
+        CoreLog.Info("[退出] 索引已停");
 
         try { Host?.Dispose(); } catch { }   /* 预期内：清理动作，失败无副作用 */
+        CoreLog.Info("[退出] AppHost 已 Dispose");
 
         /* 收尾：把防抖中的设置落盘、把日志缓冲刷出去。
          * 顺序放在 Dispose 之后 —— Dispose 里可能还会写日志。 */
@@ -1192,10 +1201,15 @@ public partial class App : Application
          * 退出同步最多可能卡 8 秒，用户在这期间强制结束进程的话，
          * 那就是一次异常退出，不该被提前写下的"正常"标记掩盖。 */
         try { Core.Health.CrashGuard.MarkCleanExit(Core.AppPaths.DataDir); } catch { }
+        CoreLog.Info("[退出] 设置已落盘、干净退出标记已写");
 
         try { CoreLog.Flush(); CoreLog.Shutdown(); } catch { }   /* 预期内：清理动作，失败无副作用 */
 
-        SingleInstance.Release();
+        /* 以前这里裸调：它一抛，OnExit 剩下的部分（含 base.OnExit）全都不执行，
+         * 进程就停在一个半拆状态。释放失败没什么后果 —— 进程马上就没了，
+         * 系统会回收命名对象。 */
+        try { SingleInstance.Release(); } catch (Exception ex) { CoreLog.Warn("[退出] 释放单实例失败：" + ex.Message); }
+
         base.OnExit(e);
     }
 }

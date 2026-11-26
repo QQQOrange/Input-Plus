@@ -216,31 +216,114 @@ public sealed partial class AppHost
         catch (Exception ex) { CoreLog.Swallow(ex, "退出前停止输入"); }
     }
 
+    /// <summary>
+    /// 退出看门狗的等待时长。
+    ///
+    /// 必须比 <see cref="App"/> 的 `OnExit` 里最慢的一段长：退出同步有 8 秒硬上限
+    /// （见 App.OnExit 的注释），再留几秒给设置落盘与日志刷盘。正常情况下 OnExit
+    /// 几百毫秒就完了，看门狗根本不会醒 —— 它只在"CLR 收尾卡死"时才动手。
+    /// </summary>
+    private const int ExitWatchdogMs = 12000;
+
     public void ExitApp(bool restart = false)
     {
-        Exiting = true;
-        StopForExit();
-        SaveSettings();
-        UsageStats.Flush();      // 统计攒着落盘，退出时补最后一次
-        _tray?.Dispose();
-        _tray = null;
-        try { _selectionWatcher?.Dispose(); _selectionWatcher = null; } catch { }   /* 预期内：清理动作，失败无副作用 */
-        if (restart)
+        CoreLog.Info("[退出] 收到退出请求（restart=" + restart + "）");
+
+        /* 整条链必须自己兜住：托盘菜单的回调跑在 WinForms 的消息线程上，
+         * 这里抛出去的异常会被那边的消息循环吞掉 —— 用户看到的就是
+         * "图标没了、进程还在"（2026-11-26 的现场：pid 37644 一直挂到第二天，
+         * 无窗口、0 CPU、单线程等待，crash-context 每次都判上次不干净退出）。 */
+        try
         {
-            /* 重启自己（权限切换必须重启才生效）。
-             * 用 explorer 启动而不是当前进程 —— 否则子进程会继承
-             * 当前进程的完整性级别，达不到"降权重启"的目的。 */
-            try
+            Exiting = true;
+            try { StopForExit(); } catch (Exception ex) { CoreLog.Swallow(ex, "退出前停止输入"); }
+            try { SaveSettings(); } catch (Exception ex) { CoreLog.Warn("[退出] 保存设置失败：" + ex.Message); }
+            try { UsageStats.Flush(); } catch (Exception ex) { CoreLog.Warn("[退出] 统计落盘失败：" + ex.Message); }
+            try { _tray?.Dispose(); } catch (Exception ex) { CoreLog.Swallow(ex, "退出时拆托盘"); }
+            _tray = null;
+            try { _selectionWatcher?.Dispose(); _selectionWatcher = null; } catch { }   /* 预期内：清理动作，失败无副作用 */
+
+            if (restart)
             {
-                var exe = Environment.ProcessPath ?? AppPaths.AppDir.TrimEnd('\\') + "\\InputPlus.exe";
-                // 先释放互斥体，避免“退出同步”尚未结束时新实例等到超时后退出。
-                try { SingleInstance.Release(); } catch { }
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
-                { UseShellExecute = true, WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory });
+                /* 重启自己（权限切换必须重启才生效）。
+                 * 用 explorer 启动而不是当前进程 —— 否则子进程会继承
+                 * 当前进程的完整性级别，达不到"降权重启"的目的。 */
+                try
+                {
+                    var exe = Environment.ProcessPath ?? AppPaths.AppDir.TrimEnd('\\') + "\\InputPlus.exe";
+                    // 先释放互斥体，避免“退出同步”尚未结束时新实例等到超时后退出。
+                    try { SingleInstance.Release(); } catch { }
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
+                    { UseShellExecute = true, WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory });
+                }
+                catch (Exception ex) { CoreLog.Warn("重启失败：" + ex.Message); }
             }
-            catch (Exception ex) { CoreLog.Warn("重启失败：" + ex.Message); }
+
+            /* 看门狗：从这里开始，12 秒内进程还没自己结束就强制 Exit。
+             *
+             * 为什么必须有：退出路径上有一串 native 收尾（UIA/COM、Rust 索引 dll、
+             * WinForms NotifyIcon），任何一处等待都能让 CLR 永远退不完 —— 那时候
+             * 界面和托盘早就没了，用户只能去任务管理器里杀。有了它，"点了退出就一定退"
+             * 不再依赖每一处收尾都写得正确。 */
+            ArmExitWatchdog();
+
+            CoreLog.Info("[退出] 调用 Application.Shutdown");
+            var app = Application.Current;
+            if (app == null)
+            {
+                /* 没有 WPF Application（例如别的地方先拆了）——没有 Dispatcher 可投递，直接结束。 */
+                CoreLog.Warn("[退出] Application.Current 为空，直接结束进程");
+                CoreLog.Flush();
+                Environment.Exit(0);
+            }
+
+            if (app.Dispatcher.CheckAccess())
+            {
+                app.Shutdown();
+            }
+            else
+            {
+                /* 托盘菜单是 WinForms 的，回调线程不保证是 WPF 的界面线程。
+                 * 直接调 Shutdown 会抛 InvalidOperationException（跨线程访问 DispatcherObject），
+                 * 而那正是"图标消失、进程不退"的经典成因 —— 投递过去，让界面线程自己关。 */
+                CoreLog.Info("[退出] 不在界面线程上，投递 Shutdown");
+                app.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    CoreLog.Info("[退出] 界面线程执行 Shutdown");
+                    app.Shutdown();
+                }));
+            }
         }
-        Application.Current.Shutdown();
+        catch (Exception ex)
+        {
+            /* 走到这里说明连"正常退出"都组织不起来了：不留悬念，直接结束。
+             * 看门狗此时可能已经武装，但没必要等它。 */
+            CoreLog.Error("[退出] 退出流程异常，强制结束进程", ex);
+            CoreLog.Flush();
+            Environment.Exit(0);
+        }
+    }
+
+    /// <summary>
+    /// 起一个后台线程，<see cref="ExitWatchdogMs"/> 之后进程还在就强制退出。
+    ///
+    /// 故意做成"只管开、不管关"：它醒来说明退出没走完，那时候任何"取消看门狗"
+    /// 的代码本身也可能已经卡住了，靠不住。进程正常退出时线程跟着消失，代价为零。
+    /// </summary>
+    private static void ArmExitWatchdog()
+    {
+        var thread = new Thread(() =>
+        {
+            Thread.Sleep(ExitWatchdogMs);
+            try { CoreLog.Warn("[退出] 看门狗：" + ExitWatchdogMs + "ms 内没退干净，强制结束进程"); } catch { }
+            try { CoreLog.Flush(); } catch { }
+            Environment.Exit(0);
+        })
+        {
+            IsBackground = true,
+            Name = "InputPlus.ExitWatchdog",
+        };
+        thread.Start();
     }
 
 }

@@ -456,8 +456,20 @@ public sealed class TrayIcon : IDisposable
 
     private void ExitApp()
     {
-        _icon.Visible = false;
-        _host.ExitApp();
+        /* 托盘菜单的回调跑在 WinForms 的消息线程上：从这里抛出去的异常会被
+         * 那边的消息循环吞掉，用户看到的就是"图标没了、程序还在任务管理器里"。
+         * 所以整个退出动作必须自己兜住，并在兜底时保证进程真的结束。 */
+        try
+        {
+            _icon.Visible = false;
+            _host.ExitApp();
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Error("托盘退出失败，强制结束进程", ex);
+            try { CoreLog.Flush(); } catch { }
+            Environment.Exit(0);
+        }
     }
 
     public void Dispose()
