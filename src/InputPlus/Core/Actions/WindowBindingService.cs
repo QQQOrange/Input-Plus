@@ -235,7 +235,9 @@ public sealed class WindowBindingService
 
         try
         {
-            Process.Start(new ProcessStartInfo(exePath) { UseShellExecute = true });
+            /* 键绑定的应用多数是"自己的配置放在自己旁边"的常驻程序，
+             * 所以工作目录必须取它的目录 —— 走统一入口，别再手拼 ProcessStartInfo。 */
+            Process.Start(ExternalLaunch.ForTarget(exePath));
         }
         catch (Exception ex)
         {

@@ -582,7 +582,8 @@ public static class WindowService
         var before = SnapshotExplorerWindows();
 
         AllowSetForegroundWindow(ASFW_ANY);
-        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        // 统一入口：目录本身不带工作目录（见 ExternalLaunch 里的"反面清单"）
+        Process.Start(ExternalLaunch.ForTarget(path));
 
         string leaf = LeafNameOf(path);
         Task.Run(() => WaitAndActivateFolder(before, leaf));
@@ -879,7 +880,12 @@ public static class WindowService
         var before = SnapshotAppWindows();
 
         AllowSetForegroundWindow(ASFW_ANY);
-        Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+        /* 工作目录必须是**这个文件自己的目录**，不是我们的。
+         * 以前这里光把路径交给 shell，子进程就继承了 InputPlus 的当前目录；
+         * 那些"按当前目录找 config.json / 写 data"的程序于是把家安在了我们的安装目录里
+         * （wb2api 事故：键启动读不到自己的配置，双击却正常，差别只在这里）。
+         * 统一走 ExternalLaunch 之后，这条规则全仓库只剩一份。 */
+        Process.Start(ExternalLaunch.ForTarget(target));
 
         if (expectedExe.Length == 0)
             CoreLog.Warn($"[打开{KindName(kind)}] 没能解析出目标程序，改用\"任何新窗口\"判断：{target}");

@@ -219,13 +219,10 @@ public static class CustomKeyRunner
 
         try
         {
-            var psi = new ProcessStartInfo(spec.AppPath)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = SafeDirectoryOf(spec.AppPath),
-            };
-            if (spec.RunAsAdmin) psi.Verb = "runas";   // 触发 UAC
-            Process.Start(psi);
+            /* 走统一入口：自定义按键绑的多是"配置放在自己旁边"的常驻程序
+             * （微信、笔记、面板类），工作目录必须是它自己的目录 ——
+             * 不然它会去 InputPlus 的目录里找/写配置（wb2api 事故就是这么来的）。 */
+            Process.Start(ExternalLaunch.ForTarget(spec.AppPath, runAs: spec.RunAsAdmin));
             CoreLog.Info($"自定义按键：已启动 {spec.AppPath}（管理员：{spec.RunAsAdmin}）");
             return true;
         }
@@ -244,18 +241,6 @@ public static class CustomKeyRunner
     {
         error = message;
         return false;
-    }
-
-    private static string SafeDirectoryOf(string path)
-    {
-        try
-        {
-            return Path.GetDirectoryName(path) ?? "";
-        }
-        catch
-        {
-            return "";
-        }
     }
 
     // ---------------- 发键 ----------------

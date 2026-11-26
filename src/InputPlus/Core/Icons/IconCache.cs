@@ -19,6 +19,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Windows;
 using static InputPlus.Core.Interop.NativeMethods;
 
 namespace InputPlus.Core.Icons;
@@ -479,12 +480,18 @@ public static class IconCache
         ImageSource? imageSource = null;
         try
         {
-            if (ShellIcons.IsImageFile(norm))
+            /* 云占位文件（OneDrive"仅在线"）**不能**按图片解码：File.ReadAllBytes 一次
+             * 就会把整个文件从云端拉下来。占位时直接走下面的 shell 图标分支
+             * （SIIGBF_ICONONLY，只取图标、不读内容），显示的是系统的通用图片图标。 */
+            bool placeholder = CloudPlaceholder.IsPlaceholder(norm);
+
+            if (ShellIcons.IsImageFile(norm) && !placeholder)
             {
                 /* 用户自选的 png/ico/svg/图片：本来就是图片，按图片解码最快也最准。 */
                 imageSource = FromImageFile(norm);
             }
-            else if (File.Exists(norm) || Directory.Exists(norm))
+
+            if (imageSource == null && (File.Exists(norm) || Directory.Exists(norm)))
             {
                 /* 同步调用点（设置页/按键页）先吃缓存，未命中才同步等一小会儿。
                  * 本地文件通常是毫秒级；网络路径 ShellIcons 内部按 400ms 上限探，
@@ -495,8 +502,9 @@ public static class IconCache
 
             /* Shell 拿不到时才回退到老的 ExtractIconEx（只对 exe/dll 有意义）：
              * 绿色软件常常没注册文件关联，IShellItemImageFactory 交白卷，
-             * 但 PE 资源里确实带图标，直接放弃会退化。 */
-            if (imageSource == null && IsExecutable(norm))
+             * 但 PE 资源里确实带图标，直接放弃会退化。占位文件同样跳过 ——
+             * 读 PE 资源一样会把云端文件拉下来。 */
+            if (imageSource == null && !placeholder && IsExecutable(norm))
             {
                 imageSource = FromShellIcon(norm);
             }

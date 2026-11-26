@@ -705,10 +705,8 @@ public partial class QbarExpandWindow : Window, IComponentConnector
 		}
 		try
 		{
-			Process.Start(new ProcessStartInfo(row.Path)
-			{
-				UseShellExecute = true
-			});
+			// 统一入口：文件自己的目录当工作目录（不设就会继承 InputPlus 的目录）
+			Process.Start(InputPlus.Core.Windows.ExternalLaunch.ForTarget(row.Path));
 		}
 		catch (Exception ex)
 		{

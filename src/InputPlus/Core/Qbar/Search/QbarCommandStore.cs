@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using InputPlus.Core.Windows;
 
 namespace InputPlus.Core.Qbar.Search;
 
@@ -317,19 +318,12 @@ internal static class QbarCommandStore
 
         try
         {
-            var psi = new ProcessStartInfo(path)
-            {
-                UseShellExecute = true,
-                Arguments = arguments,
-            };
-
+            /* 工作目录三级优先：用户填的最优先 → 程序自己的目录 → 系统默认。
+             * 中间那级以前是缺的：命令里没填工作目录时子进程会**继承我们的当前目录**，
+             * 于是 wb2api 这类按相对路径读 config 的程序把配置落在了 InputPlus 目录里。
+             * 拼 ProcessStartInfo 的活儿交给 ExternalLaunch，规则全仓库只剩一份。 */
+            var psi = ExternalLaunch.ForTarget(path, arguments, command.RunAsAdmin, command.Silent);
             if (workdir.Length > 0 && Directory.Exists(workdir)) psi.WorkingDirectory = workdir;
-            if (command.RunAsAdmin) psi.Verb = "runas";
-            if (command.Silent)
-            {
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                psi.CreateNoWindow = true;
-            }
 
             Process.Start(psi);
             return new QbarCommandResult(true, "", false);

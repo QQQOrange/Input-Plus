@@ -699,4 +699,56 @@ public static partial class SelfTest
         Check("复核：glob 通配 ? 只匹配一个字符", QbarSpecFilter.GlobMatch("a1c", "a?c"), "");
         Check("复核：glob 不匹配时返回 false", !QbarSpecFilter.GlobMatch("abc", "abd"), "");
     }
+
+    /// <summary>
+    /// 云占位文件（OneDrive「仅在线」/「释放空间」）不许被正文索引读取。
+    ///
+    /// 用户 2026-11-26 报的现象："InputPlus 从 OneDrive 里面下文件"。
+    /// 根因就是正文索引把每个白名单文件都读一遍 —— 读一个占位符 = 让 OneDrive
+    /// 把整个文件下载回来。这条用例把两道闸都钉住：
+    ///   · 扫描阶段（EnumerateFiles）不把它当候选；
+    ///   · 抽取阶段（TryMakeDoc）即使被路径硬塞进来也直接以 reason=cloud 退出。
+    /// </summary>
+    private static void TestCloudPlaceholderSkip()
+    {
+        Check("云占位：RecallOnDataAccess 位算占位",
+            Core.Windows.CloudPlaceholder.IsPlaceholder(
+                (System.IO.FileAttributes)Core.Windows.CloudPlaceholder.RecallOnDataAccessFlag), "");
+        Check("云占位：Offline 位算占位",
+            Core.Windows.CloudPlaceholder.IsPlaceholder(System.IO.FileAttributes.Offline), "");
+        Check("云占位：普通文件不算占位",
+            !Core.Windows.CloudPlaceholder.IsPlaceholder(System.IO.FileAttributes.Normal)
+            && !Core.Windows.CloudPlaceholder.IsPlaceholder(System.IO.FileAttributes.Archive), "");
+
+        string dir = Path.Combine(Path.GetTempPath(), "ip-cloud-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string local = Path.Combine(dir, "local.txt");
+        string cloud = Path.Combine(dir, "cloud.txt");
+        try
+        {
+            File.WriteAllText(local, "hello");
+            File.WriteAllText(cloud, "hello");
+            File.SetAttributes(cloud, FileAttributes.Offline);
+
+            Check("云占位：本地文件不算占位", !Core.Windows.CloudPlaceholder.IsPlaceholder(local), "");
+            Check("云占位：置 Offline 后算占位", Core.Windows.CloudPlaceholder.IsPlaceholder(cloud), "");
+
+            Check("云占位：扫描阶段跳过（不当候选）",
+                Core.Qbar.Content.ContentIndex.WouldEnumerateForTest(dir, cloud) == false, "");
+            Check("云占位：本地文件照常成为候选",
+                Core.Qbar.Content.ContentIndex.WouldEnumerateForTest(dir, local), "");
+
+            bool made = Core.Qbar.Content.ContentIndex.TryMakeDocForTest(cloud, out string reason);
+            Check("云占位：抽取阶段直接挡下（reason=cloud）", !made && reason == "cloud", reason);
+        }
+        finally
+        {
+            try
+            {
+                File.SetAttributes(cloud, FileAttributes.Normal);
+                Directory.Delete(dir, true);
+            }
+            catch { }
+        }
+    }
 }

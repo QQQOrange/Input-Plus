@@ -1,5 +1,6 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Security.Principal;
+using InputPlus.Core.Windows;
 
 namespace InputPlus.Core;
 
@@ -96,11 +97,10 @@ public static class ElevationHelper
 
         try
         {
-            var psi = new ProcessStartInfo(exe)
-            {
-                UseShellExecute = true,
-                Verb = "runas",       // 触发 UAC
-            };
+            /* 走统一入口：runas 只换令牌，不换子进程的"家"。
+             * 重启的是我们自己，工作目录必须是 exe 所在目录 ——
+             * 否则新实例的当前目录还停在上一个实例的目录上，配置/日志会跟着漂。 */
+            var psi = ExternalLaunch.ForTarget(exe, runAs: true);
             // 把原有参数带过去，但去掉 --elevated / --noelevate 避免冲突
             foreach (var a in args)
             {

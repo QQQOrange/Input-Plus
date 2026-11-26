@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using InputPlus.Core.Windows;
 
 namespace InputPlus.Core.Update;
 
@@ -706,8 +707,8 @@ public sealed class UpdateService
             //    先释放单实例互斥体：否则新进程会等旧实例退出，遇到“退出同步”
             //    最长 8 秒时可能超时，最终两个进程都没了。
             try { SingleInstance.Release(); } catch { }
-            //    带 --elevated，避免再次弹 UAC
-            var psi = new ProcessStartInfo(current) { UseShellExecute = true };
+            //    带 --elevated，避免再次弹 UAC；工作目录取 exe 自己的目录（统一入口负责）
+            var psi = ExternalLaunch.ForTarget(current);
             psi.ArgumentList.Add("--elevated");
             psi.ArgumentList.Add("--updated");
             Process.Start(psi);

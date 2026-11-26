@@ -395,6 +395,8 @@ public static partial class SelfTest
 
         try
         {
+            win.HoverEnabledForTest = false;
+            win.AnimationsEnabledForTest = false;
             win.Show();
             DoEvents(150);
             win.UpdateLayout();
@@ -466,60 +468,6 @@ public static partial class SelfTest
     }
 
     /// <summary>
-    /// 固定文件夹悬停展开：分页、排序、过滤。
-    ///
-    /// 用户要的是"先显示 10 个，剩下的滚出来"——分页逻辑必须能被机器验，
-    /// 否则很容易退化成"一次列完"（大目录卡死）或"只列第一页"（后面的永远看不到）。
-    /// </summary>
-    private static void TestFolderPeek()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "ip-peek-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(root, "bravo"));
-            Directory.CreateDirectory(Path.Combine(root, "Alpha"));
-            for (int i = 0; i < 25; i++)
-                File.WriteAllText(Path.Combine(root, "file-" + i.ToString("00") + ".txt"), i.ToString());
-            File.WriteAllText(Path.Combine(root, "desktop.ini"), "hidden");
-            File.SetAttributes(Path.Combine(root, "desktop.ini"), FileAttributes.Hidden | FileAttributes.System);
-
-            var all = FolderPeek.All(root);
-            CheckEqual("文件夹预览：隐藏/系统条目不进菜单",
-                all.Count(e => e.Name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)), 0);
-            Check("文件夹预览：文件夹排在文件前面", all[0].IsFolder && all[1].IsFolder, all[0].Name);
-            CheckEqual("文件夹预览：文件夹按名字排序", all[0].Name, "Alpha");
-            CheckEqual("文件夹预览：文件也按名字排序", all[2].Name, "file-00.txt");
-
-            int pageSize = FolderPeek.PageSizeFor(10);
-            var first = FolderPeek.Page(root, 0, pageSize, out bool more1);
-            CheckEqual("文件夹预览：第一页 10 条", first.Count, 10);
-            Check("文件夹预览：第一页后面还有", more1);
-
-            var second = FolderPeek.Page(root, 10, pageSize, out bool more2);
-            CheckEqual("文件夹预览：第二页 10 条", second.Count, 10);
-            Check("文件夹预览：第二页后面还有", more2);
-            Check("文件夹预览：两页不重复", !first.Select(e => e.Path).Intersect(second.Select(e => e.Path)).Any());
-
-            var third = FolderPeek.Page(root, 20, pageSize, out bool more3);
-            CheckEqual("文件夹预览：第三页只剩 7 条", third.Count, 7);
-            Check("文件夹预览：翻到底 hasMore=false", !more3);
-
-            CheckEqual("文件夹预览：越界页返回空",
-                FolderPeek.Page(root, 999, pageSize, out _).Count, 0);
-            CheckEqual("文件夹预览：不存在的目录返回空",
-                FolderPeek.Page(Path.Combine(root, "nope"), 0, pageSize, out _).Count, 0);
-
-            CheckEqual("文件夹预览：设置太小按 10 算", FolderPeek.PageSizeFor(3), 10);
-            CheckEqual("文件夹预览：设置太大按 50 封顶", FolderPeek.PageSizeFor(999), 50);
-            CheckEqual("文件夹预览：没设置按默认", FolderPeek.PageSizeFor(0), FolderPeek.DefaultPageSize);
-        }
-        finally
-        {
-            try { Directory.Delete(root, true); } catch { }
-        }
-    }
-
-    /// <summary>
     /// 滚动条宽度：全局 10 → 7，附加菜单再细到 4。
     ///
     /// 这类"像素级手感"的改动没有断言就很容易被后人改回去（或者被模板覆盖掉）。
@@ -555,7 +503,11 @@ public static partial class SelfTest
         Directory.CreateDirectory(dir);
         try
         {
-            for (int i = 0; i < 12; i++) File.WriteAllText(Path.Combine(dir, "f" + i + ".txt"), "");
+            /* v1.6.7：附加菜单的子级**只列文件夹**，所以这里要造目录；
+             * 而且得造到"比一屏还高"才看得见滚动条 —— 现在每一级的 MaxHeight
+             * 是工作区高度（用户要求"超出视口才内部滚动"），十几行根本滚不起来。 */
+            for (int i = 0; i < 80; i++)
+                Directory.CreateDirectory(Path.Combine(dir, "d" + i.ToString("000")));
 
             var def = new GestureMenuDef { HideTitle = true };
             def.Items.Add(new GestureMenuItem
@@ -575,6 +527,8 @@ public static partial class SelfTest
             };
             try
             {
+                win.HoverEnabledForTest = false;
+                win.AnimationsEnabledForTest = false;
                 win.Show();
                 DoEvents(150);
                 win.OpenFolderPeekForRender(0);
@@ -582,8 +536,9 @@ public static partial class SelfTest
                 DoEvents(80);
 
                 var bar = FindDescendant<System.Windows.Controls.Primitives.ScrollBar>(win.SubListForTest);
-                Check("滚动条：附加菜单二级更细（≤ 5 DIP）", bar != null && bar.ActualWidth <= 5,
-                    bar == null ? "没找到" : bar.ActualWidth.ToString("0.#"));
+                Check("滚动条：附加菜单二级更细（≤ 5 DIP）",
+                    bar != null && bar.ActualWidth > 0 && bar.ActualWidth <= 5,
+                    bar == null ? "没找到" : $"{bar.ActualWidth:0.#} 可见={bar.IsVisible}");
             }
             finally { win.Close(); }
         }
@@ -591,6 +546,348 @@ public static partial class SelfTest
         {
             try { Directory.Delete(dir, true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// 多级下钻（v1.6.7）—— 用户这一版的核心需求。
+    ///
+    /// 验收里能机器验的部分全在这里：
+    ///   · 任意层级都能展开出下一级，直到没有子文件夹；
+    ///   · 叶子不显示箭头、展开不出空面板；
+    ///   · 每级卡片贴在上一级右侧、纵向对齐那一行、不溢出屏幕；
+    ///   · 点任意层级的文件夹 → 走 FolderOpen（拦截后拿到归一化路径），菜单关闭；
+    ///   · 祖先链判重（防循环）。重解析点由枚举选项跳过，见 FolderTree 的结构断言。
+    /// </summary>
+    private static void TestFolderCascade()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ip-cascade-" + Guid.NewGuid().ToString("N"));
+        string deep = Path.Combine(root, "alpha", "beta", "gamma");
+        string leaf = Path.Combine(root, "zeta");
+
+        try
+        {
+            Directory.CreateDirectory(deep);
+            Directory.CreateDirectory(leaf);
+            File.WriteAllText(Path.Combine(leaf, "only-file.txt"), "x");   // 只有文件的目录 = 叶子
+            File.WriteAllText(Path.Combine(root, "a-file.txt"), "x");      // 子级不该列文件
+
+            /* 隐藏 / 系统目录不列：AppData、$RECYCLE.BIN 这类地方列出来只会让人误点，
+             * 而且它们是"点进去能绕回用户目录"的主要来源之一。 */
+            Directory.CreateDirectory(Path.Combine(root, "hidden-dir"));
+            File.SetAttributes(Path.Combine(root, "hidden-dir"),
+                FileAttributes.Hidden | FileAttributes.System);
+
+            // ── ① 枚举：只列目录、排序、三态、缓存 ──────────────────
+            FolderTree.ClearCache();
+            var listing = FolderTree.List(root);
+            Check("目录树：枚举成功", listing.Ok, listing.Detail);
+            Check("目录树：只列子文件夹（文件不进来）",
+                listing.Items.All(i => i.Name != "a-file.txt"),
+                string.Join(" | ", listing.Items.Select(i => i.Name)));
+            Check("目录树：隐藏/系统目录不进菜单",
+                listing.Items.All(i => i.Name != "hidden-dir"),
+                string.Join(" | ", listing.Items.Select(i => i.Name)));
+            CheckEqual("目录树：按名字排序",
+                string.Join(",", listing.Items.Select(i => i.Name)),
+                "alpha,zeta");
+
+            var alpha = listing.Items.First(i => i.Name == "alpha");
+            var zeta = listing.Items.First(i => i.Name == "zeta");
+            Check("目录树：有下级的标 true", alpha.HasSubfolders == true, alpha.HasSubfolders?.ToString() ?? "null");
+            Check("目录树：只有文件的目录标 false", zeta.HasSubfolders == false, zeta.HasSubfolders?.ToString() ?? "null");
+            Check("目录树：第二次走缓存", FolderTree.List(root).FromCache);
+            Check("目录树：fresh 绕过缓存", !FolderTree.List(root, fresh: true).FromCache);
+            CheckEqual("目录树：不存在的目录 → Missing",
+                FolderTree.List(Path.Combine(root, "nope")).Failure, FolderTree.FailureKind.Missing);
+            Check("目录树：枚举时跳过重解析点（防无限下钻的第一道闸）",
+                FolderTree.SkipsReparsePointsForTest);
+
+            // ── ② 窗口：一级 → 二级 → 三级 → 四级 ──────────────────
+            var def = new GestureMenuDef { HideTitle = true };
+            def.Items.Add(new GestureMenuItem { Title = "root", Arg = root, Action = "openFile" });
+
+            var win = new UI.Windows.GestureMenuWindow(def, _ => "", null)
+            {
+                ShowInTaskbar = false,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Left = SystemParameters.WorkArea.Left + 40,
+                Top = SystemParameters.WorkArea.Top + 40,
+            };
+
+            string? launched = null;
+            try
+            {
+                win.HoverEnabledForTest = false;
+                win.AnimationsEnabledForTest = false;
+                win.Show();
+                DoEvents(200);
+                win.UpdateLayout();
+
+                CheckEqual("下钻：一级能展开出二级", win.ExpandForTest(0, 0), 1);
+                CheckEqual("下钻：二级内容 = 子文件夹数",
+                    win.LevelListForTest(1).Items.Count, listing.Items.Count);
+
+                int alphaIndex = IndexOfEntry(win, 1, "alpha");
+                int zetaIndex = IndexOfEntry(win, 1, "zeta");
+                Check("下钻：二级里能找到 alpha", alphaIndex >= 0, $"alpha={alphaIndex}");
+                Check("下钻：二级里能找到 zeta", zetaIndex >= 0, $"zeta={zetaIndex}");
+                if (alphaIndex < 0 || zetaIndex < 0) return;
+
+                CheckEqual("下钻：有下级的行显示箭头",
+                    win.EntryForTest(1, alphaIndex)?.ArrowVisibility ?? Visibility.Collapsed, Visibility.Visible);
+                CheckEqual("下钻：叶子（只有文件）不显示箭头",
+                    win.EntryForTest(1, zetaIndex)?.ArrowVisibility ?? Visibility.Visible, Visibility.Collapsed);
+
+                /* 图标：二级起的文件夹行必须带**真图标来源**（和资源管理器同一套 shell 图标），
+                 * 不是统一字形。图标本身是后台取的，这里验"来源路径给对了"。 */
+                Check("下钻：二级行带资源管理器图标来源",
+                    win.EntryForTest(1, alphaIndex)?.Item.IconPath == alpha.Path,
+                    win.EntryForTest(1, alphaIndex)?.Item.IconPath ?? "null");
+
+                CheckEqual("下钻：叶子展开不出面板（返回 -1）", win.ExpandForTest(1, zetaIndex), -1);
+                CheckEqual("下钻：叶子不增加层级", win.LevelCountForTest, 2);
+
+                int third = win.ExpandForTest(1, alphaIndex);
+                CheckEqual("下钻：二级 → 三级", third, 2);
+                int betaIndex = IndexOfEntry(win, 2, "beta");
+                Check("下钻：三级里能找到 beta", betaIndex >= 0, $"beta={betaIndex}");
+                if (betaIndex < 0) return;
+
+                int fourth = win.ExpandForTest(2, betaIndex);
+                CheckEqual("下钻：三级 → 四级", fourth, 3);
+                int gammaIndex = IndexOfEntry(win, 3, "gamma");
+                Check("下钻：四级里是 gamma", gammaIndex >= 0, $"gamma={gammaIndex}");
+                if (gammaIndex < 0) return;
+
+                var gamma = win.EntryForTest(3, gammaIndex);
+                CheckEqual("下钻：最深一层只有 gamma", win.LevelListForTest(3).Items.Count, 1);
+                CheckEqual("下钻：最深一层叶子无箭头",
+                    gamma?.ArrowVisibility ?? Visibility.Visible, Visibility.Collapsed);
+                Check("下钻：无障碍标签带层级",
+                    gamma?.AccessibleLabel.Contains("第 4 级") == true, gamma?.AccessibleLabel ?? "null");
+                Check("下钻：箭头按钮有无障碍名字",
+                    !string.IsNullOrWhiteSpace(gamma?.ExpandLabel), gamma?.ExpandLabel ?? "null");
+
+                // ── ③ 版式：贴在右侧、纵向对齐父行、不溢出屏幕 ──────
+                var card1 = win.LevelCardForTest(1);
+                var card2 = win.LevelCardForTest(2);
+                Point right1 = card1.PointToScreen(new Point(card1.ActualWidth, 0));
+                Point left2 = card2.PointToScreen(new Point(0, 0));
+                Check("下钻：三级卡片贴在二级右侧（不覆盖）", left2.X >= right1.X - 1,
+                    $"二级右沿={right1.X:0.#} 三级左沿={left2.X:0.#}");
+                Check("下钻：三级紧贴二级（间隙 ≤ 1 DIP）",
+                    Math.Abs(left2.X - right1.X) <= 2, $"{left2.X - right1.X:0.##} px");
+
+                // 纵向：三级卡片顶 = 二级（alpha 那一行所在级）里 beta 那一行的顶
+                win.LevelListForTest(1).UpdateLayout();
+                if (win.LevelListForTest(1).ItemContainerGenerator.ContainerFromIndex(betaIndex) is ListBoxItem betaRow)
+                {
+                    Point rowTop = betaRow.PointToScreen(new Point(0, 0));
+                    Check("下钻：子面板与父条目顶端对齐", Math.Abs(left2.Y - rowTop.Y) <= 2,
+                        $"行顶={rowTop.Y:0.#} 卡片顶={left2.Y:0.#}");
+                }
+
+                Rect work = SystemParameters.WorkArea;
+                Check("下钻：整条链不溢出屏幕",
+                    win.Left >= work.Left - 1 && win.Left + win.ActualWidth <= work.Right + 1
+                    && win.Top >= work.Top - 1 && win.Top + win.ActualHeight <= work.Bottom + 1,
+                    $"窗口=({win.Left:0.#},{win.Top:0.#}) {win.ActualWidth:0.#}x{win.ActualHeight:0.#}");
+
+                // ── ④ 祖先链判重 ─────────────────────────────────────
+                Check("下钻：同一目录已在链上 → 判为循环", win.WouldCycleForTest(1, root));
+                Check("下钻：不同目录不判循环", !win.WouldCycleForTest(1, Path.Combine(root, "alpha", "beta")));
+
+                // ── ⑤ 点击任意层级文件夹 → 资源管理器（拦截）─────────
+                launched = null;
+                InputPlus.Core.Actions.FolderOpen.InterceptForTest = p => launched = p;
+                win.ClickForTest(3, gammaIndex);
+                DoEvents(500);
+
+                CheckEqual("点击深层文件夹：交给 explorer 的路径正确",
+                    launched ?? "", InputPlus.Core.Actions.FolderOpen.Normalize(deep));
+                Check("点击深层文件夹：菜单请求关闭", win.FolderOpenRequested);
+                Check("点击深层文件夹：不再把动作交回宿主（避免开两个窗口）", win.Selected == null);
+                Check("点击深层文件夹：没有因此多展开一级", win.LevelCountForTest <= 4);
+            }
+            finally
+            {
+                InputPlus.Core.Actions.FolderOpen.InterceptForTest = null;
+                try { win.Close(); } catch { }
+            }
+
+            TestFolderCascadeErrorState(root);
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 读目录失败：要显示"无权访问/目录已不存在"并且能重试；重试期间是 loading 占位。
+    /// 网络路径、慢盘同理（同一个 <see cref="FolderTree.List"/> 出口）。
+    /// </summary>
+    private static void TestFolderCascadeErrorState(string root)
+    {
+        string gone = Path.Combine(root, "gone");
+        Directory.CreateDirectory(Path.Combine(gone, "child"));
+
+        var def = new GestureMenuDef { HideTitle = true };
+        def.Items.Add(new GestureMenuItem { Title = "gone", Arg = gone, Action = "openFile" });
+
+        var win = new UI.Windows.GestureMenuWindow(def, _ => "", null)
+        {
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = SystemParameters.WorkArea.Left + 80,
+            Top = SystemParameters.WorkArea.Top + 80,
+        };
+
+        try
+        {
+            win.HoverEnabledForTest = false;
+            win.AnimationsEnabledForTest = false;
+            win.Show();
+            DoEvents(200);
+            win.UpdateLayout();
+
+            CheckEqual("读取失败：先展开出二级", win.ExpandForTest(0, 0), 1);
+            Directory.Delete(gone, true);   // 目录在菜单开着的时候消失了
+
+            win.ReloadFolderForTest(0, 0);
+            CheckEqual("读取失败：重读时先显示 loading 占位",
+                win.EntryForTest(1, 0)?.Kind ?? UI.Windows.GestureMenuEntry.EntryKind.Action,
+                UI.Windows.GestureMenuEntry.EntryKind.Loading);
+
+            DoEvents(500);
+            var first = win.EntryForTest(1, 0);
+            CheckEqual("读取失败：占位换成错误行",
+                first?.Kind ?? UI.Windows.GestureMenuEntry.EntryKind.Action,
+                UI.Windows.GestureMenuEntry.EntryKind.Error);
+            Check("读取失败：错误行标红", first?.IsError == true);
+            Check("读取失败：错误行提示可重试",
+                first?.Title.Contains("重试") == true, first?.Title ?? "null");
+
+            win.ClickForTest(1, 0);   // 点错误行 = 重试，不该抛
+            DoEvents(300);
+            Check("读取失败：错误行可点击重试（不崩）", win.LevelCountForTest >= 1);
+
+            /* Esc：用户要求一次收起**整条展开链**（不是一层一层收）。 */
+            win.CollapseChainForTest();
+            CheckEqual("键盘：Esc 收起整条链（回到一级）", win.LevelCountForTest, 1);
+
+            /* 点一个已经不存在的文件夹：必须在行上写出原因，不能"点了没反应"。 */
+            win.ClickForTest(0, 0);
+            DoEvents(400);
+            var folderRow = win.EntryForTest(0, 0);
+            Check("调起失败：行上给出明确原因",
+                folderRow?.IsError == true && (folderRow?.Note.Length ?? 0) > 0,
+                folderRow?.Note ?? "null");
+        }
+        finally
+        {
+            try { win.Close(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 路径处理：归一化 + 命令行拼写（对应验收里"空格/中文/UNC/驱动器根/超长路径"）。
+    /// 真开资源管理器没有意义（CI 没有桌面），这里只钉"交给 explorer 的那串字符"。
+    /// </summary>
+    private static void TestFolderOpenPaths()
+    {
+        string temp = Path.GetTempPath();
+        CheckEqual("打开文件夹：展开 %TEMP%", InputPlus.Core.Actions.FolderOpen.Normalize("%TEMP%\\"),
+            InputPlus.Core.Actions.FolderOpen.Normalize(temp));
+        CheckEqual("打开文件夹：正斜杠归一 + 去尾斜杠",
+            InputPlus.Core.Actions.FolderOpen.Normalize("C:/Windows/System32/"), @"C:\Windows\System32");
+        CheckEqual("打开文件夹：盘符根保留反斜杠",
+            InputPlus.Core.Actions.FolderOpen.Normalize(@"C:\"), @"C:\");
+        CheckEqual("打开文件夹：盘符根多打的斜杠也收成一个",
+            InputPlus.Core.Actions.FolderOpen.Normalize(@"C:\\"), @"C:\");
+        CheckEqual("打开文件夹：去引号",
+            InputPlus.Core.Actions.FolderOpen.Normalize("\"C:\\Windows\""), @"C:\Windows");
+        CheckEqual("打开文件夹：UNC 去尾斜杠",
+            InputPlus.Core.Actions.FolderOpen.Normalize(@"\\server\share\docs\"), @"\\server\share\docs");
+        CheckEqual("打开文件夹：剥 \\\\?\\ 前缀",
+            InputPlus.Core.Actions.FolderOpen.Normalize(@"\\?\C:\Windows"), @"C:\Windows");
+        CheckEqual("打开文件夹：剥 \\\\?\\UNC 前缀",
+            InputPlus.Core.Actions.FolderOpen.Normalize(@"\\?\UNC\srv\share"), @"\\srv\share");
+        CheckEqual("打开文件夹：~ 展开到用户目录",
+            InputPlus.Core.Actions.FolderOpen.Normalize("~"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        CheckEqual("命令行：盘符根不加引号（C:\\\" 会被读成 C:\"）",
+            InputPlus.Core.Actions.FolderOpen.CommandLineForTest(@"C:\"), @"explorer.exe C:\");
+        CheckEqual("命令行：空格整体加引号",
+            InputPlus.Core.Actions.FolderOpen.CommandLineForTest(@"C:\Program Files"),
+            "explorer.exe \"C:\\Program Files\"");
+        CheckEqual("命令行：中文与 & 不用额外转义",
+            InputPlus.Core.Actions.FolderOpen.CommandLineForTest(@"D:\资料 & 备份"),
+            "explorer.exe \"D:\\资料 & 备份\"");
+        CheckEqual("命令行：UNC 加引号",
+            InputPlus.Core.Actions.FolderOpen.CommandLineForTest(@"\\srv\share\a b"),
+            "explorer.exe \"\\\\srv\\share\\a b\"");
+
+        var missing = InputPlus.Core.Actions.FolderOpen.TryLaunch(
+            Path.Combine(temp, "ip-none-" + Guid.NewGuid().ToString("N")));
+        Check("打开文件夹：不存在时明确失败（不静默）", !missing.Ok && missing.Error.Length > 0, missing.Error);
+
+        string? seen = null;
+        InputPlus.Core.Actions.FolderOpen.InterceptForTest = p => seen = p;
+        try
+        {
+            var ok = InputPlus.Core.Actions.FolderOpen.TryLaunch(temp);
+            Check("打开文件夹：存在的目录能调起", ok.Ok, ok.Error);
+            CheckEqual("打开文件夹：交给 explorer 的是归一化后的绝对路径",
+                seen ?? "", InputPlus.Core.Actions.FolderOpen.Normalize(temp));
+        }
+        finally { InputPlus.Core.Actions.FolderOpen.InterceptForTest = null; }
+
+        /* 超长路径（>260 字符）：不带前缀的 Directory.Exists 认不出来，带 \\?\ 才行。
+         * 这条用例真的造一个几百字符深的目录，验"归一化 → 存在性 → 交给 explorer 的形式"。 */
+        string longRoot = Path.Combine(Path.GetTempPath(), "ip-long-" + Guid.NewGuid().ToString("N")[..8]);
+        string deep = longRoot;
+        try
+        {
+            for (int i = 0; i < 24; i++) deep = Path.Combine(deep, "abcdefghijklmnop");
+            Directory.CreateDirectory(@"\\?\" + deep);
+            Check("超长路径：确实超过 260 字符", deep.Length > 260, deep.Length.ToString());
+
+            string? seenLong = null;
+            InputPlus.Core.Actions.FolderOpen.InterceptForTest = p => seenLong = p;
+            var result = InputPlus.Core.Actions.FolderOpen.TryLaunch(deep);
+            Check("超长路径：能调起（不静默失败）", result.Ok, result.Error);
+            /* 两种形态都算对：系统开了长路径支持（LongPathsEnabled）时就是原样的绝对路径，
+             * 否则要补 \\?\ 前缀 —— explorer 不认不带前缀的超长路径，会静默什么都不做。 */
+            Check("超长路径：交给 explorer 的形态可用",
+                seenLong != null
+                && (seenLong.StartsWith(@"\\?\") || string.Equals(seenLong, deep, StringComparison.OrdinalIgnoreCase))
+                && seenLong.EndsWith("abcdefghijklmnop", StringComparison.OrdinalIgnoreCase),
+                seenLong ?? "null");
+        }
+        catch (Exception ex)
+        {
+            Check("超长路径：用例执行", false, ex.Message);
+        }
+        finally
+        {
+            InputPlus.Core.Actions.FolderOpen.InterceptForTest = null;
+            try { Directory.Delete(@"\\?\" + longRoot, true); } catch { }
+        }
+    }
+
+    /// <summary>第 <paramref name="level"/> 级里名字叫 <paramref name="title"/> 的行下标（没有 = -1）。</summary>
+    private static int IndexOfEntry(UI.Windows.GestureMenuWindow win, int level, string title)
+    {
+        var list = win.LevelListForTest(level);
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            if (list.Items[i] is UI.Windows.GestureMenuEntry entry &&
+                string.Equals(entry.Title, title, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
     }
 
     private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject

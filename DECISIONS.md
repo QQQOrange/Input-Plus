@@ -593,3 +593,38 @@
   面板开着时**重新可以被截图/录屏拍到**（不再设 `WDA_EXCLUDEFROMCAPTURE`）。
 - **放弃**：在自建玻璃上继续调参 —— 已经调过一轮（v1.6.5 → v1.6.6 第一次尝试），
   用户看完成品直接否掉，说明问题不在参数。
+
+## 十、外部程序启动：工作目录统一走 ExternalLaunch（2026-11-26）
+
+**起因**：把 `wb2api.exe` 绑到按键上启动，它读不到自己目录里的 `config.json`；
+在资源管理器里双击同一个 exe 却一切正常。盘上留下的现场：
+
+- `D:\software\myself\config.json`（`api_key` 与真身不同）+ `D:\software\myself\data\`
+  —— 孤儿配置和被写歪的日志/统计，时间戳 11-24 22:35；
+- wb2api 的 README 自己写着「工作目录**就是**放 config.json 的地方」，
+  而它的 `auth_dir: "./auths"`、`state_file: "./data/state.json"` 也都是相对路径；
+- 拿同一个 exe、换一个空目录当工作目录跑一次，它当场打印
+  「config.json 不存在，已生成推荐配置」——机制当场复现。
+
+### D10-01 起外部进程只留一个入口，路径类目标一律带上它自己的目录
+- **决定**：新增 `Core/Windows/ExternalLaunch.cs`（`ForTarget` / `ForProgram` / `WorkDirFor` /
+  `IsLocalPath`），把仓库里"把路径交给系统去打开/执行"的 11 处调用点全部改走它：
+  `WindowService.LaunchInForeground`、`OpenFolderInForeground`、`QbarCommandStore.Execute`、
+  `QbarService.OpenFileTarget`、`QbarWindow`（OpenTarget / RunTarget / RunAsAdmin）、
+  `QbarExpandWindow.OpenSelected`、`WindowBindingService.LaunchAndTrackExe`、
+  `ActionContext.RunProgram`、`CustomKeyRunner.Launch`、`ElevationHelper.Relaunch`、
+  `UpdateService` 起新版本、`SettingsView` 打开配置/日志。
+- **理由**：不显式给 `WorkingDirectory` 时子进程**继承父进程的当前目录**，而我们是常驻程序，
+  当前目录常年停在安装目录。这跟"某个程序的怪癖"无关 —— git、ffmpeg、node、各类面板
+  都按工作目录找自己的东西。"被键启动"和"被双击"唯一的差别就是谁给的当前目录，
+  所以修在"给当前目录"这一层，而不是给 wb2api 打特例。
+- **代价**：多一层间接。反面清单必须写清，否则以后有人给网址/协议也塞工作目录：
+  `http(s)://`、`ms-settings:`、`shell:…`、PATH 里的裸命令名（`notepad`）、
+  以及**目录**本身，这四类一律不设（`WorkDirFor` 返回空串）。
+  `.lnk` 快捷方式自带"起始位置"，shell 会用快捷方式里的值覆盖我们给的 `lpDirectory` —— 那是对的，不要纠正。
+- **放弃**：只在出事的那个调用点补一行 `WorkingDirectory`。同一个坑当时还有
+  `WindowBindingService` / `QbarCommandStore`（工作目录留空）/ `UpdateService` 三处敞着，
+  补一处等于等下一次事故。
+- **验证**：`SelfTest.ExternalLaunch.cs` 29 项（判定规则、取值、拼出的 `ProcessStartInfo`、
+  以及"目标的工作目录绝不等于我们的当前目录"这条回归守卫），
+  Release 构建 0 错误，`artifacts\InputPlus.exe --selftest --only=ExternalLaunch` 29/29 通过。

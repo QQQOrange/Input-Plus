@@ -371,13 +371,10 @@ public sealed partial class ActionContext
             }
             else
             {
-                psi = new ProcessStartInfo(plan.Exe) { UseShellExecute = false };
-                if (plan.Args.Length > 0) psi.Arguments = plan.Args;
-
-                /* 不给 WorkDirectory 的话，程序的"当前目录"会是我们自己的安装目录，
-                 * 它写的日志/配置就落到程序目录外面去了。给了完整路径时按 exe 所在目录启动。 */
-                string dir = Path.GetDirectoryName(plan.Exe) ?? "";
-                if (dir.Length > 0 && Directory.Exists(dir)) psi.WorkingDirectory = dir;
+                /* 工作目录 = exe 自己的目录，由 ExternalLaunch 统一补。
+                 * 不给的话子进程会继承我们的当前目录，它写的日志/配置就落到程序目录外面去了
+                 * （2026-11-26：wb2api 的 config.json 就是这么堆到 InputPlus 目录里的）。 */
+                psi = ExternalLaunch.ForProgram(plan.Exe, plan.Args);
             }
 
             Process.Start(psi);

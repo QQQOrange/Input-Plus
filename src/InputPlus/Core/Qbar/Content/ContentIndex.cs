@@ -3,13 +3,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using InputPlus.Core.Qbar;
 using InputPlus.Core.Qbar.Search;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Windows;
 
 namespace InputPlus.Core.Qbar.Content;
 
@@ -493,6 +491,20 @@ internal static class ContentIndex
         return ContentNative.Search(query, limit);
     }
 
+    // ─────────────────────────── 自检入口 ───────────────────────────
+
+    /// <summary>仅供自检：这个文件会不会在**扫描阶段**成为候选（false = 被跳过）。</summary>
+    internal static bool WouldEnumerateForTest(string root, string file)
+    {
+        foreach (string hit in EnumerateFiles(root, CancellationToken.None))
+            if (string.Equals(hit, file, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>仅供自检：单文件抽取会不会被挡下（reason=cloud 表示云占位，根本没读内容）。</summary>
+    internal static bool TryMakeDocForTest(string path, out string reason)
+        => TryMakeDoc(path, out _, out reason);
+
     // ─────────────────────────── 构建 ───────────────────────────
 
     private static void StartBuild(string[] roots, bool clearFirst)
@@ -720,6 +732,17 @@ internal static class ContentIndex
             var info = new FileInfo(path);
             if (!info.Exists) { reason = "missing"; return false; }
             if (info.Length > _options.MaxFileBytes) { reason = "too-large"; return false; }
+
+            /* 云占位文件（OneDrive"仅在线"/按需文件、"释放空间"过的文件）：
+             * 抽一次正文 = 把整个文件从云端拉下来。用户只是开了全文搜索，
+             * 不应该变成"OneDrive 在后台疯狂下载"，所以这一条必须挡在抽取之前。
+             * 读属性不触发下载，只有读内容才会。 */
+            if (CloudPlaceholder.IsPlaceholder(info.Attributes))
+            {
+                reason = "cloud";
+                return false;
+            }
+
             if ((info.Attributes & (FileAttributes.System | FileAttributes.Temporary)) != 0 && !_options.IncludeHidden)
             {
                 reason = "system";
@@ -833,6 +856,10 @@ internal static class ContentIndex
                 }
                 else if (e is FileInfo f)
                 {
+                    /* 云占位文件在**枚举阶段**就跳过（属性来自目录元数据，零成本、不触发下载）。
+                     * 这样连"候选"都不算，后面的抽取更不会去碰它 —— 双保险：
+                     * 增量线程按路径送进来的那些，还会在 TryMakeDoc 里再判一次。 */
+                    if (CloudPlaceholder.IsPlaceholder(f.Attributes)) continue;
                     yield return f.FullName;
                 }
             }

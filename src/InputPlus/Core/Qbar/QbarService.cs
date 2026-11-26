@@ -968,7 +968,9 @@ public sealed class QbarService
         {
             if (File.Exists(path))
             {
-                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                // 文件自己的目录就是它的工作目录：不设的话子进程继承我们的目录，
+                // 那些"配置放在自己旁边"的程序就会在 InputPlus 目录里另起一份世界
+                Process.Start(ExternalLaunch.ForTarget(path));
                 RecentTargets.Record(path);
                 return;
             }

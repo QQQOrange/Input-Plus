@@ -111,8 +111,9 @@ public static partial class SelfTest
         Section("中键菜单");
         T(nameof(TestMiddleMenu), TestMiddleMenu);
         T(nameof(TestAttachMenuLayout), TestAttachMenuLayout);
-        T(nameof(TestFolderPeek), TestFolderPeek);
         T(nameof(TestThinScrollBars), TestThinScrollBars);
+        T(nameof(TestFolderCascade), TestFolderCascade);
+        T(nameof(TestFolderOpenPaths), TestFolderOpenPaths);
         T(nameof(TestFavorites), TestFavorites);
 
         Section("收藏当前文件");
@@ -146,6 +147,7 @@ public static partial class SelfTest
 
         Section("Qbar 检索");
         T(nameof(TestQbar), TestQbar);
+        T(nameof(TestCloudPlaceholderSkip), TestCloudPlaceholderSkip);
 
         Section("Qbar 标签");
         T(nameof(TestChips), TestChips);
@@ -277,6 +279,11 @@ public static partial class SelfTest
 
         Section("打开文件夹");
         T(nameof(TestFolderLeafName), TestFolderLeafName);
+
+        /* 外部程序的工作目录（2026-11-26 wb2api 事故的回归守卫）：
+         * 子进程默认继承父进程的当前目录，忘了给就会把配置写到 InputPlus 脚边。 */
+        Section("外部程序启动");
+        T(nameof(TestExternalLaunch), TestExternalLaunch);
 
         Section("窗口激活与最小化");
         T(nameof(TestWindowActivateAndMinimize), TestWindowActivateAndMinimize);

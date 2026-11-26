@@ -3439,11 +3439,8 @@ public partial class QbarWindow : Window, IComponentConnector
 	{
 		try
 		{
-			Process.Start(new ProcessStartInfo(path)
-			{
-				UseShellExecute = true,
-				Verb = "runas"
-			});
+			// 提权启动也要带工作目录：UAC 只换令牌，不换"子进程的家"
+			Process.Start(ExternalLaunch.ForTarget(path, runAs: true));
 			RecentTargets.Record(path);
 		}
 		catch (Exception ex)
@@ -3564,10 +3561,8 @@ public partial class QbarWindow : Window, IComponentConnector
 		}
 		try
 		{
-			Process.Start(new ProcessStartInfo(target)
-			{
-				UseShellExecute = true
-			});
+			// 打开文件/文件夹都走统一入口：本机路径自动带上它自己的目录
+			Process.Start(ExternalLaunch.ForTarget(target));
 			RecentTargets.Record(target);
 		}
 		catch (Exception ex)
@@ -3580,16 +3575,9 @@ public partial class QbarWindow : Window, IComponentConnector
 	{
 		try
 		{
-			ProcessStartInfo processStartInfo = new ProcessStartInfo(target)
-			{
-				UseShellExecute = true,
-				Arguments = args
-			};
-			if (asAdmin)
-			{
-				processStartInfo.Verb = "runas";
-			}
-			Process.Start(processStartInfo);
+			/* 目标是自己目录里的程序时，"工作目录"决定它读哪份配置 ——
+			 * 交给统一入口算，别在这里另写一份判断。 */
+			Process.Start(ExternalLaunch.ForTarget(target, args, asAdmin));
 			RecentTargets.Record(target);
 		}
 		catch (Exception ex)

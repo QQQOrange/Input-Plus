@@ -301,16 +301,20 @@ public static class RenderTools
                     Save(subShot, Path.Combine(outDir, "attach-menu-sub.png"));
                     subShot.Close();
 
-                    /* 固定文件夹悬停展开（v1.5.10）：先给一页，剩下的滚动出来。
-                       出图要能看见"二级列表有滚动条、且只显示第一页"。 */
+                    /* 固定文件夹的**多级下钻**（v1.6.7）。
+                       用户这一版要的是"悬停一层出一层，能一直钻下去"，所以出图必须是
+                       三级摞在一起的样子：一级菜单 → 子文件夹（含滚动条）→ 再下一级。
+                       只拍两级的话，"第三级贴着第二级、纵向对齐父行"这几条没人看得见。 */
                     string peekDir = Path.Combine(Path.GetTempPath(), "ip-render-peek");
                     try
                     {
                         if (Directory.Exists(peekDir)) Directory.Delete(peekDir, true);
                         Directory.CreateDirectory(peekDir);
-                        Directory.CreateDirectory(Path.Combine(peekDir, "子文件夹"));
+                        Directory.CreateDirectory(Path.Combine(peekDir, "项目", "2026", "第四季度"));
+                        Directory.CreateDirectory(Path.Combine(peekDir, "截图"));
+                        Directory.CreateDirectory(Path.Combine(peekDir, "下载"));
                         for (int i = 1; i <= 14; i++)
-                            File.WriteAllText(Path.Combine(peekDir, "示例文件-" + i.ToString("00") + ".txt"), "x");
+                            Directory.CreateDirectory(Path.Combine(peekDir, "资料-" + i.ToString("00")));
 
                         var peekDef = new InputPlus.Core.Scripting.GestureMenuDef
                         {
@@ -340,10 +344,23 @@ public static class RenderTools
                             Left = 120,
                             Top = 120,
                         };
+                        /* 出图要静止的帧：动画关掉、悬停关掉（否则光标位置决定拍到第几级）。 */
+                        peekWin.AnimationsEnabledForTest = false;
+                        peekWin.HoverEnabledForTest = false;
                         peekWin.Show();
                         Pump(260);
-                        peekWin.OpenFolderPeekForRender(0);
-                        Pump(300);
+
+                        peekWin.ExpandForTest(0, 0);
+                        Pump(420);
+
+                        int project = IndexOfLevelEntry(peekWin, 1, "项目");
+                        if (project >= 0) peekWin.ExpandForTest(1, project);
+                        Pump(420);
+
+                        int y2026 = IndexOfLevelEntry(peekWin, 2, "2026");
+                        if (y2026 >= 0) peekWin.ExpandForTest(2, y2026);
+                        Pump(420);
+
                         Save(peekWin, Path.Combine(outDir, "attach-menu-folder.png"));
                         peekWin.Close();
                         Pump(120);
@@ -1737,6 +1754,22 @@ public static class RenderTools
             if (deeper != null) return deeper;
         }
         return null;
+    }
+
+    /// <summary>
+    /// 第 <paramref name="level"/> 级里标题为 <paramref name="title"/> 的行下标（没有 = -1）。
+    /// 出图脚本要"点开指定的那一级"，不能写死下标 —— 目录排序一变，下标就变了。
+    /// </summary>
+    private static int IndexOfLevelEntry(GestureMenuWindow win, int level, string title)
+    {
+        try
+        {
+            var list = win.LevelListForTest(level);
+            for (int i = 0; i < list.Items.Count; i++)
+                if (list.Items[i] is GestureMenuEntry entry && entry.Title == title) return i;
+        }
+        catch { /* 层级不存在就算了，出图不该因此失败 */ }
+        return -1;
     }
 
     /// <summary>

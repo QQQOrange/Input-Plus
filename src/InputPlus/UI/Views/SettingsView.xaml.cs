@@ -9,6 +9,7 @@ using InputPlus.Core.Input;
 using InputPlus.Core.Localization;
 using InputPlus.UI.Windows;
 using InputPlus.Core.Settings;
+using InputPlus.Core.Windows;
 using InputPlus.UI.Theme;
 using Microsoft.Win32;
 
@@ -1642,7 +1643,8 @@ public partial class SettingsView : UserControl
         try
         {
             Directory.CreateDirectory(AppPaths.DataDir);
-            Process.Start(new ProcessStartInfo(AppPaths.SettingsFile) { UseShellExecute = true });
+            // 统一入口：设置文件自己的目录当工作目录（编辑器/记事本读相对路径时不至于跑偏）
+            Process.Start(ExternalLaunch.ForTarget(AppPaths.SettingsFile));
         }
         catch (Exception ex)
         {
@@ -1660,7 +1662,7 @@ public partial class SettingsView : UserControl
             string export = Path.Combine(Path.GetTempPath(),
                 $"InputPlus-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
             File.WriteAllText(export, text, System.Text.Encoding.UTF8);
-            Process.Start(new ProcessStartInfo(export) { UseShellExecute = true });
+            Process.Start(ExternalLaunch.ForTarget(export));
         }
         catch (Exception ex)
         {
