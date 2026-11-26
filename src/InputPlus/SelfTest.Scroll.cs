@@ -349,6 +349,25 @@ public static partial class SelfTest
         Check("例外匹配：没列出来的程序返回空（跟随全局）", SmoothScrollService.FindRule(rules, "notepad.exe") == null);
         Check("例外匹配：空表返回空", SmoothScrollService.FindRule(new List<ScrollAppRule>(), "game.exe") == null);
 
+        /* WPS 套件：同一个 office6 目录下的 wps / et / wpp 是一份安装。
+         * 2026-11-26 报障：用户禁了 wps.exe，在 WPS 表格（et.exe）里照样平滑 ——
+         * 因为 et 与 wps 既不同名也不是前缀，老的 SameApp 直接判"没这条规则"。 */
+        const string office6 = @"D:\software\WPS Office\12.1.0.29690\office6\";
+        var wpsRules = new List<ScrollAppRule>
+        {
+            new() { AppPath = office6 + "wps.exe", Enabled = false },
+        };
+        Check("例外匹配：禁了 wps 也管住同一套装的 et（表格）",
+            SmoothScrollService.FindRule(wpsRules, office6 + "et.exe")?.Enabled == false);
+        Check("例外匹配：禁了 wps 也管住 wpp（演示）",
+            SmoothScrollService.FindRule(wpsRules, office6 + "wpp.exe")?.Enabled == false);
+        Check("例外匹配：wps 与 wpspdf 算一家（同前缀族）",
+            SmoothScrollService.FindRule(wpsRules, office6 + "wpspdf.exe")?.Enabled == false);
+        Check("例外匹配：别处同名的 et.exe 不受牵连",
+            SmoothScrollService.FindRule(wpsRules, @"D:\tools\et.exe") == null);
+        Check("例外匹配：另一份 WPS 安装不受牵连",
+            SmoothScrollService.FindRule(wpsRules, @"C:\WPS\office6\et.exe") == null);
+
         // ---- 服务入口：三条"原样放行"的分支 ----
         var offSettings = new AppSettings { Scroll = new ScrollOptions { Enabled = false } };
         using (var off = new SmoothScrollService(() => offSettings))

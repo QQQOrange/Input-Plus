@@ -274,7 +274,13 @@ public sealed class SmoothScrollService : IDisposable
         if (IsClassicScrollControl(_targetClass)) { Interlocked.Increment(ref _rejectedRule); return Pass("经典控件：" + _targetClass); }
 
         var rule = FindRuleCached(settings.ScrollApps, app);
-        if (rule is { Enabled: false }) { Interlocked.Increment(ref _rejectedRule); return Pass("程序例外禁用：" + app); }
+        if (rule is { Enabled: false })
+        {
+            Interlocked.Increment(ref _rejectedRule);
+            /* 带上命中的规则本身：用户报"禁了还在平滑"时，日志要能直接看出
+             * 命中的是哪一条、目标程序是哪个 —— 否则只能靠猜（见 SameAppOrFamily）。 */
+            return Pass("程序例外禁用：" + app + "（规则 " + rule.AppPath + "）");
+        }
 
         /* ③ Ctrl / Alt + 滚轮 = 缩放/切层，上游直接放行。
          *    我们以前没有这条，浏览器里 Ctrl+滚轮 被接走后重新注入，缩放变得一顿一顿。 */
@@ -786,9 +792,73 @@ public sealed class SmoothScrollService : IDisposable
         foreach (var rule in snapshot)
         {
             if (rule == null) continue;
-            if (GestureTriggerMap.SameApp(rule.AppPath, app)) return rule;
+            if (SameAppOrFamily(rule.AppPath, app)) return rule;
         }
         return null;
+    }
+
+    /// <summary>
+    /// 规则里的程序与当前目标算不算"同一个程序"。
+    ///
+    /// 比 <see cref="GestureTriggerMap.SameApp"/> 多两条，都是用户实测踩出来的：
+    ///
+    ///   ① **同族进程**（wps / wpspdf / wpscloudsvr）：WPS 的 PDF 阅读器是单独进程，
+    ///      用户在设置里禁了 "WPS"，切到 PDF 里滚动照样平滑 —— 那是同一套软件；
+    ///   ② **WPS 套件**（wps 文字 / et 表格 / wpp 演示 / wpspdf）：它们装在同一个
+    ///      `…\office6\` 目录下，是同一份安装。用户在"平滑滚动 → 程序例外"里挑的
+    ///      是他当下那个窗口的 exe（多半是 wps.exe），之后在**表格**里滚 ——
+    ///      et.exe 与 wps.exe 既不是同名也不是前缀，于是规则整条失效。
+    ///      2026-11-26 的报障就是这一条。
+    ///
+    /// 要求"同一个 office6 目录"，是为了不把别的软件里恰好叫 et.exe / wps.exe
+    /// 的程序一起禁掉。
+    /// </summary>
+    internal static bool SameAppOrFamily(string? rulePath, string? targetPath)
+    {
+        if (GestureTriggerMap.SameApp(rulePath, targetPath)) return true;
+
+        string a = StemOf(rulePath), b = StemOf(targetPath);
+        if (a.Length == 0 || b.Length == 0) return false;
+
+        if (ForegroundFileProbe.SameFamily(a, b)) return true;
+
+        return IsWpsSuiteName(a) && IsWpsSuiteName(b) && SameWpsInstall(rulePath!, targetPath!);
+    }
+
+    /// <summary>WPS 套件里的几个主程序名（去扩展名、小写）。</summary>
+    private static readonly string[] WpsSuiteNames = { "wps", "et", "wpp", "wpspdf", "wpscloudsvr", "wpsoffice" };
+
+    private static bool IsWpsSuiteName(string stem) =>
+        WpsSuiteNames.Contains(stem, StringComparer.OrdinalIgnoreCase);
+
+    private static string StemOf(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+        try { return Path.GetFileNameWithoutExtension(path).ToLowerInvariant(); }
+        catch { return ""; }
+    }
+
+    /// <summary>
+    /// 两个 WPS 程序是不是同一份安装：取 <c>…\office6\</c> 之前的目录比较。
+    /// 拿不到目录（规则里只写了文件名）就返回 false —— 宁可让规则不生效，
+    /// 也不能凭一个裸名字把别人家同名的 exe 一起禁了。
+    /// </summary>
+    private static bool SameWpsInstall(string a, string b)
+    {
+        string ra = InstallRootOf(a), rb = InstallRootOf(b);
+        return ra.Length > 0 && rb.Length > 0
+            && string.Equals(ra, rb, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string InstallRootOf(string path)
+    {
+        try
+        {
+            string full = Path.GetFullPath(path);
+            int at = full.LastIndexOf(@"\office6\", StringComparison.OrdinalIgnoreCase);
+            return at > 0 ? full[..at] : "";
+        }
+        catch { return ""; }
     }
 
     public void Dispose()

@@ -1,3 +1,23 @@
+## v1.7.4 — 平滑滚动：禁了 WPS，表格/演示里也不再平滑
+
+**报障**：在「平滑滚动 → 程序例外」里把 WPS 设为禁用，在 WPS 里滚轮仍然是缓动的。
+
+**原因**：WPS 是**多进程套件** —— 文字 `wps.exe`、表格 `et.exe`、演示 `wpp.exe`、PDF `wpspdf.exe`
+都装在同一份 `…\office6\` 下，但彼此既不同名也不是前缀。程序例外的匹配（`SameApp`）只认
+"完全相同 / 同名去扩展名"，于是用户在设置页挑的通常是当时那个窗口的 `wps.exe`，
+之后在表格里滚动，规则整条不匹配 → 照旧平滑。
+
+**改法**：`SmoothScrollService.FindRule` 换成 `SameAppOrFamily`：
+
+- 原有的精确匹配 / 同名去扩展名匹配不变；
+- 同族前缀（wps / wpspdf / wpscloudsvr）算一家；
+- WPS 套件（wps / et / wpp / wpspdf / wpscloudsvr / wpsoffice）**且**在同一个 `…\office6\`
+  安装目录下，算同一个程序 —— 别处同名的 `et.exe`、另一份 WPS 安装都不受牵连；
+- 命中例外时日志里带上规则本身（`程序例外禁用：…（规则 …\wps.exe）`），下次排查不用猜。
+
+**验证**：`--only=SmoothScroll` **105 项 0 失败**，其中新增 5 条：禁 `wps.exe` 能命中
+同套装的 `et.exe` / `wpp.exe`、`wpspdf.exe`，而 `D:\tools\et.exe` 与另一份 WPS 安装不命中。
+
 ## v1.7.2 — 托盘退出不一定退干净：加退出看门狗与全链路兜底
 
 **报障**：在托盘里点了"退出"，图标没了，任务管理器里 `InputPlus.exe` 还在。
