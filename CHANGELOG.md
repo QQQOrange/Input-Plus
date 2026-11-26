@@ -1,23 +1,3 @@
-## v1.7.3 — 附加菜单在 Reeden 里能打开书的位置了（库型应用适配）
-
-**报障**：在 Reeden 里按附加菜单，"打开文件所在位置"打不开（点了没反应 / 那条是灰的）。
-
-**原因**：Reeden 是 Flutter 写的**库型应用** —— 书导入后被解包到
-`%APPDATA%\app.reeden\reeden\books\<32 位 HEX>\`，进程句柄里只有它自己的 sqlite / hive，
-窗口标题只有 `reeden`。探针实测（pid 576，`FLUTTER_RUNNER_WIN32_WINDOW`）：
-**75 个文件句柄、68 条原始命中、0 个候选**，全是 dll / 数据库 / 字库 ——
-句柄快照、命令行、窗口标题三条降级链全部空手。
-
-**改法**：新增 `Core/Windows/LibraryApps.cs`，在降级链里插一条"库型应用"分支：
-按 `statistics.lock` / `statistics.hive` / `book_config.json` 的最新写入时刻，
-选出最近活跃的那本书的目录（3 小时内才算"正在看"），把它当作"当前打开的东西"。
-打开位置会落到那本书的目录 —— 正文、`toc.json`、插图都在里面。
-非库型应用只多一次进程名比较，零磁盘开销。
-
-**验证**：`--foreground-file` 在 Reeden 前台从 `NoCandidate` 变成
-`Ok C:\Users\…\app.reeden\reeden\books\4E942FEE…`（正是当时在读的那本，
-与它的 `statistics.lock` 时间一致）。
-
 ## v1.7.2 — 托盘退出不一定退干净：加退出看门狗与全链路兜底
 
 **报障**：在托盘里点了"退出"，图标没了，任务管理器里 `InputPlus.exe` 还在。
