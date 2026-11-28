@@ -176,7 +176,7 @@ public sealed class ActionCatalog
             "把前台程序当前打开的文件收进 Qbar 固定项",
             _ => { ctx.RequestFavoriteForegroundFile(); return true; }, shortTitle: "收藏文件");
         c.Add("revealForegroundFile", "基础", "打开文件所在位置",
-            "在资源管理器里打开前台程序当前打开的那个文件所在的文件夹",
+            "在资源管理器里定位前台程序当前打开的那个文件；认不出文件时打开这个程序自己的 exe 所在文件夹（微信的图片/视频会定位到它自己的缓存文件）",
             _ => { ctx.RequestRevealForegroundFile(); return true; }, shortTitle: "所在位置");
 
         c.Add("toggleEnabled", "基础", "启用/暂停", "临时暂停或恢复所有Input Plus热键", _ => { ctx.RequestToggleEnabled(); return true; }, shortTitle: "启暂停");

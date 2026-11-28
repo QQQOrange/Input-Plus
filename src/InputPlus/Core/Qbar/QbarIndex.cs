@@ -126,6 +126,14 @@ internal static class QbarIndex
     private static CancellationTokenSource? _cts;
     private static int _generation;
 
+    /* 「这次是用户点的重建」标记（v1.7.13，见 RequestRebuild）。
+     * 1 = 下一轮 Worker 必须重建、绝不许沿用旧索引。 */
+    private static int _forceRebuild;
+
+    /* 最近一次**全量**建索引跑完时对应的 generation（v1.7.13）。
+     * 只有 Worker 走到"建完了"那一行才会写它 —— 「重建索引」按钮据此判断真的建完了。 */
+    private static int _doneGeneration;
+
     private static readonly Stopwatch SinceCommit = Stopwatch.StartNew();
     private static int _pendingSinceCommit;
 
@@ -267,14 +275,23 @@ internal static class QbarIndex
     }
 
     /// <summary>丢弃索引并重建（设置页「重建索引」按钮）。</summary>
-    internal static void RequestRebuild()
+    /// <returns>这一轮重建的 generation；调用方拿它问 <see cref="IsRebuildDone"/>。</returns>
+    internal static int RequestRebuild()
     {
+        int generation = 0;
         try
         {
             lock (Gate)
             {
                 _cts?.Cancel();
-                _generation++;
+                generation = ++_generation;
+                /* ★ 「点了重建却什么都没重建」的第二个口子（v1.7.13）：
+                 * 下面删 state.json 可能失败（索引目录被占用 / 杀软捏住），
+                 * 而 Worker 判定"能不能沿用旧索引"的依据就是这个文件 ——
+                 * 删不掉就等于没重建，它会把老索引重新打开、几百毫秒后置就绪，
+                 * 用户看到的是"点了一下，弹了句已就绪，什么都没发生"。
+                 * 所以再立一个一次性的强制标记：Worker 看到它就绝不走沿用那条路。 */
+                Volatile.Write(ref _forceRebuild, 1);
             }
             /* 必须把 state.json 一起删掉：Worker 复用旧索引的判断依据就是它
              * （Done=true 且根目录一致）。只清 _ready 不删状态文件的话，
@@ -292,6 +309,47 @@ internal static class QbarIndex
         {
             CoreLog.Swallow(ex, "重建文件索引");
         }
+        return generation;
+    }
+
+    /// <summary>
+    /// 这一轮重建建完了没有（v1.7.13）。
+    ///
+    /// 为什么不能用 <see cref="Ready"/> 判：`_ready` 是"索引里有文档"这个**缓存事实**，
+    /// 重建过程中任何一次打开/统计都可能把它重新置 1，于是"刚点了重建"会立刻被读成
+    /// "已经就绪" —— 用户看到的就是"点了一下就提示已就绪，但什么都没重建"。
+    /// 这里改成按 **generation** 对账：只有 Worker 跑完一轮**全量**建索引才会写下
+    /// 这个 generation，别的路径不会碰它。
+    /// </summary>
+    internal static bool IsRebuildDone(int generation)
+        => generation > 0 && Volatile.Read(ref _doneGeneration) == generation;
+
+    /// <summary>最近一次全量建索引完成的 generation（0 = 本次进程还没建过）。</summary>
+    internal static int DoneGeneration => Volatile.Read(ref _doneGeneration);
+
+    /// <summary>正在建索引时已经扫过多少个文件（进度用，v1.7.13）。</summary>
+    internal static long ScannedFiles => Interlocked.Read(ref _scanFiles);
+
+    /// <summary>正在建索引时已经扫过多少个目录（进度用，v1.7.13）。</summary>
+    internal static long ScannedDirs => Interlocked.Read(ref _scanDirs);
+
+    /// <summary>
+    /// 这一轮重建还在跑吗（v1.7.13，「重建索引」按钮用它决定要不要继续等）。
+    ///
+    /// 三种"没在跑"要分开，不能一律等到超时：
+    ///   ① 建完了（<see cref="IsRebuildDone"/>）；
+    ///   ② 建失败了（<see cref="Problem"/> 有内容）；
+    ///   ③ 请求根本没生效（既不在建、也不在准备，而且已经过了宽限）。
+    /// 宽限 3 秒是给"Worker 线程刚被唤起、两个标记都还是 0"那几毫秒留的 ——
+    /// 否则点下去的下一拍就会被判成"没在跑"，又变成"点了没反应"。
+    /// 纯函数：自检可以直接喂时间戳，不需要真建一遍索引。
+    /// </summary>
+    internal static bool RebuildStillRunning(int generation, long nowTick, long requestedAtTick)
+    {
+        if (IsRebuildDone(generation)) return false;
+        if (Problem.Length > 0) return false;
+        if (Building || Starting) return true;
+        return nowTick - requestedAtTick < 3000;
     }
 
     internal static void Stop()
@@ -350,7 +408,12 @@ internal static class QbarIndex
             }
 
             long docs = CurrentDocCount();
-            bool reusable = stateOk && !healed && docs > 0 && state!.Done;
+            /* 用户点了「重建索引」→ 这一轮绝不许沿用（v1.7.13）。
+             * 光靠删 state.json 不够：那个文件删不掉（被占用/杀软）的时候，
+             * reusable 会算成真，Worker 把老索引重新打开、几百毫秒后置就绪 ——
+             * 用户点的"重建"就变成了"什么都没发生，还告诉我已就绪"。 */
+            bool force = Interlocked.Exchange(ref _forceRebuild, 0) == 1;
+            bool reusable = !force && stateOk && !healed && docs > 0 && state!.Done;
 
             /* 走到这里才是"真的用不了"：清空重建。
              * 顺序仍然必须是**先 Close 再删**——反过来（先 Open 拿到含旧段的 meta、
@@ -492,6 +555,9 @@ internal static class QbarIndex
             Volatile.Write(ref _building, 0);
             DeleteLegacySnapshot();
             StartWatchers(roots, token);
+            /* 到这里这一轮**全量**建索引才算真的建完（v1.7.13）：
+             * 「重建索引」按钮等的就是这一行，而不是 `_ready` 那个缓存事实。 */
+            Volatile.Write(ref _doneGeneration, generation);
             LoadStats("索引已就绪");
             CalibrateLoop(generation, token);
         }
@@ -1844,6 +1910,10 @@ internal static class QbarIndex
             Interlocked.Exchange(ref _started, 0);
             _status = "未建立";
             _roots = Array.Empty<string>();
+            /* v1.7.13 的两本账也要清：不清的话，自检里"重建"那一轮会看到
+             * 上一轮留下的 doneGeneration，于是第一拍就判"建完了"。 */
+            Interlocked.Exchange(ref _doneGeneration, 0);
+            Interlocked.Exchange(ref _forceRebuild, 0);
         }
     }
 

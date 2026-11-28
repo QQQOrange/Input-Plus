@@ -426,6 +426,15 @@ public sealed partial class GestureService
             FavoriteTrace.Write($"menu: anchor=0x{anchor.ToInt64():X} proc={anchorProc} class={anchorClass} " +
                                 $"actionable={actionable} fromKeyboard={fromKeyboard}");
 
+            /* 权限边界提示（v1.7.9）：用户报「在微信里按唤出键只打开开始菜单」。
+             *
+             * 根因不是键位没绑上，而是**微信 4.x 以管理员身份运行**：普通权限的低级键盘钩子
+             * 收不到更高完整性级别窗口的按键，那一下被系统当成单独的 Win 键 ——
+             * 开始菜单就开了，我们的菜单当然不会出现。
+             * 这里在"前台是提升程序而我们不是"时提示一次（整个会话只提示一次，
+             * 菜单每次弹出都弹一句会很烦）。 */
+            NotifyElevationBoundaryOnce(anchorProc);
+
             ForegroundFile? cachedFile = ForegroundFiles.Cached;
             bool cachedHit = cachedFile != null && cachedFile.Pid == (int)anchorPid;
             var foregroundState = new ForegroundFileState(
@@ -472,11 +481,12 @@ public sealed partial class GestureService
                 /* 预热：不等用户点就先扫一次。点了才扫的话，第一次点击要等 800ms
                  * （WPS/浏览器句柄多的时候真会等满）。返回值到了就**原地**补到菜单上：
                  * 文件名显示在第二行，已经在收藏里的那颗星变实心，
-                 * 而「打开文件所在位置」的灰/亮就靠这里的 hasFile 决定 ——
-                 * 没扫到文件时它必须一直是灰的（v1.5 修：以前 Electron / 浏览器里
-                 * 这一条永远亮着，点下去弹"选择要定位的文件"）。
+                 * 而「打开文件所在位置」的第二行就靠这里补 —— 认出文件写文件名，
+                 * 认不出但前台确实是个程序，就写「xxx.exe 所在文件夹」
+                 * （v1.7.9：那一条现在会退一步打开程序自己的目录，所以"没文件"不再是灰的理由，
+                 * 桌面 / 资源管理器那种"前台没有打开文件"的场合仍然灰着）。
                  * 所以**失败也要通知**：以前这里 `if (file == null) return;` 让失败彻底
-                 * 没机会把条目刷成灰的。
+                 * 没机会把条目刷成"程序目录"。
                  *
                  * 桌面 / 资源管理器 / 任务栏不扫：菜单里那一条本来就建成了灰的，
                  * 扫也只会立刻返回 NotActionable。 */
@@ -488,7 +498,7 @@ public sealed partial class GestureService
                         bool already = file != null && _host.IsPinnedFile(file.Path);
                         Ui(() =>
                         {
-                            try { win.MarkForegroundFile(file?.FileName ?? "", already, file != null); }
+                            try { win.MarkForegroundTarget(file?.FileName ?? "", already, file != null, actionable, anchorProc); }
                             catch (Exception ex) { CoreLog.Swallow(ex, "中键菜单：补当前文件信息"); }
                         });
                     }, TaskScheduler.Default);
@@ -611,6 +621,32 @@ public sealed partial class GestureService
         /* fromKeyboard: 收藏的上下文看**前台**（用户在看的是那个程序），不看指针底下 ——
          * 热键唤出时指针常常停在任务栏或桌面角落，按指针抓会收藏错东西。 */
         MiddleMenuOpen(s, fromKeyboard: true);
+    }
+
+    /// <summary>权限边界那句提示，整个会话只提示一次。</summary>
+    private static int _elevationBoundaryNotified;
+
+    /// <summary>
+    /// 前台是"我们管不到"的程序（管理员运行 / 受保护），而我们是普通权限 →
+    /// 说一句为什么唤出键在这里不管用。
+    ///
+    /// 只讲一次：用户一旦看到过，以后每次弹菜单都重复一遍就是噪音。
+    /// 判据是**系统状态**（<see cref="Core.App.ElevationState.ForegroundLooksUnmanageable"/>），
+    /// 不是进程白名单 —— 微信、各种安装程序、以管理员启动的编辑器都适用。
+    /// </summary>
+    private void NotifyElevationBoundaryOnce(string processName)
+    {
+        try
+        {
+            if (Core.ElevationHelper.IsElevated) return;
+            if (!Core.App.ElevationState.ForegroundLooksUnmanageable()) return;
+            if (Interlocked.Exchange(ref _elevationBoundaryNotified, 1) == 1) return;
+
+            string where = string.IsNullOrWhiteSpace(processName) ? Loc.T("这个程序") : processName;
+            _host.Notify(Loc.F("{0} 以管理员身份运行（或受保护）：普通权限看不到它的按键，在那里按唤出键只会打开开始菜单。到「附加菜单」页点「以管理员身份重启」就能管到它。", where));
+            CoreLog.Warn($"[附加菜单] 前台 {processName} 在更高完整性级别（或受保护），普通权限的钩子收不到它的按键（这条提示只出一次）");
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "附加菜单：权限边界提示"); }
     }
 
     // ── 历史记录（= 搜索前建议）与网址标题 ─────────────────────────

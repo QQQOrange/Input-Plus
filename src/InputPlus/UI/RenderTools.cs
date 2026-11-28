@@ -128,6 +128,19 @@ public static class RenderTools
                     Pump(160);
                 }
                 catch (Exception ex) { CoreLog.Warn("渲染 Qbar 条目表四个标签失败：" + ex.Message); }
+
+                /* 附加菜单是**整页**（左边栏整块让位），不在上面那四个标签里 ——
+                 * 权限提示块、唤出键那一行、例外程序列表都在这页上，
+                 * 不留一张回归图，改坏了谁也看不见。 */
+                try
+                {
+                    qtab.SelectTabForRender("middle");
+                    Pump(300);
+                    Save(main, Path.Combine(outDir, "qbar-middle.png"));
+                    qtab.SelectTabForRender("search");
+                    Pump(160);
+                }
+                catch (Exception ex) { CoreLog.Warn("渲染附加菜单设置页失败：" + ex.Message); }
             }
 
             /* 文件对话框浮层：只有真的弹出「打开 / 保存」对话框时才看得见，平时连截图都没有。

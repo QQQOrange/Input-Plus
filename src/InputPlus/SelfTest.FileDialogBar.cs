@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -323,7 +323,7 @@ public static partial class SelfTest
     private static void TestDialogClassifyRules()
     {
         // a) Vista+ 文件对话框
-        var vista = DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND"), Child("Edit") });
+        var vista = DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND"), Child("CtrlNotifySink"), Child("Edit") });
         CheckEqual("判型 a：DirectUIHWND → FileDialog", vista.Kind, DialogKind.FileDialog);
         CheckEqual("判型 a：家族 VistaDialog", vista.Family, DialogFamily.VistaDialog);
         Check("判型 a：要挂浮层", vista.WantsBar);
@@ -356,12 +356,12 @@ public static partial class SelfTest
 
         // 顺序：同时有 SysTreeView32 与 DirectUIHWND 时必须先判文件对话框
         var both = DialogClassifier.Classify("#32770",
-            new[] { Child("SysTreeView32"), Child("DirectUIHWND") });
+            new[] { Child("SysTreeView32"), Child("DirectUIHWND"), Child("CtrlNotifySink") });
         CheckEqual("判型顺序：Vista 优先于 Folder", both.Kind, DialogKind.FileDialog);
 
         // 判型不看 exe：同一组控件，进程名不同结果必须一致
-        CheckEqual("判型与进程名无关：wechat.exe", DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND") }).Kind, DialogKind.FileDialog);
-        CheckEqual("判型与进程名无关：notepad.exe", DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND") }).Kind, DialogKind.FileDialog);
+        CheckEqual("判型与进程名无关：wechat.exe", DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND"), Child("CtrlNotifySink") }).Kind, DialogKind.FileDialog);
+        CheckEqual("判型与进程名无关：notepad.exe", DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND"), Child("CtrlNotifySink") }).Kind, DialogKind.FileDialog);
     }
 
     private static void TestDialogPolicySwitches()
@@ -373,7 +373,7 @@ public static partial class SelfTest
             ClassName = "#32770",
             Title = "打开",
         };
-        var ok = DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND") });
+        var ok = DialogClassifier.Classify("#32770", new[] { Child("DirectUIHWND"), Child("CtrlNotifySink") });
         var types = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
             [DialogTypeKeys.FileDialog] = true,

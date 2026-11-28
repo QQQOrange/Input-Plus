@@ -287,24 +287,27 @@ public static partial class SelfTest
             def.Items.Count == 0 ? "空" : def.Items[def.Items.Count - 1].Action);
         Check("菜单：一级条目标题都不为空", def.Items.All(i => !string.IsNullOrWhiteSpace(i.Title)));
 
-        /* ── 顶部「打开文件所在位置」的灰/亮（v1.5 修）──────────────────
+        /* ── 顶部「打开文件所在位置」的灰/亮（v1.5 修，v1.7.9 再改）──────
          *
-         * 判据只有一个：**有没有认出文件**。
-         * 以前判的是"前台不是桌面/资源管理器"，于是 Electron / 浏览器里这一条永远亮着，
-         * 点下去识别不到，就弹出一个"选择要定位的文件"（DeepSeekRuntime 里真发生的那一幕）。
-         * 这四条把"默认灰 → 认出才亮"钉死。 */
+         * v1.7.9 起判据是**"前台是不是一个真程序"**：认不出文件时这一条会退一步
+         * 打开这个程序自己的 exe 目录（用户报的"在微信里点开图片，想知道它在哪"）。
+         * 所以：
+         *   · 真程序 + 还没认出文件 → 亮，第二行「识别中…」（预热回来会换成程序目录）；
+         *   · 真程序 + 认出文件     → 亮，第二行是文件名；
+         *   · 桌面 / 资源管理器     → 灰，第二行「前台没有打开文件」。
+         * 这三条把"亮着点下去一定有东西打开"钉死。 */
         var unknown = MiddleMenuPolicy.Build(s, history, titles,
             new ForegroundFileState(true, "deepseekruntime.exe", "", false));
         var unknownItem = unknown.Items.FirstOrDefault(i => i.Action == "revealForegroundFile");
-        Check("中键菜单：没认出文件时「打开文件所在位置」是灰的",
-            unknownItem != null && !unknownItem.Enabled);
+        Check("中键菜单：真程序里没认出文件时「打开文件所在位置」也是亮的（退路是程序目录）",
+            unknownItem != null && unknownItem.Enabled);
         Check("中键菜单：没认出文件时第二行是「识别中…」",
             unknownItem != null && unknownItem.Note == Loc.T("识别中…"));
 
         var known = MiddleMenuPolicy.Build(s, history, titles,
             new ForegroundFileState(true, "wps.exe", "季度总结.pptx", false));
         var knownItem = known.Items.FirstOrDefault(i => i.Action == "revealForegroundFile");
-        Check("中键菜单：认出文件后「打开文件所在位置」才亮",
+        Check("中键菜单：认出文件后「打开文件所在位置」是亮的",
             knownItem != null && knownItem.Enabled);
         Check("中键菜单：认出文件后第二行写文件名",
             knownItem != null && knownItem.Note == "季度总结.pptx");

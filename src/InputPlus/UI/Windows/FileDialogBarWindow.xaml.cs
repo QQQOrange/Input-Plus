@@ -321,11 +321,43 @@ public partial class FileDialogBarWindow : Window
         long ex = (long)DialogNative.GetWindowLongPtr(hwnd, DialogNative.GWL_EXSTYLE);
         DialogNative.SetWindowLongPtr(hwnd, DialogNative.GWL_EXSTYLE,
             (nint)(ex | DialogNative.WS_EX_TOOLWINDOW | DialogNative.WS_EX_NOACTIVATE));
-        DialogNative.SetWindowLongPtr(hwnd, DialogNative.GWLP_HWNDPARENT, info.Hwnd);
+
+        /* 认领 owner。**提升进程的对话框会失败**（UIPI：低完整性不许改高完整性窗口的
+         * owner 字段，错误码 5）—— 微信 4.x 就是这种：它整个进程以管理员身份运行。
+         * 以前这一行不看返回值，失败之后浮层就成了"无主窗口"：位置照样算得出来，
+         * 但用户点一下对话框，对话框就到非置顶层的最上面，浮层被压在底下/贴不上去，
+         * 现场看起来就是"浮层没出现"（用户 2026-11-28 报的微信里发送文件就没有这条）。
+         *
+         * 现在：认领失败就退回**置顶无主窗口**，位置仍然按对话框矩形算（DialogBarAnchor
+         * 一直只做纯几何），所以照样贴在对话框下沿、也不会被身下的窗口盖住。 */
+        _ownerBlocked = false;
+        nint ownerSet = DialogNative.SetWindowLongPtr(hwnd, DialogNative.GWLP_HWNDPARENT, info.Hwnd);
+        if (ownerSet == 0)
+        {
+            int err = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            if (err == 5)
+            {
+                _ownerBlocked = true;
+                DialogTrace.Write($"owner 被 UIPI 拒绝（对话框是提升进程）：{info.ProcessName} hwnd=0x{info.Hwnd:X} → 退回置顶无主浮层");
+                DialogNative.SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0,
+                    DialogNative.SWP_NOMOVE | DialogNative.SWP_NOSIZE | DialogNative.SWP_NOACTIVATE);
+            }
+            else if (err != 0)
+            {
+                DialogTrace.Write($"设置 owner 失败 err={err}（继续按无主窗口显示）");
+            }
+        }
+
         DialogBarAnchor.ConfigureBarChrome(hwnd);
         _anchor.Attach(info.Hwnd);
         _anchor.SetBarHandle(hwnd);
     }
+
+    /// <summary>owner 认领被 UIPI 拒了（提升进程的对话框）：浮层按置顶无主窗口活。</summary>
+    private bool _ownerBlocked;
+
+    /// <summary>HWND_TOPMOST。DialogNative 里没有这个常量（它是 -1，不是句柄）。</summary>
+    private static nint HwndTopmost => -1;
 
     // ───────────────── 跟随：事件驱动，不在跟随路径里做布局 ─────────────────
 
@@ -588,8 +620,19 @@ public partial class FileDialogBarWindow : Window
         _inApply = true;
         try
         {
-            DialogNative.SetWindowPos(hwnd, IntPtr.Zero, target.Left, y,
-                _barWidthPx, _barHeightPx, flags);
+            /* 无主（提升对话框）时用 HWND_TOPMOST 摆位：不带 Z 序的话，
+             * 用户一点对话框就把浮层压到它身后 —— 看起来就是"没有浮层"。
+             * 有主时照旧 SWP_NOZORDER（owner 会跟着对话框走，不需要抢 Z 序）。 */
+            if (_ownerBlocked)
+            {
+                DialogNative.SetWindowPos(hwnd, HwndTopmost, target.Left, y,
+                    _barWidthPx, _barHeightPx, flags & ~DialogNative.SWP_NOZORDER);
+            }
+            else
+            {
+                DialogNative.SetWindowPos(hwnd, IntPtr.Zero, target.Left, y,
+                    _barWidthPx, _barHeightPx, flags);
+            }
         }
         finally { _inApply = false; }
 

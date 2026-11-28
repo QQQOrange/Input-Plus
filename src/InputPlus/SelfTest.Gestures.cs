@@ -858,14 +858,35 @@ public static partial class SelfTest
         holdOpts.LabelLingerMs = -500;
         Check("配置写了负数也不会提前收", GestureService.LabelHoldMs(holdOpts) >= 1200);
 
-        /* 未识别 = 屏幕上什么都不留：WG2 的手势结束处理只有两句（A/T.cs:115-119），
-         * 轨迹整条清空、红点收掉，没有「未识别」字样、也没有"灰线多留一会儿"。
-         * 这里用反射守住这两样东西别被重新加回来。 */
-        Check("覆盖层不再有「未识别」文案入口",
-            typeof(InputPlus.UI.Windows.GestureOverlayWindow).GetMethod("ShowUnrecognized") == null);
-        Check("手势服务不再有未识别停留常量",
+        /* 未识别要有反馈（v1.7.12 恢复）：轨迹和「未识别」两个字一起变灰、一起消失。
+         *
+         * v1.7.8 按 WG2 把这段删干净过（"屏幕上什么都不留"），代价是用户分不清
+         * "没认出来"和"根本没触发" —— 画完凭空消失，只能猜。现在两条断言反过来：
+         * 入口必须在，停留时长必须够看清（旧实现 120ms，用户说"闪一下就没了"）。 */
+        Check("覆盖层有「未识别」文案入口（轨迹 + 文字一起变灰）",
+            typeof(InputPlus.UI.Windows.GestureOverlayWindow).GetMethod("ShowUnrecognized") != null);
+        Check("手势服务有未识别停留时长",
             typeof(GestureService).GetMethod("UnrecognizedHoldMs",
-                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) == null);
+                System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic) != null);
+        int unrecognizedMs = GestureService.UnrecognizedHoldMs(new GestureOptions());
+        Check("未识别停留够看清（200~900ms）", unrecognizedMs is >= 200 and <= 900, unrecognizedMs + "ms");
+
+        /* 真建一个覆盖层把「未识别」画出来：名称框里必须是那三个字，
+         * 轨迹主线必须是**灰的**（R=G=B）且够淡 —— 用户要的是"轨迹和文字一起变灰"。 */
+        try
+        {
+            var overlay = new InputPlus.UI.Windows.GestureOverlayWindow();
+            overlay.ShowUnrecognized(200, 200);
+            CheckEqual("未识别：名称框写「未识别」", overlay.LabelTextForTest, "未识别");
+            var trailColor = overlay.TrailColorForTest;
+            Check("未识别：轨迹是灰的（R=G=B）", trailColor.R == trailColor.G && trailColor.G == trailColor.B, trailColor.ToString());
+            Check("未识别：轨迹够淡（alpha < 0x60）", trailColor.A < 0x60, "A=0x" + trailColor.A.ToString("X2"));
+            try { overlay.Close(); } catch { }
+        }
+        catch (Exception ex)
+        {
+            Check("未识别：覆盖层能画出「未识别」", false, ex.GetType().Name + ": " + ex.Message);
+        }
 
         /* 看门狗只该收「漏收的残留」，不能顺手把还在排期里的名字/提示/红点一起清掉：
          * 以前它只问"有没有可见内容"，100ms 一刀，热角名字和「手势太频繁」提示

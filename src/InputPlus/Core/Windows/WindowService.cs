@@ -642,6 +642,23 @@ public static class WindowService
         string lastWhy = "";
         foreach (RevealChannel channel in RevealStrategy.Plan(elevated))
         {
+            /* 「只开目录」**不能**走 in-proc 选中 —— v1.7.10 修的现场：
+             *
+             * SHOpenFolderAndSelectItems 的语义是"在**父目录**里把这个项选中"。
+             * 给它一个**目录**的 pidl（"只开目录"模式、以及"打开程序所在文件夹"那条退路
+             * 都是这种情况），它就会打开**上一级**并把目录选中：
+             * 实测 D:\software\Kelivo → 资源管理器开的是 D:\software。
+             * 用户点"打开 exe 所在文件夹"，看到的是爷爷目录，当然说逻辑有问题。
+             *
+             * 目录这条路交给下面两条：explorer.exe "<目录>" 打的就是目录本身
+             * （且提权时仍走"借 shell 之手"，不继承令牌）。规则本身在
+             * <see cref="RevealStrategy.ShouldTry"/> 里，自检能直接断言。 */
+            if (!RevealStrategy.ShouldTry(channel, target.Select))
+            {
+                lastWhy = "只开目录：跳过 in-proc 选中（那个 API 会打开上级）";
+                continue;
+            }
+
             bool ok;
             switch (channel)
             {

@@ -103,6 +103,11 @@ public sealed partial class AppHost
     ///
     /// 5 秒没返回就给「网络位置无响应」—— 网络路径离线时 explorer 会同步阻塞几秒，
     /// 那几秒里界面绝不能跟着停。
+    ///
+    /// **v1.7.9 起有第二层**：认不出文件（微信、Electron、浏览器这类程序手里根本没有
+    /// 用户文件的句柄）时，退一步打开**这个程序自己的 exe 所在文件夹** ——
+    /// 用户点的是"我在看的这个东西在哪儿"，那就至少把他带到这个程序跟前。
+    /// 只在"确实没认出文件"时才会走到这一层，认出来了还是原来的行为（选中那个文件）。
     /// </summary>
     public void BeginRevealForegroundFile()
     {
@@ -117,7 +122,11 @@ public sealed partial class AppHost
 
         bool folderOnly = FileLocationMode.IsOpenFolderOnly(Settings.OpenFileLocationMode);
 
-        /* 同上：锚点必须在调用线程上就读走。 */
+        /* 锚点必须在调用线程上就读走（扫之前的窗口/进程才是"用户在看的东西"）。 */
+        IntPtr anchor = ActionAnchor();
+        int anchorPid = PidOf(anchor);
+        string anchorProc = ForegroundWatcher.ProcessNameOf(anchor);
+
         Task<ForegroundFileResult> pending;
         try { pending = ForegroundFiles.GetOrRefreshAsync(); }
         catch (Exception ex)
@@ -139,31 +148,46 @@ public sealed partial class AppHost
                 result = ForegroundFileResult.Fail(ForegroundFileOutcome.NoCandidate, ex.Message);
             }
 
-            if (result.File is not { } file)
+            string target;
+            bool targetFolderOnly;
+            bool fellBack = false;
+
+            /* 决策本身是纯函数（Core/Windows/RevealFallback.cs）：认出文件 → 定位文件；
+             * 没认出 → 退一步打开这个程序自己的 exe 目录；桌面/资源管理器 → 什么都不做。
+             * 放在这里只是为了拿得到 anchorProc / anchorPid 这几个现场事实。 */
+            RevealFallbackPlan plan = RevealFallbackPlan.Decide(result, anchorPid, anchorProc, folderOnly);
+            switch (plan.Kind)
             {
-                /* 识别不到 = **这里没有正在打开的文件**。
-                 *
-                 * v1.5 改：不再弹「选择要定位的文件」。以前那条兜底在 Electron / 浏览器里
-                 * 是常态（它们的句柄里根本没有用户文件），用户点了一下「打开文件所在位置」，
-                 * 得到的却是一个让他自己找文件的对话框 —— 而他刚才明明在看一个东西。
-                 * 现在菜单里那一条本来就灰着（见 MiddleMenuPolicy.Build / MarkForegroundFile），
-                 * 正常点不到；万一点到了（热键/旧引用/文件刚好被挪走），只给一句话，绝不弹框。 */
-                FavoriteTrace.Write($"reveal: 识别失败 outcome={result.Outcome} why={result.Why} → 只提示，不弹选择框");
-                _ = _dispatcher.BeginInvoke(new Action(() => Notify(Loc.T("这里没有正在打开的文件"))));
-                return;
+                case RevealFallbackKind.None:
+                    FavoriteTrace.Write($"reveal: 不给结论（{plan.Why}）→ 只提示");
+                    _ = _dispatcher.BeginInvoke(new Action(() => Notify(Loc.T("这里没有正在打开的文件"))));
+                    return;
+
+                case RevealFallbackKind.HostExe:
+                    target = plan.Path;
+                    /* 给的是**exe**：folderOnly 必须 false —— 那样资源管理器才会把 exe 选中。
+                     * v1.7.9 一开始给的是目录，窗口开出来谁也没选中，用户说"只做了一半"。 */
+                    targetFolderOnly = plan.FolderOnly;
+                    fellBack = true;
+                    FavoriteTrace.Write($"reveal: {plan.Why} → {plan.Path}");
+                    break;
+
+                default:
+                    target = plan.Path;
+                    targetFolderOnly = plan.FolderOnly;
+                    FavoriteTrace.Write($"reveal: {plan.Why} → {plan.Path}");
+                    break;
             }
 
-            FavoriteTrace.Write($"reveal: 文件={file.Path} 来源={file.ProcessName} 缓存={file.FromCache}");
-
             Task<WindowService.RevealOutcome> reveal = Task.Run(
-                () => WindowService.RevealInForeground(file.Path, folderOnly));
+                () => WindowService.RevealInForeground(target, targetFolderOnly));
 
             Task finished = await Task.WhenAny(reveal, Task.Delay(5000)).ConfigureAwait(false);
             if (!ReferenceEquals(finished, reveal))
             {
                 _ = _dispatcher.BeginInvoke(new Action(() =>
                     Notify(Loc.T("网络位置无响应，稍后再试"))));
-                CoreLog.Warn($"[打开位置] 5 秒没返回：{file.Path}");
+                CoreLog.Warn($"[打开位置] 5 秒没返回：{target}");
                 return;
             }
 
@@ -194,13 +218,14 @@ public sealed partial class AppHost
                 return;
             }
 
-            if (file.FromCache)
+            if (!fellBack && result.File is { FromCache: true })
             {
                 _ = _dispatcher.BeginInvoke(new Action(() =>
                     Notify(Loc.T("这是 WPS 云文档的本地缓存副本，原文件不在本机"))));
             }
 
-            FavoriteTrace.Write($"reveal: 通道={outcome.Channel} 结果={(outcome.Launched ? "OK" : "失败 " + outcome.Why)} 目录={outcome.Folder} 上溯={outcome.WentUp}");
+            FavoriteTrace.Write($"reveal: 通道={outcome.Channel} 结果={(outcome.Launched ? "OK" : "失败 " + outcome.Why)} " +
+                                $"目录={outcome.Folder} 上溯={outcome.WentUp} 退路={fellBack}");
 
             if (outcome.WentUp)
             {
@@ -208,6 +233,18 @@ public sealed partial class AppHost
                     Notify(Loc.T("文件已不在了，已打开上级目录"))));
             }
         });
+    }
+
+    /// <summary>窗口所属进程号（0 = 拿不到）。</summary>
+    private static int PidOf(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return 0;
+        try
+        {
+            NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+            return (int)pid;
+        }
+        catch { return 0; }
     }
 
     /// <summary>

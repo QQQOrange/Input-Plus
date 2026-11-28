@@ -193,12 +193,21 @@ internal static class HookHostLauncher
             shell = Activator.CreateInstance(type);
             if (shell == null) { LastDetail = "Shell.Application 创建失败"; return false; }
 
+            /* ⚠ 最后一个参数是 <c>nShow</c>，**必须给 1（SW_SHOWNORMAL）**。
+             *
+             * 以前这里是 <c>0</c>（SW_HIDE）。"经 shell 之手启动 explorer.exe" 时，
+             * 系统新建的那个资源管理器窗口就带着 SW_HIDE 起来 —— **进程在、窗口在、
+             * 就是不可见**。v1.7.10 把"只开目录"从 in-proc 换到这条通道之后，
+             * 用户看到的就是"点了没反应、文件夹根本打不开"（实测连点五次，
+             * 桌面上多出五个标题正确但 IsWindowVisible=false 的资源管理器窗口）。
+             * explorer 把请求转给已在运行的 shell 时，这个参数会被忽略 —— 所以旧路径
+             * 里从没暴露过；一旦需要**新开**窗口就必现。 */
             type.InvokeMember(
                 "ShellExecute",
                 BindingFlags.InvokeMethod,
                 null,
                 shell,
-                new object[] { exe, argumentLine, AppContext.BaseDirectory, "open", 0 });
+                new object[] { exe, argumentLine, AppContext.BaseDirectory, "open", 1 });
 
             return true;
         }

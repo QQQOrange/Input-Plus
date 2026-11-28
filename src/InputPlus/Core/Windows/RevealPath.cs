@@ -52,6 +52,20 @@ internal static class RevealStrategy
         RevealChannel.ShellLaunch => "Shell.Application",
         _ => "explorer.exe",
     };
+
+    /// <summary>
+    /// 这条通道这次该不该用（v1.7.10）。
+    ///
+    /// 唯一的例外是 <see cref="RevealChannel.InProcSelect"/>：它调的是
+    /// <c>SHOpenFolderAndSelectItems</c>，语义是"在**父目录**里选中这一项"。
+    /// 目标本身就是目录时（"只开目录"模式 / "打开程序所在文件夹"那条退路），
+    /// 它会打开**上一级**并把目录选中 —— 实测 <c>D:\software\Kelivo</c> 开出来的是
+    /// <c>D:\software</c>。所以"不选中"的场合一律跳过它，改用
+    /// <c>explorer.exe "&lt;目录&gt;"</c> 那两条（打的就是目录本身，
+    /// 提权时也仍然借 shell 之手，不继承令牌）。
+    /// </summary>
+    internal static bool ShouldTry(RevealChannel channel, bool select)
+        => channel != RevealChannel.InProcSelect || select;
 }
 
 /// <summary>

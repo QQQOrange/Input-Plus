@@ -67,7 +67,9 @@ internal static class DialogBackfill
         if (InputSender.IsForegroundHigherIntegrity())
         {
             CoreLog.Warn($"[文件对话框] {dialog.ProcessName} 权限高于本程序（UIPI），本次不尝试回填");
-            return BackfillOutcome.Fail(BackfillRoute.None, "目标进程完整性级别更高（UIPI），按红线不做任何绕过");
+            return BackfillOutcome.Fail(BackfillRoute.None,
+                "这个对话框属于以管理员身份运行的程序（微信 4.x 就是这样）：普通权限填不进去。"
+                + "到「附加菜单」页点「以管理员身份重启」，之后这条浮层就能把文件送进对话框");
         }
 
         if (path.Length > 259)

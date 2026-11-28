@@ -1,3 +1,273 @@
+## v1.7.17 — 手势按住不松、轨迹自己消失：真凶是「多步手势切步」把覆盖层清了（日志定位到 `CloseStepLocked`）
+
+**报障**（用户连报三次）：画出手势之后不松手，**整条轨迹自己消失**，而名称框还挂着、过一会儿才收。
+
+**定位过程**：给覆盖层的 `ClearTrail()` 加了调用者追踪（写 `%TEMP%\inputplus-gesture.log`），
+用户复现一次，日志直接点名：
+
+```
+22:32:41.644  ClearTrail caller=Begin                        ← 起笔：正常（清上一笔）
+22:32:42.589  ClearTrail caller=<CloseStepLocked>b__143_0    ← 真凶
+22:32:44.055  ClearTrail caller=Clear                        ← 收尾：正常
+```
+
+**根因**：`CloseStepLocked` 末尾那句 `Ui(() => _overlay?.ClearTrail())`（"这一步已经切走了，
+覆盖层从这儿重新画，免得看着像一笔"）。而 `_multiExpected` 的判据是
+**"这个键的候选里存在任意一条多步手势"**，不是"用户正在画多步手势" ——
+所以只要候选表里有一条多步手势，**每一笔**都进多模式：用户画完一段、**手停 300ms**
+（`StepPauseMs`，非常自然的停顿）→ 切步 → 整条轨迹被擦掉，名称框还挂着。
+这就是"没松手，线自己没了"，也是为什么和"8 秒"毫无关系（此前两次都改错了地方）。
+
+**改法**：切步只做**识别用的切分**（`_segStart` 往后挪、`_stepsDrawn` 记一段），
+**画面一律不动**。用户的心理模型是"我还没松手，这条线就该一直在"。
+
+**验证**：`--only=Gesture` **355 项 0 失败**；日志里不再出现 `caller=CloseStepLocked`。
+
+## v1.7.16 — 手势日志加 `ClearTrail` 调用者追踪（定位用）
+
+## v1.7.15 — 「现在重启」变关闭软件（互斥体没放）＋ 管理员选项挪到「开机自动启动」下面
+
+- `ExitApp` 以前**只有 `restart:true`** 才 `SingleInstance.Release()`；提权重启走的是
+  `RelaunchElevated + ExitApp(restart:false)`，于是新实例等满 6 秒判"已有实例"→ 唤醒旧实例后
+  自己退出，旧实例也退完 → 两个都没了。现在退出**一进来**就无条件释放互斥体，交接预算 6s → 15s。
+- 设置 → 常规 → 启动与运行：「以管理员身份启动」+ 状态行 + 两个重启按钮挪到「开机自动启动」正下方。
+
+## v1.7.14 — 手势按住不再自己消失（8 秒改成"停手之后"算）＋ 文件对话框浮层：报错框不再挂、微信里改回"置顶无主"照样显示
+
+**报障一（第二次报）**：手势画出来之后，**没松手**它自己消失了。用户的规则：
+"没松开就不会自己消失，除非 8 秒都没画出（没有新轨迹）。"
+
+**根因**：8 秒这个兜底从**按下**开始计时（`_activeSince`）。画 2 秒 + 按住想 6 秒，
+第 8 秒准时把这一笔收掉 —— 用户看到的就是"手还按着，线自己没了"。
+v1.7.11 把看门狗也统一到"按下起算"，等于把这个错误口径钉得更死。
+
+**改法**：`StrokeExpired(now, lastActivityAt)` 改成从**最后一个轨迹点**算（`_lastMoveAt`），
+`OnPoll` 与 `OnOverlayGuard` 两处同一条规则：
+- 一直在画 → 每个点都刷新计时，画一分钟也不会被收；
+- 停手不动满 8 秒 → 才按"抬手丢了"收掉（并补发一次点击）。
+自检 11 项（7999/8000/8001ms 边界 + "一直有新的点就一直不超时" + "点停住之后才开始计 8 秒"）。
+
+**报障二**：微信里发送文件，**文件对话框浮层**（Qbar 面板 →「文件对话框浮层」，
+代码 `Core/FileDialog/` + `UI/Windows/FileDialogBarWindow`）不出现；
+而**报错窗口上反而会浮出来**，可它根本没有选文件的功能。
+
+**根因（两条，都有实测）**：
+
+1. 判型太松：`#32770 + DirectUIHWND` 就算文件对话框。实测真 IFileDialog 的子控件是
+   `DirectUIHWND + CtrlNotifySink ×4 + SHELLDLL_DefView + DUIViewWndClassName +
+   NamespaceTreeControl + SysTreeView32`；而 DirectUI 画的任务对话框/错误框**只有
+   DirectUIHWND**（经典 MessageBox 是 Button+Static，本来就不会误判）。
+   现在要求 `(DirectUIHWND 或 SHELLDLL_DefView)` **且** 至少带一样文件对话框专属控件
+   （`CtrlNotifySink` / `SHELLDLL_DefView` / `DUIViewWndClassName`），否则判 Unknown、不挂浮层。
+2. 微信整个进程以管理员身份运行（实测 `Weixin.exe` elev=1 / elevType=Full）：
+   浮层认领 owner（`SetWindowLongPtr(GWLP_HWNDPARENT)`）被 **UIPI 拒绝，错误码 5**，
+   以前不看返回值 —— 于是浮层成了无主窗口，用户一点对话框就把它压到后面，现场看起来就是"没出现"。
+   现在认领失败就退回**置顶无主浮层**（`HWND_TOPMOST` 摆位），位置照旧按对话框矩形算。
+   顺带：回填被 UIPI 拦时，状态行直接说人话（"这个对话框以管理员身份运行……到「附加菜单」页
+   点「以管理员身份重启」后重试"）。
+
+**现场日志**：新增 `Core/FileDialog/DialogTrace.cs`，写
+`%TEMP%\inputplus-dialog-bar.log`（明文、256KB 自清、`INPUTPLUS_DIALOG_TRACE=0` 可关）。
+记的就是 Watcher → 判型 → 开关 → 取边框 → 显示 这条链的每一步 —— 下次"浮层没出来"
+不用再靠复述，直接看这个文件停在哪一步。
+
+**验证**：`--only=FileDialogBar` **117 项 0 失败**（判型新增 12 条，含"DirectUI 画的错误框不挂浮层"
+和真文件对话框的实测子控件组合）；`--only=GestureHold` 11 项 0 失败。
+
+## v1.7.13 — 「打开程序所在位置」要选中 exe ＋ 文件索引那两个按钮（重建 / 刷新）真的看得见在干活
+
+**报障一**：附加菜单的「打开文件所在位置」打开程序目录时**没有选中任何东西**。
+用户的要求是"应该显示选中了相应的文件"。
+
+**改法**：退路从"给目录"改成"给 **exe**"（`RevealFallbackPlan.HostExe`，`Path` = exe 完整路径、
+`FolderOnly = false`）。这样走的还是那条老路：`SHOpenFolderAndSelectItems(exe)` /
+`explorer /select,"<exe>"` —— 打开父目录**并把 exe 选中**。
+给目录的写法 v1.7.10 已经证明是错的（那个 API 对目录 pidl 的语义是"在父目录里选中它"，
+会打开上级）。「只打开文件夹」这个设置仍然只管**文件**，不影响退路。
+
+**报障二**：文件搜索页那两个按钮像没实现 ——
+「重建索引」点下去几百毫秒就弹「文件索引已就绪：N 个文件」，实际重建刚开始；
+「刷新状态」点下去屏幕上什么都不动。
+
+**根因**：
+1. `OnRebuildIndex` 拿 `QbarIndex.Ready` 当"重建完成"的判据。可 `_ready` 只是
+   "索引里有文档"这个**缓存事实**，重建期间任何一次打开/统计都能把它重新置 1 ——
+   于是"刚点下去"就被读成"已经就绪"，而真正的全量扫描还在后面跑。
+2. `RequestRebuild` 只删 `state.json` 来逼 Worker 重建。删不掉（被占用 / 杀软）时
+   Worker 会把老索引当"可沿用"重新打开，几百毫秒后置就绪 —— **什么都没重建**。
+3. 「刷新状态」只是把一样的文字重画一遍，没有任何回执。
+
+**改法**
+
+1. `RequestRebuild()` 现在返回这一轮的 **generation**，并另立一次性 `_forceRebuild`：
+   Worker 看到它就**绝不**走"沿用旧索引"那条路（state.json 删不掉也能真重建）。
+2. 全量建索引跑完时写 `_doneGeneration`；`IsRebuildDone(generation)` 按它对账 ——
+   "是不是这一轮建完了"从此不看 `Ready`。
+3. 「重建索引」按钮：等 `IsRebuildDone`（上限 10 分钟，`RebuildWaitMs`），期间每 900ms
+   把状态行刷成"已扫 N 个文件 / M 个目录…"，按钮自身变成「正在重建…」；结束按
+   done / 失败 / 还在建 三种情形各说一句人话。
+4. 「刷新状态」按钮：顺手 `Notify(IndexSummaryLine())` —— 当前是"可用 · N 个文件 · 建索引于 …"
+   还是"正在建立索引：已扫 N 个文件 / M 个目录"，点一下就有回执。
+5. 状态行的 900ms 刷新不再"一 Ready 就停"，改成 `Ready && !Building && !Starting` ——
+   重建期间状态行跟着动，用户能看见进度。
+6. `RebuildStillRunning(generation, now, requestedAt)`（纯函数）负责"还要不要等"：
+   建完了 / 建失败了 / 请求没生效（过了 3 秒宽限既不在建也不在准备）三种都算停。
+
+**验证**：`--only=QbarIndexButtons` 12 项 0 失败（generation 0/负值不算完成、
+3 秒宽限 2999/3001ms 边界、10 分钟上限）；`--only=RevealFallback` 24 项 0 失败
+（含新增"exe 路径 → 打开父目录并选中它"）；
+真机 `--reveal-file D:\software\myself\InputPlus.exe` → `选中: 是`、
+`通道=SHOpenFolderAndSelectItems`、窗口落在 `D:\software\myself`。
+
+## v1.7.12 — 手势没认出来要「提示未识别」：轨迹和文字一起变灰再消失（把 v1.2.4 删掉的那段捡回来）
+
+**报障**：画了一笔但没匹配到任何手势时，屏幕上是**凭空消失** —— 用户分不清"没认出来"和
+"根本没触发"。要求：提示「未识别」，鼠标轨迹和文字一起变灰，然后再消失。
+
+**为什么没有了**：v1.2.4 那次"手势轨迹完全照抄 WGestures 2"把这段删掉了 ——
+WG2 的收笔只有两句（`A/T.cs:115-119`：轨迹整条清空、红点收掉），屏幕上什么都不留。
+当时的注释就写着"没有「未识别」字样，也没有'灰线多留一会儿' —— 那两样是我们自己加的"，
+v1.7.8 又照着 WG2 复核了一遍，等于把这个删除钉死了。
+
+**改法（捡旧代码，不重写）**：`git show 04b6470^` 里的那一对原样捡回来 ——
+
+1. `GestureOverlayWindow.ShowUnrecognized(px, py)`：`ApplyPathColor(NormalColor())`
+   + `ShowLabel(Loc.T("未识别"), px, py, keepTrail: true)`。
+   颜色走配置里的「未识别」色（默认 `#00000030`），名字走「未识别」标签色，都是灰的；
+2. `GestureService.ShowUnrecognized(px, py)`：`EnsureOverlay → ShowPassive → ShowUnrecognized
+   → HideOverlay(UnrecognizedHoldMs)`，轨迹和文字用**同一个定时器**一起收；
+3. `Finish` 的未命中分支恢复成 `if (extent >= MinMove) ShowUnrecognized(...) else HideOverlay(0)`
+   —— 单击（没到最小识别距离）仍然不给反馈，只有"真的画了一笔"才提示。
+4. `MarkUnrecognized()`（v1.7.7 加的"先灰一下再收"）保留：它管的是**中止/换层**那条路；
+   这次恢复的是"松手结算时没命中"这条路。
+
+**停留时长**：旧实现是 120ms（当时用户要求"只保留灰色一瞬间"），但实际"闪一下就没了"。
+这一版给 500ms（`UnrecognizedFlashMs`）—— 看得清三个字，又不占屏幕。
+
+**验证**：`--only=Gestures` **268 项 0 失败**，其中四条是新加的、直接建一个真覆盖层：
+名称框里是「未识别」、轨迹主线的 `R=G=B`（灰）、`alpha < 0x60`（够淡）。
+另外把 v1.7.8 那两条"覆盖层不许有「未识别」入口"的反向断言**翻了过来** ——
+它们当初是用来钉死删除的，现在要钉死"必须还在"。
+
+## v1.7.11 — 「打开程序所在文件夹」真的能打开了（SW_HIDE）＋ 没松手之前手势不许自己消失
+
+**报障一**：v1.7.10 之后「打开文件所在位置」**彻底没反应了**，文件夹一个都不弹。
+（用户原话："现在干脆那个文件夹都打不开了，功能直接没了"。）
+
+**根因**：`HookHostLauncher.TryShellExecuteRaw` 里 Shell.Application 的 `nShow` 参数是 **0（SW_HIDE）**。
+explorer 把请求转给**已在运行**的 shell 时这个参数被忽略，所以旧路径从没暴露过；
+v1.7.10 把"只开目录"从 in-proc 换到这条通道后，需要**新开**窗口 —— 于是窗口带着 SW_HIDE 起来：
+进程在、窗口在、就是不可见。日志里全是 `结果=OK`，用户屏幕上什么都没有。
+实测：连点五次之后桌面上多了五个标题正确、`IsWindowVisible=false` 的资源管理器窗口。
+
+**改法**：`nShow` 给 `1`（SW_SHOWNORMAL）。顺带用同一套办法把 9 个隐藏窗口清掉了。
+
+**报障二**：鼠标手势画出来之后，**手指还按着**，轨迹和名字就自己消失了。
+用户的规则："没松手之前这个手不该自己消失，除非长按超过 8 秒。"
+
+**根因**：`TryImmediate`（「识别手势立即执行」，用户配了 8 条）在执行动作后立刻
+`SettleOverlay()` —— 100~350ms 的淡出。动作是当场做完了，但**画面收得比手还早**。
+
+**改法**
+
+1. 立即执行之后不再收画面：记下"这一笔已执行、等松手"（`_immediateHoldVk`），
+   轨迹和「已识别」名字一直留着；**抬起被吞的那一下**才走 WG2 的「执行后淡出」
+   （`CompleteImmediateHold` → `SettleOverlay`）。
+2. 按住期间 `HideOverlay(排期)` 一律不受理，覆盖层看门狗也不许收
+   （立刻收仍放行 —— 那是"这一屏不要了"，顺手作废等松手的状态）。
+3. 8 秒的口径统一：`StrokeExpired(now, activeSince)` 只从**按下**算。
+   以前 `OnPoll` 按"按下起算"、`OnOverlayGuard` 按"多久没动"算，慢画一笔时谁先到点谁收，
+   行为没法解释。现在两处同一条规则，且"按住不动 3 秒"不再判成抬手丢了。
+
+**验证**
+
+- `--only=GestureHold` 7 项 0 失败（8 秒边界：7999 / 8000 / 8001ms，以及"按住不动 3 秒"）；
+- `--only=RevealFallback` 24 项 0 失败（v1.7.10 的通道规则不变）；
+- 真机：`--reveal-file D:\software\deepseekharness` 后窗口从 `[hidden]` 变成 `[visible]` 并置前。
+
+## v1.7.10 — 修「打开程序所在文件夹」打开的是**上一级**（SHOpenFolderAndSelectItems 对目录的语义）
+
+**报障**（v1.7.9 上线十分钟后）：在 DeepSeekRuntime / Kelivo 里点「打开文件所在位置」，
+资源管理器跳到 `D:\software` 并把 `deepseekharness` / `Kelivo` 选中 —— 不是"进到那个目录里"。
+用户原话："逻辑有一些问题是打开 exe 文件所在的目录"。
+
+**根因**：`WindowService.RevealInForeground` 里"不选中"的场合（v1.7.9 新增的"程序目录"退路，
+以及老设置「只打开文件夹」）走的是 in-proc `SHOpenFolderAndSelectItems`。
+这个 API 的语义是"**在父目录里**把这一项选中"，给它一个**目录**的 pidl，
+它当然打开上一级 —— 实测 `D:\software\Kelivo` → `D:\software`。
+（老设置「只打开文件夹」其实一直是这个毛病，只是没人盯着看过。）
+
+**改法**
+
+1. `RevealStrategy.ShouldTry(channel, select)`（纯函数）：`InProcSelect` 只在
+   `select == true` 时可用；目录这条路一律走 `explorer.exe "<目录>"` 那两条
+   （提权时仍然"借 shell 之手"，不继承管理员令牌）。
+2. `RevealStrategy` 的规则直接进自检（4 条），不用真开资源管理器就能钉死。
+3. 顺手补一条：`ForegroundFileProbe.FolderForHostExe` 对 **%SystemRoot% 下的系统组件**
+   （`searchhost.exe`、`ApplicationFrameHost.exe`…）**不给退路** —— 这些锚点也会命中
+   "前台是个程序"，但打开 `C:\Windows\System32` 毫无意义。
+
+**验证**
+
+- `--only=RevealFallback` **24 项 0 失败**（新增：通道选择 4 条、目录输入 2 条、系统组件 3 条）；
+- 真机复现 → 修复：`--reveal-file D:\software\Kelivo`
+  修前 `通道=SHOpenFolderAndSelectItems`、前台窗口 `D:\software`；
+  修后 `通道=Shell.Application`、前台窗口 **`D:\software\Kelivo`**。
+
+## v1.7.9 — 附加菜单：没有文件时退到「程序所在文件夹」＋微信图片/视频能定位＋微信里按唤出键只弹开始菜单的根因
+
+**报障一**：附加菜单里「打开文件所在位置」在"前台程序手里没有用户文件"的场合（Electron、
+浏览器、微信）什么也打不开，菜单那一条还常常是灰的。用户要的是：
+**认出文件就定位文件；认不出文件，就打开这个程序自己的 exe 所在文件夹。**
+
+**报障二**：微信里点开一张图片 / 播放一个视频，想直接打开它所在的位置 —— 之前一律"NoCandidate"。
+
+**报障三**：把附加菜单绑到 Win 键（`caps_lwin`），在微信窗口里按只弹出开始菜单，菜单不出现。
+
+**改法**
+
+1. `Core/Windows/WeChatMedia.cs`（新）：微信 4.x 的"文件保存位置"写在
+   `%APPDATA%\Tencent\xwechat\config\*.ini`（整个文件就一行路径），据此定位
+   `xwechat_files\<账号>\msg\{attach,video,file}`，取**最近写入**的那一个媒体文件；
+   缩略图（`_t` / `_thumb`）压 30 分钟、`_h` 原图压 1 分钟；超过 7 天的文件不认；
+   预算 400ms / 2400 个目录，用目录自身的写入时间剪枝。3.x 的
+   `WeChat Files\FileStorage\*` 同表覆盖。
+2. `ForegroundFileProbe.ScanProcess`：微信家族**先走这条**，再做句柄扫描 ——
+   微信 4.x 以管理员身份运行，普通权限 `OpenProcess` 连它的进程都打不开（错误 5），
+   扫句柄注定空手，还会白花掉整份 800ms 预算。
+3. `Core/Windows/RevealFallback.cs`（新，纯函数）：`RevealFallbackPlan.Decide` 定死顺序
+   —— ① 认出文件 → 定位文件；② 桌面/资源管理器 → 什么都不做；③ 认不出 + 前台是个真程序
+   → 打开该程序 exe 所在文件夹（`ForegroundFileProbe.HostFolderOf`；主进程被保护时按
+   同名子进程取路径，因为 `Process.MainModule` 要 `QUERY_INFORMATION`，微信一律拒）。
+4. 菜单：`revealForegroundFile` 重新变成"认出程序就点亮"，第二行写会打开什么
+   （文件名 / `weixin.exe 所在文件夹`），桌面/资源管理器仍然写"前台没有打开文件"。
+
+**报障三的根因（实测，不是猜）**：`Weixin.exe` 的令牌是 `elev=1 / elevType=Full(2)` ——
+**以管理员身份运行**。低级键盘钩子看得见的是"同级或更低完整性级别"的输入，普通权限的钩子
+根本收不到微信窗口上的按键，那一下被系统当成单独的 Win 键，于是开始菜单开了。
+所以这一条**只能靠提权**解决：
+
+5. 「附加菜单」页加权限说明块 + 一键「以管理员身份重启」（复用 `Global.RunAsAdmin` /
+   `ElevationHelper.RelaunchElevated` / `StartupManager.Sync`，和「常规」页同一个开关）。
+   管理员模式下若钩子反而收不到键，`AppHost.RestartSelfForHookRecovery` 会带 `--noelevate`
+   自动降回普通权限重启，不会把键盘搞死。
+6. 前台是"管不到"的程序（提权 / 受保护）时提示一次：
+   `ElevationState.ForegroundLooksUnmanageable` —— 连令牌都读不出来也算（微信主进程正是
+   这种：`OpenProcess` 过、`OpenProcessToken` 回错误 5，光看 `IsWindowElevated` 会判"没提升"）。
+
+**验证**
+
+- `--only=WeChatMedia` 17 项 0 失败（假数据树：正片 / 缩略图 / 头像 / 一周前 / 空账号）；
+- `--only=RevealFallback` 14 项 0 失败（四条优先级 + `result.Pid` 优先 + 目录不上溯）；
+- `--only=MiddleMenu` 89 项 0 失败；`--only=AttachMenuLayout` 14 项 0 失败；
+- 真机（普通权限）：`--foreground-file 22100`（微信主进程）32ms 命中
+  `…\xwechat_files\wxid_…\msg\attach\<会话>\2026-11\Img\<hash>.dat`；
+- 全量 `--selftest`：`--only=AuditFindings` 那 7 项在**改动前**同样是 7 失败（已 stash 对照），
+  与本版无关（环境里前台是提升窗口，注入进不去）。
+
+**仍未解决（如实写）**：普通权限下在微信里按唤出键**仍然收不到**（Windows 的完整性边界，
+任何用户态程序都绕不过）。要么开管理员模式（本版给了一键入口），要么把微信改成普通权限运行。
+
 ## v1.7.8 — 手势识别彻底照抄 WG2：删掉闭环变体 / 等更长 / 收笔切尾
 
 **背景**：v1.7.6 / v1.7.7 之后还剩四类 InputPlus 独有的容错，WG2 源码里没有：

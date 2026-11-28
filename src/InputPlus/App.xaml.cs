@@ -817,7 +817,10 @@ public partial class App : Application
                      // 提权/更新交接时旧进程可能还在收尾，给足时间；普通“再开一次”不该干等 6 秒。
                      e.Args.Any(a => a.Equals("--elevated", StringComparison.OrdinalIgnoreCase)
                                      || a.Equals("--updated", StringComparison.OrdinalIgnoreCase))
-                         ? 6000 : 1200))
+                         /* 交接预算 15 秒（v1.7.15 从 6 秒放宽）：提权重启时旧进程的退出链
+                          * 上有 UIA/COM、Rust 索引 dll、WinForms 托盘一串 native 收尾，
+                          * 6 秒并不保险；等不到就会"两个都没了"（见 AppHost.ExitApp 的注释）。 */
+                         ? 15000 : 1200))
         {
             CoreLog.Info("已有实例在运行，唤醒它并退出");
             SingleInstance.ActivateExisting();

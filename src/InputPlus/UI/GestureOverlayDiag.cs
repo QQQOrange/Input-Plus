@@ -106,7 +106,9 @@ internal static class GestureOverlayDiag
                 timer.Stop();
                 Log.AppendLine($"① 正常一笔：Show {showMs}ms，首帧 {firstSeen}ms，峰值 {maxPx} 像素，"
                                + $"此刻 {px} 像素，IsVisible={_overlay.IsVisible}");
-                /* 收笔：未识别时 GestureService 会 HideOverlay(0) → Clear+Hide */
+                /* 收笔：未识别时 GestureService 会 ShowUnrecognized →
+                 * 轨迹变灰 + 写「未识别」，停 UnrecognizedFlashMs(500ms) 再收
+                 * （v1.7.12 恢复；这一条诊断只管轨迹上屏，所以这里直接 Clear+Hide）。 */
                 _overlay.Clear();
                 _overlay.Hide();
                 TestFast();

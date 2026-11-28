@@ -205,14 +205,19 @@ internal static class MiddleMenuPolicy
              * 里这一条永远是亮的；点下去识别不到，就弹出"选择要定位的文件" ——
              * 用户看到的是"我点了一下，它让我自己找个文件"，完全不知道发生了什么。
              * 现在默认灰，预热（识别）回来的那一拍才根据 hasFile 决定亮不亮
-             * （见 GestureMenuWindow.MarkForegroundFile）。 */
+             * （见 GestureMenuWindow.MarkForegroundFile）。
+             *
+             * **v1.7.9：重新变成"认出程序就点亮"**，因为这一条现在有第二层 ——
+             * 认不出文件时退一步打开**这个程序自己的 exe 所在文件夹**
+             * （见 AppHost.BeginRevealForegroundFile）。所以"看着是亮的，点下去一定有东西打开"
+             * 重新成立；当初担心的"点完弹出选择文件的对话框"那条兜底早就不在了。 */
             AddTop(new GestureMenuItem
             {
                 Title = Loc.T("打开文件所在位置"),
                 Glyph = "\uE838",                                    // MDL2：FolderOpen
                 Note = note,
                 Action = "revealForegroundFile",
-                Enabled = fg.Actionable && fg.FileName.Length > 0,
+                Enabled = fg.Actionable,
             });
         }
         // ① 固定项（每个条目自己在 Qbar 设置里勾）

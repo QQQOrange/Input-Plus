@@ -196,9 +196,12 @@ public sealed class FileDialogBarService : IDisposable
 
             var options = _settings().FileDialogBar;
             var classification = Classify(info);
+            DialogTrace.Write($"出现 hwnd=0x{info.Hwnd:X} proc={info.ProcessName} class={info.ClassName} " +
+                              $"title=\"{info.Title}\" → 类型={classification.Kind}/{classification.Family}（{classification.Reason}）");
             if (!DialogPolicy.ShouldAttach(info, classification, options.Enabled, options.Types,
                     options.DisabledProcesses, out string reason))
             {
+                DialogTrace.Write($"不挂浮层：{reason}");
                 CoreLog.Info($"[文件对话框] 不挂浮层：{info.ProcessName} {info.ClassName} —— {reason}");
                 return;
             }
@@ -288,6 +291,7 @@ public sealed class FileDialogBarService : IDisposable
             var bounds = DialogNative.FrameBounds(info.Hwnd);
             if (bounds.IsEmpty)
             {
+                DialogTrace.Write($"取对话框边框失败（FrameBounds 空）：0x{info.Hwnd:X} {info.ProcessName}");
                 CoreLog.Warn("[文件对话框] 取对话框边框失败，本次不显示浮层");
                 return;
             }
@@ -297,9 +301,11 @@ public sealed class FileDialogBarService : IDisposable
             bar.MetricsEnabled = options.FollowMetrics;
             if (!bar.ShowFor(info, bounds, takeKeyboard, out string detail))
             {
+                DialogTrace.Write($"浮层显示失败：{detail}");
                 CoreLog.Warn($"[文件对话框] 浮层显示失败：{detail}");
                 return;
             }
+            DialogTrace.Write($"浮层已显示：{detail}（{info.ProcessName} 边框={bounds.Left},{bounds.Top},{bounds.Right},{bounds.Bottom}）");
 
             _current = info;
             _classification = classification;

@@ -155,23 +155,35 @@ public partial class GestureMenuWindow : Window
     public Core.Qbar.FavoriteTarget? Favorite => _favorite;
 
     /// <summary>
-    /// 预热（或点击后的识别）回来了：把"当前文件叫什么 / 是不是已经在收藏里 /
-    /// 到底有没有文件"补到顶部两颗入口上。菜单已经显示着，所以走 INotifyPropertyChanged
-    /// 原地改，不重建 ItemsSource（重建会让当前选中项跳回第一行）。
-    ///
-    /// <paramref name="hasFile"/> 是这一版（v1.5）新增的**唯一**依据：
-    /// 没有文件时两个入口一起置灰 —— 以前只判"前台不是桌面/资源管理器"，
-    /// 于是 Electron / 浏览器（DeepSeekRuntime、Edge…）里永远是亮的，
-    /// 点下去识别不到，就弹出一个"选择要定位的文件"，把用户送到一个
-    /// 和他刚才在做的事毫无关系的地方。
+    /// 旧签名（v1.5.1 那版）：只有"有没有文件"这一维。
+    /// 新代码请用 <see cref="MarkForegroundTarget"/> —— 它还知道"前台是不是一个真程序"，
+    /// 决定的是「打开文件所在位置」在认不出文件时还亮不亮（v1.7.9）。
     /// </summary>
     public void MarkForegroundFile(string fileName, bool favorited, bool hasFile)
+        => MarkForegroundTarget(fileName, favorited, hasFile, actionable: hasFile, processName: "");
+
+    /// <summary>
+    /// 预热 / 点击后识别回来了：把"当前文件叫什么 / 是不是已经在收藏里 / 这个程序能不能定位"
+    /// 补到顶部入口上。
+    ///
+    /// <paramref name="actionable"/> 是 v1.7.9 新增的那一维：**前台是个真程序**就够了 ——
+    /// 认不出文件时「打开文件所在位置」会退一步打开这个程序自己的 exe 目录，
+    /// 所以这一条不再要求 hasFile。第二行小字要说清楚点下去会打开什么：
+    /// 有文件写文件名，没文件写「weixin.exe 所在文件夹」，桌面/资源管理器才写"没有打开文件"。
+    /// </summary>
+    public void MarkForegroundTarget(string fileName, bool favorited, bool hasFile, bool actionable, string processName)
     {
+        string proc = (processName ?? "").Trim();
+        string programNote = proc.Length > 0
+            ? Loc.F("{0} 所在文件夹", proc)
+            : Loc.T("这个程序所在文件夹");
+
         foreach (GestureMenuEntry entry in _entries)
         {
             string action = entry.Item.Action ?? "";
             if (string.Equals(action, "favoriteForegroundFile", StringComparison.OrdinalIgnoreCase))
             {
+                /* 收藏那一路**必须有文件**：收藏一个"程序目录"没有意义。 */
                 entry.UpdateFavoriteGlyph(favorited);
                 entry.SetEnabled(hasFile);
                 entry.UpdateNote(hasFile
@@ -180,8 +192,10 @@ public partial class GestureMenuWindow : Window
             }
             else if (string.Equals(action, "revealForegroundFile", StringComparison.OrdinalIgnoreCase))
             {
-                entry.SetEnabled(hasFile);
-                entry.UpdateNote(hasFile ? fileName : Loc.T("前台没有打开文件"));
+                entry.SetEnabled(actionable);
+                entry.UpdateNote(!actionable
+                    ? Loc.T("前台没有打开文件")
+                    : (hasFile && fileName.Length > 0 ? fileName : programNote));
             }
         }
     }

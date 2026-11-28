@@ -133,6 +133,34 @@ public sealed partial class GestureService : IDisposable
      * 0 = 没有待收尾的立即执行；否则是那个鼠标键的 vk。 */
     private int _swallowUpVk;
 
+    /* ── 「没松手之前，这一笔不许自己消失」（v1.7.11）─────────────────────
+     *
+     * 现场：用户配了 8 条「识别手势立即执行」的手势。画中一条 → 动作当场执行 →
+     * 旧实现紧接着 SettleOverlay()（100~350ms 的淡出）→ **手指还按着，轨迹和名字已经没了**。
+     * 用户的规则：不松手就一直留着，唯一的例外是按住超过 8 秒（那多半是抬手丢了）。
+     *
+     * 所以立即执行之后只把"要收"这件事**记下来**：松手时（抬起被吞的那一下）
+     * 才真正走 SettleOverlay；按住期间覆盖层看门狗也不许收（见 OnOverlayGuard）。
+     */
+    internal const int GestureHoldLimitMs = 8000;
+
+    private int _immediateHoldVk;
+    private MouseGesture? _immediateHoldGesture;
+    private double _immediateHoldX, _immediateHoldY;
+    private long _immediateHoldAt;
+
+    /// <summary>
+    /// 这一笔是不是"早就该结束了"——**从最后一个轨迹点**算，不是从按下算（v1.7.14 修）。
+    ///
+    /// 用户的原话："画出来之后只要没松手，它就不该自己消失，除非 8 秒都没画出（没有新轨迹）。"
+    /// 以前这里（以及 OnPoll）都从**按下**开始计时：画 2 秒 + 按住想 6 秒，第 8 秒准时收掉 ——
+    /// 用户看到的就是"手还按着，线自己没了"。改成"最后动过之后 8 秒"：
+    ///   · 一直在画 → 每个点都刷新计时，画多久都不会被收；
+    ///   · 停手不动 8 秒 → 认为抬手丢了（或用户真的走开了），收掉并补发点击。
+    /// 纯函数：自检直接喂时间戳。
+    /// </summary>
+    internal static bool StrokeExpired(long now, long lastActivityAt) => now - lastActivityAt > GestureHoldLimitMs;
+
     /* ── 「按下被吞、却什么都没补发」的那几条路（v1.4.4 修） ──────────────
      *
      * 起始超时（按住不动 ≥ StartTimeoutMs）、分段过多、看门狗判定抬起丢了 ——
@@ -717,6 +745,10 @@ public sealed partial class GestureService : IDisposable
          * 否则前台窗口会收到一个没有配对的 MouseUp。 */
         if (!down && !injected && Interlocked.CompareExchange(ref _swallowUpVk, 0, vk) == vk)
         {
+            /* 立即执行的那一笔：动作早在按住期间就做完了，覆盖层一直留到现在 ——
+             * 松手这一刻才按 WG2 的「执行后淡出」收掉（v1.7.11，见 _immediateHoldVk）。 */
+            CompleteImmediateHold(vk);
+
             /* 中键菜单：路径 A 的收尾（按下被吞、抬起必须配对吞）。
              * 顺手判"用户其实在划还是只点了一下" —— 这里是唯一收得到这次抬起的地方，
              * 下面 689 行那段要求 _active，路径 A 压根没开过 _active。 */
@@ -1530,6 +1562,7 @@ public sealed partial class GestureService : IDisposable
 
     private void ResetActive()
     {
+        GestureTrace.Write($"ResetActive tracking={IsTracking} activeSince={_activeSince} lastMove={_lastMoveAt} points={_points.Count}");
         Interlocked.Exchange(ref _swallowUpVk, 0);
         Interlocked.Exchange(ref _replayClickOnUpVk, 0);
         lock (_gate)
@@ -1575,14 +1608,29 @@ public sealed partial class GestureService : IDisposable
     {
         try
         {
+            /* 立即执行完、手指还按着（v1.7.11）：这一屏要一直留着，只有按住超过
+             * 8 秒才收（那多半是抬手真的丢了，再留就永远留在屏幕上）。 */
+            int holdVk = Volatile.Read(ref _immediateHoldVk);
+            if (holdVk != 0)
+            {
+                if (Environment.TickCount64 - _immediateHoldAt > GestureHoldLimitMs)
+                {
+                    AttachDiag($"guard: 立即执行的一笔按住超过 8 秒，收掉 vk=0x{holdVk:X2}");
+                    CompleteImmediateHold(holdVk);
+                }
+                return;
+            }
+
             if (IsTracking)
             {
                 /* 按下重新被吞掉之后，`GetAsyncKeyState` 查不出真实状态（系统队列里根本没有这次按下），
-                 * 所以这里只按"多久没动"兜底：一笔手势停 8 秒还没松开，必然是一次丢失的抬起。 */
-                long last;
+                 * 所以这里按"多久没有新轨迹点"兜底（v1.7.14：口径从"按下之后"改成"最后动过之后"，
+                 * 见 <see cref="StrokeExpired"/>）—— 用户按住不动会一直留着，是画的过程中
+                 * 它绝不能被收掉；只有停手满 8 秒才按"抬手丢了"处理。 */
+                long lastMove;
                 int vk;
-                lock (_gate) { last = _lastMoveAt; vk = _vk; }
-                if (vk != 0 && Environment.TickCount64 - last > 8000)
+                lock (_gate) { lastMove = _lastMoveAt; vk = _vk; }
+                if (vk != 0 && StrokeExpired(Environment.TickCount64, lastMove))
                 {
                     AttachDiag($"guard: 抬手丢了，收掉这一笔 vk=0x{vk:X2}");
                     /* 按下早被我们吞了。抬起既然没回来，这一下就必须还回去 ——
@@ -1640,9 +1688,13 @@ public sealed partial class GestureService : IDisposable
              * WM_*BUTTONDOWN 已经被我们吞掉，系统队列里根本没有这次按下，
              * 查询结果会是 0。以前这里一进 OnPoll 就把刚开的一笔当成
              * “抬起丢了”清掉，表现就是右键画不出任何手势。
-             * 现在只保留 8 秒超时兜底；抬起丢失主要由下一次同键按下复位，
-             * 以及 Suspended/禁用时的 ResetActive 处理。 */
-            stale = _active && Environment.TickCount64 - _activeSince > 8000;
+             * 现在只保留 8 秒超时兜底，口径是**最后动过之后**（见 StrokeExpired，v1.7.14）；
+             * 抬起丢失主要由下一次同键按下复位，以及 Suspended/禁用时的 ResetActive 处理。
+             *
+             * ⚠ 这 8 秒是"按住不放"的唯一例外（用户明确要求）：
+             * 只要还在画、或者停手不到 8 秒，这一笔和它的覆盖层都不许自己消失。 */
+            stale = _active && StrokeExpired(Environment.TickCount64, _lastMoveAt);
+            if (stale) GestureTrace.Write($"stale: 停手 {Environment.TickCount64 - _lastMoveAt}ms → 收笔");
         }
         if (stale)
         {
@@ -1873,8 +1925,12 @@ public sealed partial class GestureService : IDisposable
         }
         _poll?.Stop();
 
-        /* 立即执行模式：命令当场下去，覆盖层按 WG2 的「执行后淡出」规则收
-         * （见 SettleOverlay / GestureOptions.FadeOutExecuted）。 */
+        /* 从现在起：这一笔"已经执行完、但手指还按着"。
+         * 覆盖层保持原样（轨迹 + 已识别名字），直到抬起（CompleteImmediateHold）
+         * 或者按住超过 8 秒（OnOverlayGuard）。 */
+        Interlocked.Exchange(ref _immediateHoldVk, vk);
+
+        /* 立即执行模式：命令当场下去，画面等松手再收（见 _immediateHoldVk 的注释）。 */
         ImmediateHit(hit, px, py, score);
         return true;
     }
@@ -1887,6 +1943,7 @@ public sealed partial class GestureService : IDisposable
     /// </summary>
     private void Finish(bool execute, string? keepOverlayFor = null)
     {
+        GestureTrace.Write($"Finish execute={execute} keep={keepOverlayFor} tracking={IsTracking}");
         bool recording;
         lock (_gate) recording = IsRecording;
         List<GestureMath.Pt> points;
@@ -2046,11 +2103,20 @@ public sealed partial class GestureService : IDisposable
         }
         else
         {
-            /* 未识别 = 屏幕上什么都不留。WG2 的手势结束处理只有两句
-             * （A/T.cs:115-119）：A_f3.D() 把轨迹整条清空、e() 收红点并停计时。
-             * 没有「未识别」字样，也没有"灰线多留一会儿" —— 那两样是我们自己加的。 */
-            if (extent >= opts.MinMove) CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
-            HideOverlay(0);
+            /* 未识别：轨迹和「未识别」两个字一起变灰，留一小会儿再消失（v1.7.12 恢复）。
+             *
+             * v1.7.8 曾按 WG2 把这段删干净（A/T.cs:115-119 只把轨迹清空、红点收掉，
+             * 屏幕上什么都不留）。问题是用户**分不清**"没认出来"和"根本没触发" ——
+             * 明明画了一笔，屏幕上一闪就没了，只能猜。所以把 v1.2.4 之前那套
+             * ShowUnrecognized + UnrecognizedHoldMs 捡回来。
+             *
+             * 只对"真的画了一笔"（够 MinMove）提示：单击本来就不该有反馈。 */
+            if (extent >= opts.MinMove)
+            {
+                ShowUnrecognized(px, py);
+                CoreLog.Info($"手势未命中（偏差 {score:0.000}）");
+            }
+            else HideOverlay(0);
         }
     }
 
@@ -2071,8 +2137,42 @@ public sealed partial class GestureService : IDisposable
     private void ImmediateHit(MouseGesture hit, double px, double py, double score)
     {
         Execute(hit, px, py);
-        SettleOverlay(hit, px, py);
+
+        /* 覆盖层**先不收**：物理键还按着（v1.7.11）。
+         * 记下"这一笔已经执行完、等松手再收"，松手由 CompleteImmediateHold 接手；
+         * 按住超过 8 秒则由看门狗按 _immediateHoldAt 兜底收掉。 */
+        _immediateHoldGesture = hit;
+        _immediateHoldX = px;
+        _immediateHoldY = py;
+        _immediateHoldAt = Environment.TickCount64;
+
         CoreLog.Info($"手势立即执行：{hit.Title(ActionCatalogTitle(hit))}（偏差 {score:0.000}）");
+    }
+
+    /// <summary>
+    /// 立即执行的那一笔收尾：只有**松手**（或者按住超过 8 秒）才会走到这里。
+    ///
+    /// 走 WG2 的「执行后淡出」（<see cref="SettleOverlay"/>）：先按 FadeOutExecuted
+    /// 决定停 100ms 还是 250ms，再淡出。执行本身早在按住期间就做完了，这里只负责收画面。
+    /// </summary>
+    private void CompleteImmediateHold(int vk)
+    {
+        if (Interlocked.CompareExchange(ref _immediateHoldVk, 0, vk) != vk) return;
+
+        MouseGesture? gesture = _immediateHoldGesture;
+        double x = _immediateHoldX, y = _immediateHoldY;
+        _immediateHoldGesture = null;
+        _immediateHoldAt = 0;
+
+        if (gesture != null)
+        {
+            try { SettleOverlay(gesture, x, y); }
+            catch (Exception ex) { CoreLog.Swallow(ex, "手势：立即执行的覆盖层收尾"); }
+        }
+        else
+        {
+            HideOverlay(0);
+        }
     }
     private void Execute(MouseGesture g, double px, double py)
     {
@@ -2434,8 +2534,20 @@ public sealed partial class GestureService : IDisposable
         }
 
         if (_stepsDrawn.Count < GestureStep.MaxSteps) _stepsDrawn.Add(step);
-        /* 这一步已经切走了：覆盖层上的轨迹从这儿重新画，免得看着像一笔。 */
-        Ui(() => _overlay?.ClearTrail());
+        /* ⚠ 这里**绝不能清覆盖层轨迹**（v1.7.17 修的现场，用户连报三次）。
+         *
+         * 以前这一行是 `Ui(() => _overlay?.ClearTrail())`，注释写着"这一步已经切走了，
+         * 覆盖层从这儿重新画，免得看着像一笔"。问题是：
+         *   · `_multiExpected` 是"这个键的候选里**有任意一条**多步手势" —— 不是
+         *     "用户正在画多步手势"。所以只要候选表里有一条多步手势，**每一笔**都进多模式；
+         *   · 于是用户画完一段、**手停 300ms**（很自然），轨迹就被整条擦掉，
+         *     而名称框还挂着 —— 表现就是"没松手，手势自己消失了"。
+         * 日志现场（%TEMP%\inputplus-gesture.log）：
+         *     22:32:42.589  ClearTrail caller=<CloseStepLocked>b__143_0
+         *
+         * 切步只是**识别用的切分**（`_segStart` 往后挪），画面没有任何理由跟着清空：
+         * 用户的心理模型是"我还没松手，这条线就该一直在"。 */
+        GestureTrace.Write($"CloseStepLocked: 记下第 {_stepsDrawn.Count} 步（轨迹保留，不清屏）");
     }
 
     /// <summary>作用域层级：具体程序 2、分组 1、全局 0（WG2 目标树的三层）。</summary>
@@ -2914,6 +3026,42 @@ public sealed partial class GestureService : IDisposable
     internal const int HitLabelLingerMs = 250;
 
     /// <summary>
+    /// 没有匹配到任何手势时的反馈：轨迹和「未识别」两个字一起变灰，留一小会儿再消失。
+    ///
+    /// **v1.7.12 恢复**。v1.7.8 为了"完全照抄 WG2"把这段删了（WG2 的收尾只有两句：
+    /// 轨迹清空、红点收掉，什么都不留）。删掉之后用户看到的是"画完凭空消失"，
+    /// 根本分不清是"没认出来"还是"根本没触发" —— 用户明确要求加回来。
+    ///
+    /// 代码是从 v1.2.4 之前的实现里捡回来的（`git show 04b6470^`）：
+    /// `ShowUnrecognized` + `UnrecognizedHoldMs` 这一对，连注释里的教训一起。
+    /// </summary>
+    private void ShowUnrecognized(double px, double py)
+    {
+        Ui(() =>
+        {
+            var overlay = EnsureOverlay();
+            overlay.ShowPassive();
+            overlay.ShowUnrecognized(px, py);
+            /* 「未识别」和轨迹一起留、一起变灰、一起消失（同一个定时器，
+             * 见 HideOverlay）。留多久见 UnrecognizedFlashMs。 */
+            HideOverlay(UnrecognizedHoldMs(Settings().GestureOptions));
+        });
+        CoreLog.Info("手势未识别：已提示（轨迹变灰 + 「未识别」）");
+    }
+
+    /// <summary>
+    /// 「未识别」在屏幕上停留多久。
+    ///
+    /// 历史：最初 120ms（用户当时的要求是"只保留灰色一瞬间就消失"），
+    /// 但那个时长"轨迹闪一下就没了"，看不出发生了什么。v1.7.12 把它放回可读的
+    /// 500ms —— 足够看清"未识别"三个字，又不至于在屏幕上占位。
+    /// </summary>
+    internal const int UnrecognizedFlashMs = 500;
+
+    /// <summary>未识别的停留毫秒数（保留 <paramref name="opts"/> 参数是为了不动调用点与自检签名）。</summary>
+    internal static int UnrecognizedHoldMs(GestureOptions opts) => UnrecognizedFlashMs;
+
+    /// <summary>
     /// 命中并执行之后覆盖层怎么收 —— WGestures 2 的「执行后淡出」：
     /// 勾了 FadeOutExecuted（默认）→ 名称换「已执行」配色，停 100ms 后消失；
     /// 没勾 → 停 250ms，再用 250ms 缓入淡出。手势自己勾了「执行时不显示手势名称」
@@ -2956,6 +3104,11 @@ public sealed partial class GestureService : IDisposable
     private void BeginStrokeVisual()
     {
         Interlocked.Increment(ref _hideEpoch);
+        /* 上一笔"立即执行、等松手再收"的状态作废：新的一笔接手这一屏，
+         * 老那一笔的抬起（如果还欠着）不该再把旧名字显示回来。 */
+        Interlocked.Exchange(ref _immediateHoldVk, 0);
+        _immediateHoldGesture = null;
+        _immediateHoldAt = 0;
         /* 新手势接手这一屏：上一笔的"还留着给人看"的排期一律作废，
          * 否则看门狗会拿上一笔的截止时间放行，反而漏收新一笔的残留。 */
         Volatile.Write(ref _overlayHoldUntil, 0);
@@ -3006,6 +3159,19 @@ public sealed partial class GestureService : IDisposable
 
     private void HideOverlay(int delayMs)
     {
+        GestureTrace.Write($"hide delay={delayMs} tracking={IsTracking} epoch={_hideEpoch} immediateHold={_immediateHoldVk}");
+        /* 立即执行后手指还按着：**排期收起一律不受理**（v1.7.11）。
+         * 那段时间里唯一该收画面的时刻是"松手"，由 CompleteImmediateHold 显式调用。
+         * 立刻收（delayMs <= 0）照常放行 —— 那是"这一屏不要了"（禁用/挂起/新手势），
+         * 顺手把"等松手"这件事一并作废，免得松手时又把名字重新显示出来。 */
+        if (delayMs > 0 && Volatile.Read(ref _immediateHoldVk) != 0) return;
+        if (delayMs <= 0)
+        {
+            Interlocked.Exchange(ref _immediateHoldVk, 0);
+            _immediateHoldGesture = null;
+            _immediateHoldAt = 0;
+        }
+
         _linger?.Stop();
         _fade?.Stop();
         int epoch = Interlocked.Increment(ref _hideEpoch);
@@ -3039,6 +3205,7 @@ public sealed partial class GestureService : IDisposable
 
     private void OnLinger(object? sender, EventArgs e)
     {
+        GestureTrace.Write($"linger fired epoch={_lingerEpoch} now={_hideEpoch} tracking={IsTracking}");
         _linger?.Stop();
         _fade?.Stop();
         int epoch = _lingerEpoch;

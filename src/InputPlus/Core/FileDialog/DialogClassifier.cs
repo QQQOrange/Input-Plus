@@ -25,13 +25,42 @@ public static class DialogClassifier
 
         if (isDialogClass)
         {
-            // a) Vista+ IFileDialog：DirectUIHWND 是 DirectUI 的宿主，
-            //    SHELLDLL_DefView 是文件列表视图（部分版本只有后者）。
-            if (DialogProbe.HasClass(children, "DirectUIHWND", "SHELLDLL_DefView"))
+            /* a) Vista+ IFileDialog：DirectUIHWND 是 DirectUI 的宿主，
+             *    SHELLDLL_DefView 是文件列表视图（部分版本只有后者）。
+             *
+             * ⚠ v1.7.14 加严：光有 DirectUIHWND **不够**。
+             * 现场（用户报的）：报错窗口上也会冒出这条浮层，可它没有选文件的功能。
+             * 原因是 TaskDialog / 某些现代消息框同样是 `#32770 + DirectUIHWND`
+             * （实测 WinForms 的 MessageBox 只有 Button+Static，不会误判；
+             * 出错的是 DirectUI 画的那一类任务对话框）。
+             *
+             * 真正的文件对话框一定还带这几样**只有它才有**的控件（实测 Win11 23H2 的
+             * IFileDialog 子控件：DUIViewWndClassName / DirectUIHWND / CtrlNotifySink ×4 /
+             * NamespaceTreeControl / SysTreeView32 / Shell Preview Extension Host /
+             * SHELLDLL_DefView / Static「文件名(&N):」）：
+             *   · CtrlNotifySink      —— 导航栏/工具栏的通知汇
+             *   · SHELLDLL_DefView    —— 文件列表
+             *   · DUIViewWndClassName —— DirectUI 视图壳
+             * 这三样都没有、只有 DirectUIHWND 的，一律按"任务对话框/消息框"处理。 */
+            bool hasDirectUi = DialogProbe.HasClass(children, "DirectUIHWND");
+            bool hasShellView = DialogProbe.HasClass(children, "SHELLDLL_DefView");
+            bool hasNotifySink = DialogProbe.HasClass(children, "CtrlNotifySink");
+            bool hasDuiView = DialogProbe.HasClass(children, "DUIViewWndClassName");
+
+            if ((hasDirectUi || hasShellView) && (hasNotifySink || hasShellView || hasDuiView))
             {
-                string which = DialogProbe.HasClass(children, "DirectUIHWND") ? "DirectUIHWND" : "SHELLDLL_DefView";
+                string which = hasNotifySink ? "CtrlNotifySink"
+                    : (hasShellView ? "SHELLDLL_DefView" : "DUIViewWndClassName");
                 return new DialogClassification(DialogKind.FileDialog, DialogFamily.VistaDialog,
-                    $"#32770 且含 {which}（Vista+ 通用文件对话框）");
+                    $"#32770 且含 DirectUIHWND + {which}（Vista+ 通用文件对话框）");
+            }
+
+            if (hasDirectUi)
+            {
+                /* 只有 DirectUIHWND：DirectUI 画的任务对话框、错误框、某些安装器提示。
+                 * **绝不能挂浮层** —— 它没有文件名输入框，回填无处可去。 */
+                return new DialogClassification(DialogKind.Unknown, DialogFamily.Unknown,
+                    "#32770 + DirectUIHWND 但没有文件视图/通知汇（任务对话框或消息框，不挂浮层）");
             }
 
             // b) 老式 GetOpenFileName：文件名组合框（ComboBoxEx32）里套一个 Edit。

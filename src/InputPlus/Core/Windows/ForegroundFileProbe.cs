@@ -300,10 +300,25 @@ internal static class ForegroundFileProbe
     {
         if (pid <= 0) return ForegroundFileResult.Fail(ForegroundFileOutcome.NoCandidate, "进程号无效");
 
-        string processName = LeafOf(ProcessExePath(pid));
+        string exePath = ProcessExePath(pid);
+        string processName = LeafOf(exePath);
         if (processName.Length == 0) processName = "pid" + pid;
         string title = windowTitle ?? "";
         var watch = Stopwatch.StartNew();
+
+        /* ⓪ 微信：图片 / 视频**不在用户文件里**，先去它自己的数据目录找。
+         *
+         * 为什么放在句柄扫描之前：微信 4.x 默认以管理员身份运行，普通权限连它的进程都
+         * 打不开（OpenProcess → 错误 5），扫句柄这条路注定空手；
+         * 而同族子进程、命令行、窗口标题（标题只有「微信」）也都不可能给出用户文件。
+         * 与其花掉整份 800ms 预算再回 NoCandidate，不如先走这条**只碰文件系统**的路。
+         * 详见 <see cref="WeChatMedia"/>。 */
+        if (WeChatMedia.IsWeChatProcess(processName) || WeChatMedia.IsWeChatPath(exePath))
+        {
+            string? media = WeChatMedia.FindCurrent(Math.Min(budgetMs, 400), ct);
+            if (media != null) return Ok(media, processName, hwnd, pid, "微信当前图片/视频");
+            CoreLog.Info($"[收藏] 前台是微信，但没找到最近的图片/视频：{processName}");
+        }
 
         /* ① 窗口进程自己的句柄表（覆盖 90%，真正的单进程程序一次就中） */
         var (paths, why) = EnumerateOpenFilesOnce(pid, budgetMs, ct);
@@ -955,6 +970,94 @@ internal static class ForegroundFileProbe
             return "";
         }
         finally { CloseHandle(process); }
+    }
+
+    /// <summary>
+    /// 前台程序自己的 exe 完整路径（退路用：打开它所在的文件夹**并选中它**）。
+    ///
+    /// v1.7.14：退路从"打开文件夹"改成"打开文件夹并选中 exe" —— 用户要的是
+    /// 「所在位置」那颗按钮的一贯语义：**资源管理器里该有东西被选中**。
+    /// 只给目录的话，窗口开出来谁也没选中，用户会以为按钮只做了一半。
+    /// </summary>
+    /// <param name="processName">前台进程名（可为空；空了就只能直接问 pid）。</param>
+    internal static string HostExeOf(int pid, string? processName)
+    {
+        string exe = ProcessExePath(pid);
+        if (exe.Length == 0) exe = ProcessExePathByFamily(processName);
+        return ExeUsableForFallback(exe) ? exe : "";
+    }
+
+    /// <summary>
+    /// exe 路径 → 该打开的文件夹（不该给退路时返回空串）。纯函数，自检可以直接喂假路径。
+    ///
+    /// **系统组件一律不给退路**：开始菜单的搜索框（<c>searchhost.exe</c>）、
+    /// UWP 的 <c>ApplicationFrameHost.exe</c>、锁屏这些锚点都会命中"前台是个程序"，
+    /// 但打开 <c>C:\Windows\System32</c> 或 <c>…\SystemApps\…</c> 对用户毫无意义，
+    /// 还容易让人以为程序乱来。这种情况退回"这里没有正在打开的文件"更诚实。
+    /// </summary>
+    internal static string FolderForHostExe(string? exePath)
+    {
+        string exe = (exePath ?? "").Trim().Trim('"');
+        if (!ExeUsableForFallback(exe)) return "";
+        try
+        {
+            string? dir = Path.GetDirectoryName(exe);
+            return dir == null ? "" : dir;
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>这个 exe 能不能拿来做「程序所在文件夹」这条退路（纯判定）。</summary>
+    private static bool ExeUsableForFallback(string? exePath)
+    {
+        string exe = (exePath ?? "").Trim().Trim('"');
+        if (exe.Length == 0) return false;
+        return !IsUnderWindowsDirectory(exe);
+    }
+
+    /// <summary>这个路径是不是落在 %SystemRoot% 下面（System32 / SystemApps / WinSxS…）。</summary>
+    private static bool IsUnderWindowsDirectory(string path)
+    {
+        try
+        {
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (win.Length == 0) return false;
+            return IsUnderSystemRoot(path, new[] { win });
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 同名进程里任意一个能问出 exe 路径就用它（同名的 exe 路径必然相同）。
+    ///
+    /// ⚠ 这里**不能**读 <c>Process.MainModule</c>：那要 <c>PROCESS_QUERY_INFORMATION|VM_READ</c>，
+    /// 微信这种主进程受保护 / 提升的程序一律回错误 5；而 <see cref="ProcessExePath"/> 用的
+    /// <c>PROCESS_QUERY_LIMITED_INFORMATION</c> 是专门为"跨完整性级别只看路径"设计的，
+    /// 微信的**子进程**都能过（实测：主进程 22100 拒，29448/31168/35452 全过）。
+    /// </summary>
+    internal static string ProcessExePathByFamily(string? processName)
+    {
+        string name = (processName ?? "").Trim();
+        if (name.Length == 0) return "";
+        string bare = LeafOf(name);
+        if (bare.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) bare = bare[..^4];
+        if (bare.Length == 0) return "";
+
+        try
+        {
+            foreach (Process p in Process.GetProcessesByName(bare))
+            {
+                int pid;
+                try { pid = p.Id; }
+                catch { continue; }
+                finally { p.Dispose(); }
+
+                string path = ProcessExePath(pid);
+                if (path.Length > 0) return path;
+            }
+        }
+        catch (Exception ex) { CoreLog.Swallow(ex, "取同名进程的 exe 路径"); }
+        return "";
     }
     /// <summary>
     /// 是不是"程序的缓存副本"，而不是用户心里那个文件。

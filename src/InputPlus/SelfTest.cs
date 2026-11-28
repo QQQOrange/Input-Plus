@@ -221,6 +221,7 @@ public static partial class SelfTest
 
         Section("鼠标手势");
         T(nameof(TestGestures), TestGestures);
+        T(nameof(TestGestureHold), TestGestureHold);
         T(nameof(TestGestureEngine), TestGestureEngine);
         T(nameof(TestWGesturesEngine), TestWGesturesEngine);
         T(nameof(TestWg2Layer), TestWg2Layer);
@@ -231,6 +232,8 @@ public static partial class SelfTest
 
         Section("中键菜单");
         T(nameof(TestMiddleMenu), TestMiddleMenu);
+        T(nameof(TestWeChatMedia), TestWeChatMedia);
+        T(nameof(TestRevealFallback), TestRevealFallback);
         T(nameof(TestAttachMenuLayout), TestAttachMenuLayout);
         T(nameof(TestThinScrollBars), TestThinScrollBars);
         T(nameof(TestFolderCascade), TestFolderCascade);
@@ -243,6 +246,7 @@ public static partial class SelfTest
         Section("笔画平滑");
 
         T(nameof(TestQbarIndex), TestQbarIndex);
+        T(nameof(TestQbarIndexButtons), TestQbarIndexButtons);
         T(nameof(TestQbarIndexQuery), TestQbarIndexQuery);
 
         Section("轨迹校正");
@@ -620,6 +624,7 @@ public static partial class SelfTest
 
         Section("文件对话框");
         T(nameof(TestFileDialogBar), TestFileDialogBar);
+        T(nameof(TestDialogClassifier), TestDialogClassifier);
 
         Section("搜索前建议");
         T(nameof(TestSuggestions), TestSuggestions);

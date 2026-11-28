@@ -140,6 +140,47 @@ internal static class ElevationState
         return result;
     }
 
+    /// <summary>
+    /// 前台窗口是不是"**我们管不到**的那种程序"：提升进程，或者受保护到连令牌都读不出。
+    ///
+    /// 与 <see cref="IsWindowElevated"/> 的分工：那个只管注入决策，拿不到信息时按"没提升"
+    /// 处理（宁可按普通注入，也不要凭空报错）；这里只管**给用户一句解释**，
+    /// 所以"读不到"本身也算证据。
+    ///
+    /// 为什么需要这一条：微信 4.x 的主进程 <c>Weixin.exe</c> 实测就是这样 ——
+    /// <c>OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)</c> 能过，
+    /// <c>OpenProcessToken</c> 回**错误 5**，于是 <see cref="IsWindowElevated"/> 会说"没提升"，
+    /// 而它的窗口明明在更高完整性级别上（旁证：同名的子进程反而读得到，且它们的令牌
+    /// elev=1 / elevType=Full=2）。
+    /// </summary>
+    internal static bool ForegroundLooksUnmanageable()
+    {
+        IntPtr hwnd;
+        try { hwnd = NativeMethods.GetForegroundWindow(); }
+        catch { return false; }
+        if (hwnd == IntPtr.Zero) return false;
+        if (Elevated) return false;                 // 自己已经是管理员：管得到，不需要提示
+        if (IsWindowElevated(hwnd)) return true;
+
+        // 令牌读不出来（错误 5 / 进程打不开）—— 多半也是更高完整性级别。
+        IntPtr process = IntPtr.Zero;
+        IntPtr token = IntPtr.Zero;
+        try
+        {
+            if (NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid) == 0 || pid == 0) return false;
+            process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return true;      // 连进程都打不开
+            if (NativeMethods.OpenProcessToken(process, TokenQuery, out token) && token != IntPtr.Zero) return false;
+            return true;                                  // 打不开令牌
+        }
+        catch { return false; }
+        finally
+        {
+            if (token != IntPtr.Zero) { try { NativeMethods.CloseHandle(token); } catch { } }
+            if (process != IntPtr.Zero) { try { NativeMethods.CloseHandle(process); } catch { } }
+        }
+    }
+
     /// <summary>某个窗口的进程是否提升。拿不到信息时按"没有提升"处理（宁可照常注入，也不要凭空报错）。</summary>
     internal static bool IsWindowElevated(IntPtr hwnd)
     {

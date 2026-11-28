@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -381,6 +381,7 @@ public sealed partial class GestureOverlayWindow : Window
     /// </summary>
     public void ClearTrail()
     {
+        GestureTrace.Write($"ClearTrail caller={new System.Diagnostics.StackTrace(1, false).GetFrame(0)?.GetMethod()?.Name}");
         _trail.Clear();
         _firstPaintPending = false;
         _lastPaintAt = 0;
@@ -474,6 +475,31 @@ public sealed partial class GestureOverlayWindow : Window
     /// <see cref="GestureService"/> 的未命中分支决定。
     /// </summary>
     public void MarkUnrecognized() => ApplyPathColor(NormalColor());
+
+    /// <summary>
+    /// 没有匹配到任何手势：轨迹换成「未识别」色，并在名称位置写上「未识别」，
+    /// 两者一起留一小会儿再消失（**v1.7.12 恢复**；v1.7.8 为了"完全照抄 WG2"删掉过）。
+    ///
+    /// 为什么要把这段加回来：删掉之后"画了一笔但没认出来"在屏幕上是**凭空消失** ——
+    /// 用户分不清"没认出来"和"根本没触发"（用户原话：应该提示未识别，
+    /// 鼠标轨迹和文字一起变灰，然后再消失）。
+    ///
+    /// 颜色用的是配置里的「未识别」色（<see cref="GestureOptions.PathColorNormal"/>，
+    /// 出厂 #00000030 = 19% 的黑，看起来就是灰的）；名字用的是「未识别」标签色
+    /// （<c>LabelColorNormal</c>），同样是灰的。两者由调用方同一个定时器一起收。
+    /// </summary>
+    public void ShowUnrecognized(double px, double py)
+    {
+        ApplyPathColor(NormalColor());
+        ShowLabel(Loc.T("未识别"), px, py, keepTrail: true);
+    }
+
+    /// <summary>仅供自检：名称框里写的字（没写字时为空串）。</summary>
+    internal string LabelTextForTest => LabelText.Text ?? "";
+
+    /// <summary>仅供自检：轨迹主线的颜色（ARGB）。</summary>
+    internal Color TrailColorForTest
+        => Trail.Stroke is SolidColorBrush brush ? brush.Color : Colors.Transparent;
 
     // ───────────────── 结果 ─────────────────
 

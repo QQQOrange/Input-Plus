@@ -236,6 +236,19 @@ public sealed partial class AppHost
         try
         {
             Exiting = true;
+
+            /* ★ 互斥体必须**一进来就放掉**（v1.7.15 修的现场：点了「现在重启」软件直接关闭、不回来）。
+             *
+             * 提权重启走的是 `RelaunchElevated(...)` + `ExitApp(restart: false)`：
+             * 新实例带着 --elevated 启动，最多等 6 秒拿互斥体；而这条退出链后面还有一长串
+             * native 收尾（UIA/COM、Rust 索引 dll、WinForms 托盘），动不动就超过 6 秒。
+             * 旧代码只在 `restart == true` 那条路里释放互斥体 —— 提权重启根本不是那条路。
+             * 结果：新实例等满 6 秒 → 判定"已有实例" → 唤醒旧实例后自己退出；
+             * 旧实例 meanwhile 也退完了 → **两个都没了**，用户看到的就是"关闭软件"。
+             *
+             * 退出就是退出，持有互斥体没有任何意义，所以这里无条件先放。 */
+            try { SingleInstance.Release(); } catch (Exception ex) { CoreLog.Swallow(ex, "退出时释放单实例互斥体"); }
+
             try { StopForExit(); } catch (Exception ex) { CoreLog.Swallow(ex, "退出前停止输入"); }
             try { SaveSettings(); } catch (Exception ex) { CoreLog.Warn("[退出] 保存设置失败：" + ex.Message); }
             try { UsageStats.Flush(); } catch (Exception ex) { CoreLog.Warn("[退出] 统计落盘失败：" + ex.Message); }

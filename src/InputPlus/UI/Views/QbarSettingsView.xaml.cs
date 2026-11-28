@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Net;
 using System.Net.Http;
@@ -1082,6 +1082,12 @@ public partial class QbarSettingsView : UserControl
             if (TryFindResource(hotkey.Length > 0 ? "Brush.TextPrimary" : "Brush.TextTertiary") is Brush hb)
                 MiddleHotkeyBox.Foreground = hb;
 
+            /* 权限边界提示（v1.7.9）：只在普通权限下出现 —— 已经是管理员就没这回事了。
+             * 这一块解释的就是"微信里按唤出键只打开开始菜单"那个现象，别再让用户自己去猜。 */
+            AttachElevationHint.Visibility = Core.ElevationHelper.IsElevated
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+
             /* 全屏开关和手势页共用一个字段：这里改，手势页那边立刻是同一个值。 */
             AttachFullscreenBox.IsChecked = s.GestureOptions.DisableInFullscreen;
 
@@ -1159,6 +1165,54 @@ public partial class QbarSettingsView : UserControl
         _host.SaveSettings();
         MiddleHotkeyBox.Text = Loc.T("未设置");
         if (TryFindResource("Brush.TextTertiary") is Brush brush) MiddleHotkeyBox.Foreground = brush;
+    }
+
+    /// <summary>
+    /// 「以管理员身份重启」（v1.7.9）：用户反馈"微信里按 Win 只打开开始菜单"的那条路。
+    ///
+    /// 这件事**只能**靠提权解决：低级键盘钩子看得见的是"同级或更低完整性级别"的输入，
+    /// 微信 4.x 默认以管理员身份运行，普通权限的钩子连它的按键都收不到 ——
+    /// 于是那一下被系统当成单独的 Win 键，开始菜单就开了。
+    ///
+    /// 和「常规」页那个开关是同一份设置（<c>Global.RunAsAdmin</c>），也走同一条重启链路；
+    /// 这里只是把它挪到用户真正会踩到的地方，省得他自己去翻设置。
+    /// 管理员模式下若钩子反而收不到按键，程序自己会带 <c>--noelevate</c> 降回普通权限重启
+    /// （见 AppHost.RestartSelfForHookRecovery），所以这个按钮不会把键盘搞死。
+    /// </summary>
+    private void OnElevateForAttachMenu(object sender, RoutedEventArgs e)
+    {
+        if (_host == null) return;
+
+        if (Core.ElevationHelper.IsElevated)
+        {
+            _host.Notify(Loc.T("已经是管理员权限了"));
+            return;
+        }
+
+        bool ok = AppDialog.Confirm(Window.GetWindow(this),
+            Loc.T("会以管理员身份重新启动 InputPlus（弹一次 UAC 授权）。\n\n") +
+            Loc.T("这样做之后：微信这类以管理员运行的程序里也能唤出附加菜单；\n") +
+            Loc.T("取词会自动改用普通权限代理执行，其余功能不受影响。\n\n") +
+            Loc.T("如果管理员模式下键盘反而不灵，程序会自己退回普通权限重启。\n\n现在就重启吗？"),
+            Loc.T("以管理员身份重启"), DialogKind.Warn, okText: Loc.T("现在重启"));
+        if (!ok) return;
+
+        _host.Settings.Global.RunAsAdmin = true;
+        _host.SaveSettings();
+
+        /* 自启载体要跟着换：管理员模式用计划任务，登录时才不会再弹 UAC。
+         * 失败了也不影响本次提权重启（Sync 内部会退回注册表并记日志）。 */
+        StartupManager.Sync(_host.Settings.Global.StartWithWindows, true);
+
+        if (Core.ElevationHelper.RelaunchElevated(Environment.GetCommandLineArgs().Skip(1).ToArray(), out string? err))
+        {
+            _host.ExitApp(restart: false);
+            return;
+        }
+
+        AppDialog.Warn(Window.GetWindow(this),
+            Loc.T("提权失败：") + (err ?? Loc.T("未知原因")) + Loc.T("\n\n（多半是在 UAC 对话框里点了「否」）"),
+            Loc.T("没能以管理员身份重启"));
     }
 
     /// <summary>
@@ -1619,7 +1673,9 @@ public partial class QbarSettingsView : UserControl
         if (IndexState == null) return;
 
         ApplyIndexStatus();
-        if (QbarIndex.Ready) { _indexTimer?.Stop(); return; }
+        /* 「建完了」要三样一起看：`Ready` 只是"索引里有文档"，
+         * 重建过程中它可能还是 1（v1.7.13，见 QbarIndex.IsRebuildDone 的注释）。 */
+        if (QbarIndex.Ready && !QbarIndex.Building && !QbarIndex.Starting) { _indexTimer?.Stop(); return; }
 
         /* 没就绪就顺手把索引拉起来（后台线程、内部有并发保护）。
          * 用户打开这一页多半就是"文件搜索不出东西"，让他点第二次才动是多余的。 */
@@ -1636,7 +1692,7 @@ public partial class QbarSettingsView : UserControl
     private void OnIndexTimerTick(object? sender, EventArgs e)
     {
         ApplyIndexStatus();
-        if (QbarIndex.Ready) _indexTimer?.Stop();
+        if (QbarIndex.Ready && !QbarIndex.Building && !QbarIndex.Starting) _indexTimer?.Stop();
     }
 
     /// <summary>
@@ -1662,8 +1718,14 @@ public partial class QbarSettingsView : UserControl
         if (QbarIndex.Building || !QbarIndex.Ready)
         {
             IndexState.Text = QbarIndex.Building ? Loc.T("正在建立索引") : Loc.T("索引还没建立");
+            /* 进度要看得见（v1.7.13）：重建时这几个数字在动，用户才知道按钮真的干活了。 */
+            string progress = QbarIndex.Building && (QbarIndex.ScannedFiles > 0 || QbarIndex.ScannedDirs > 0)
+                ? "\n" + Loc.F("已扫 {0} 个文件 / {1} 个目录…",
+                    QbarIndex.ScannedFiles.ToString("N0"), QbarIndex.ScannedDirs.ToString("N0"))
+                : "";
             IndexDetail.Text = QbarIndex.Status
                                + (QbarIndex.Problem.Length > 0 ? "\n" + QbarIndex.Problem : "")
+                               + progress
                                + "\n" + Loc.T("第一次建索引要扫一遍常用目录，几十万文件通常一两分钟；建好之后增量在后台维护，不用再等。");
             IndexDot.Fill = (Brush)FindResource("Brush.Warning");
             SetStartButton(Loc.T("正在建立…"), false);
@@ -1691,7 +1753,41 @@ public partial class QbarSettingsView : UserControl
             : Loc.T("索引正在建立，建完会自动变成可点。");
     }
 
-    private void OnRefreshIndex(object sender, RoutedEventArgs e) => RefreshIndexStatus();
+    /// <summary>
+    /// 「刷新状态」：立刻把状态行重画一遍，并**说一句话**（v1.7.13）。
+    ///
+    /// 以前它只调 applyIndexStatus() —— 状态没变的时候屏幕上什么都不动，
+    /// 用户点下去的唯一感受就是"这个按钮没实现"。现在至少给一句带数字的回执，
+    /// 顺便把"正在建"的进度也念出来。
+    /// </summary>
+    private void OnRefreshIndex(object sender, RoutedEventArgs e)
+    {
+        RefreshIndexStatus();
+        _host?.Notify(IndexSummaryLine());
+    }
+
+    /// <summary>一句话说清现在的索引状态（刷新回执、重建完成回执都用它）。</summary>
+    private static string IndexSummaryLine()
+    {
+        if (!TantivyApi.IsAvailable) return Loc.T("索引原生库没能加载（ipidx.dll 不在或被杀软隔离）");
+
+        if (QbarIndex.Building || QbarIndex.Starting)
+        {
+            return Loc.F("正在建立索引：已扫 {0} 个文件 / {1} 个目录",
+                QbarIndex.ScannedFiles.ToString("N0"), QbarIndex.ScannedDirs.ToString("N0"));
+        }
+
+        if (!QbarIndex.Ready)
+        {
+            return QbarIndex.Problem.Length > 0
+                ? QbarIndex.Problem
+                : Loc.T("索引还没建立：打开这一页会自动开始建");
+        }
+
+        return Loc.F("索引可用：{0} 个文件 / {1} 个目录 · 建索引于 {2}",
+            QbarIndex.FileCount.ToString("N0"), QbarIndex.DirCount.ToString("N0"),
+            QbarIndex.BuiltAt.ToString("yyyy-MM-dd HH:mm:ss"));
+    }
 
     // ─────────────────────────── 正文索引 ───────────────────────────
 
@@ -1859,29 +1955,59 @@ public partial class QbarSettingsView : UserControl
     /// <summary>
     /// 「重建索引」：清空索引目录重扫。索引在本进程里，所以这件事不需要启动任何外部程序，
     /// 也不需要用户去别处点一下再回来。
+    ///
+    /// v1.7.13 修：以前这里等的是 <c>QbarIndex.Ready</c> —— 那只是"索引里有文档"这个
+    /// **缓存事实**，重建期间任何一次打开/统计都能把它重新置 1。于是"点了重建"几百毫秒后
+    /// 就弹一句「文件索引已就绪：N 个文件」，而实际上重建才刚刚开始（或者根本没开始）。
+    /// 现在按 **generation** 对账（<see cref="QbarIndex.IsRebuildDone"/>），
+    /// 并且把"正在建、已扫多少"实时写进状态行，按钮自己也变成"正在重建…"。
     /// </summary>
     private void OnRebuildIndex(object sender, RoutedEventArgs e)
     {
-        _host?.Notify(Loc.T("正在重建文件索引…"));
+        _host?.Notify(Loc.T("正在重建文件索引…（会重扫所有索引目录，几十秒到几分钟）"));
+        SetStartButton(Loc.T("正在重建…"), false);
+        RefreshIndexStatus();       // 顺手把 900ms 的表拨起来，状态行跟着进度走
+
         Task.Run(() =>
         {
-            QbarIndex.RequestRebuild();
-
+            long requestedAt = Environment.TickCount64;
+            int generation = QbarIndex.RequestRebuild();
             var watch = System.Diagnostics.Stopwatch.StartNew();
-            while (!QbarIndex.Ready && watch.ElapsedMilliseconds < 8000)
-                System.Threading.Thread.Sleep(200);
+            long lastUiAt = 0;
 
+            /* 判据是"这一代建完了"，不是 Ready（见上面注释）。
+             * 上限 10 分钟：13 万目录实测 40 秒上下，机械盘/网络盘会到几分钟。 */
+            while (watch.ElapsedMilliseconds < RebuildWaitMs
+                   && QbarIndex.RebuildStillRunning(generation, Environment.TickCount64, requestedAt))
+            {
+                if (watch.ElapsedMilliseconds - lastUiAt >= 900)
+                {
+                    lastUiAt = watch.ElapsedMilliseconds;
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { ApplyIndexStatus(); } catch (Exception ex) { InputPlus.Core.CoreLog.Swallow(ex, "重建索引：刷状态行"); }
+                    }));
+                }
+                System.Threading.Thread.Sleep(250);
+            }
+
+            bool done = QbarIndex.IsRebuildDone(generation);
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                _host?.Notify(QbarIndex.Ready
-                    ? Loc.F("文件索引已就绪：{0} 个文件 / {1} 个目录", QbarIndex.FileCount, QbarIndex.DirCount)
+                _host?.Notify(done
+                    ? Loc.F("文件索引已重建：{0} 个文件 / {1} 个目录", QbarIndex.FileCount.ToString("N0"), QbarIndex.DirCount.ToString("N0"))
                     : (QbarIndex.Problem.Length > 0
                         ? QbarIndex.Problem
-                        : Loc.T("索引还在建立，稍后这一页会自动更新。")));
+                        : (QbarIndex.Building
+                            ? Loc.T("索引还在建，这一页会自动更新；建完之前搜索只覆盖已经入库的部分。")
+                            : Loc.T("索引没能建起来，详情见日志。"))));
                 RefreshIndexStatus();
             }));
         });
     }
+
+    /// <summary>「重建索引」最多等多久（毫秒）。</summary>
+    internal const int RebuildWaitMs = 10 * 60 * 1000;
 
     /* ── 文件搜：过滤器与优先级 ─────────────────────────────
        这两张列表和左边的条目列表用的是两套数据（Qbar.Filters / Qbar.Priority），
