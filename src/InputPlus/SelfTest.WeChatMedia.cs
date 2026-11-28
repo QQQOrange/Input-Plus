@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using InputPlus.Core.Windows;
 
@@ -71,6 +71,19 @@ public static partial class SelfTest
             File.SetLastWriteTime(thumb, now.AddDays(-30));
             File.SetLastWriteTime(mp4, now.AddDays(-30));
             CheckEqual<string?>("微信：超过一周的媒体不认", WeChatMedia.FindCurrent(2000), null);
+
+            /* v1.7.18：看图窗口那条路只认 6 小时内的媒体 —— 普通聊天窗口里点
+             * 「打开文件所在位置」不该被几天前收过图的会话目录骗走（用户报的"不知名的文件夹"）。 */
+            File.SetLastWriteTime(full, now.AddHours(-3));
+            File.SetLastWriteTime(thumb, now.AddHours(-3));
+            File.SetLastWriteTime(mp4, now.AddHours(-3));
+            Check("微信：看图时只认 6 小时内的媒体（3 小时前的能找到）",
+                WeChatMedia.FindCurrent(2000, default, WeChatMedia.ViewerMaxAge) != null);
+            File.SetLastWriteTime(full, now.AddDays(-2));
+            File.SetLastWriteTime(thumb, now.AddDays(-2));
+            File.SetLastWriteTime(mp4, now.AddDays(-2));
+            CheckEqual<string?>("微信：看图时 2 天前的媒体不认（会退到微信 exe 目录）",
+                WeChatMedia.FindCurrent(2000, default, WeChatMedia.ViewerMaxAge), null);
 
             /* 数据目录里没有 msg 子树 → 一眼就返回 null（不能把整盘翻一遍）。 */
             string empty = Path.Combine(root, "xwechat_files", "wxid_empty");

@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using InputPlus.Core.Interop;
 
 namespace InputPlus.Core.Windows;
 
@@ -47,6 +48,16 @@ internal static class WeChatMedia
 
     /// <summary>再旧就不认了：一周前的"最近图片"和用户此刻在看的东西毫无关系。</summary>
     internal static readonly TimeSpan MaxAge = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// "在看图/视频"这条路上只认**最近 6 小时**内写过的媒体（v1.7.18）。
+    ///
+    /// 为什么收这么紧：用户明确要求"没点开图片时，打开文件所在位置应该直接打开微信 exe 的位置"。
+    /// 以前这里按"最近写入"从 7 天范围里挑一个，于是在普通聊天窗口里点一下，
+    /// 它会打开某个**几天前**收过图的会话目录 —— 用户说"不知名的文件夹"。
+    /// 6 小时以内 + 必须站在看图/视频窗口上，两个条件同时成立才认。
+    /// </summary>
+    internal static readonly TimeSpan ViewerMaxAge = TimeSpan.FromHours(6);
 
     /// <summary>一次识别最多翻多少个目录 / 多少个文件。</summary>
     internal const int MaxDirs = 2400;
@@ -211,12 +222,14 @@ internal static class WeChatMedia
     /// 微信此刻（最近）打开的那张图片 / 那个视频。找不到返回 null。
     /// </summary>
     /// <param name="budgetMs">最多翻多久；调用方那 800ms 的识别预算要分它一部分。</param>
-    internal static string? FindCurrent(int budgetMs = 400, CancellationToken ct = default)
+    /// <param name="maxAge">只认这么久以内写过的媒体（null = <see cref="MaxAge"/>）。</param>
+    internal static string? FindCurrent(int budgetMs = 400, CancellationToken ct = default, TimeSpan? maxAge = null)
     {
         IReadOnlyList<string> roots = DataRoots();
         if (roots.Count == 0) return null;
 
         DateTime now = NowForTest ?? DateTime.Now;
+        TimeSpan age = maxAge ?? MaxAge;
         var watch = Stopwatch.StartNew();
         string? best = null;
         long bestKey = long.MinValue;
@@ -235,11 +248,121 @@ internal static class WeChatMedia
                 int remaining = budgetMs - (int)watch.ElapsedMilliseconds;
                 if (remaining < 40) break;
 
-                ScanSubtree(subtree, now, remaining, ct, ref bestKey, ref best);
+                ScanSubtree(subtree, now, age, remaining, ct, ref bestKey, ref best);
             }
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// 按**锚点窗口**判断"微信此刻到底有没有在看图/看视频"，再决定返回什么（v1.7.18）。
+    ///
+    /// 用户定的规则：
+    ///   · 在普通聊天窗口里唤出附加菜单 → 不该猜图，**直接落到微信 exe 所在文件夹**；
+    ///   · 真的点开了一张图/一个视频（看图窗口是独立窗口）→ 才定位那份媒体。
+    ///
+    /// 判据顺序：
+    ///   ① 锚点就是微信**主窗口**（该进程里面积最大的可见窗口）→ 返回 null，交给上层退到 exe 目录；
+    ///   ② 站在别的窗口上（看图/视频）→ 先问**句柄表**：微信正开着哪个媒体文件（同权限级别时最准）；
+    ///   ③ 句柄问不到（不同完整性级别 / 它已经读完关了）→ 退到"最近 6 小时内写过的媒体"。
+    /// </summary>
+    internal static string? FindForAnchor(IntPtr anchor, int pid, int budgetMs = 400, CancellationToken ct = default)
+    {
+        if (anchor == IntPtr.Zero) return null;
+        if (IsMainWindow(anchor, pid))
+        {
+            CoreLog.Info("[收藏] 微信停在主窗口（没在看图/视频）→ 不猜媒体");
+            return null;
+        }
+
+        string? fromHandles = NewestMediaInHandles(pid, Math.Min(budgetMs, 300), ct);
+        if (fromHandles != null)
+        {
+            CoreLog.Info("[收藏] 微信看图窗口：按句柄命中媒体 " + fromHandles);
+            return fromHandles;
+        }
+
+        string? recent = FindCurrent(Math.Min(budgetMs, 300), ct, ViewerMaxAge);
+        if (recent != null) CoreLog.Info("[收藏] 微信看图窗口：按最近 6 小时媒体命中 " + recent);
+        return recent;
+    }
+
+    /// <summary>这个窗口是不是微信的**主窗口**（该 pid 下面积最大的可见顶层窗口）。</summary>
+    internal static bool IsMainWindow(IntPtr anchor, int pid)
+    {
+        if (anchor == IntPtr.Zero || pid <= 0) return false;
+        try
+        {
+            IntPtr biggest = IntPtr.Zero;
+            long bestArea = -1;
+            NativeMethods.EnumWindows((h, _) =>
+            {
+                NativeMethods.GetWindowThreadProcessId(h, out uint owner);
+                if (owner != (uint)pid) return true;
+                if (!NativeMethods.IsWindowVisible(h)) return true;
+                if (!NativeMethods.GetWindowRect(h, out NativeMethods.RECT r)) return true;
+                long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+                if (area <= bestArea) return true;
+                bestArea = area;
+                biggest = h;
+                return true;
+            }, IntPtr.Zero);
+            return biggest != IntPtr.Zero && biggest == anchor;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "微信：判断主窗口");
+            return false;      // 判不出来时按"在看图"处理：最多退到最近媒体，不会瞎开 exe 目录
+        }
+    }
+
+    /// <summary>
+    /// 从微信进程的句柄表里挑"打开着的媒体文件"（同权限级别时最准）。
+    /// 微信以管理员身份运行时普通权限读不到句柄表 —— 那就返回 null，让上层走"最近 6 小时"。
+    /// </summary>
+    private static string? NewestMediaInHandles(int pid, int budgetMs, CancellationToken ct)
+    {
+        try
+        {
+            var (paths, _) = ForegroundFileProbe.EnumerateOpenFilesOnce(pid, budgetMs, ct);
+            if (paths.Count == 0) return null;
+
+            IReadOnlyList<string> roots = DataRoots();
+            string? best = null;
+            long bestKey = long.MinValue;
+            foreach (string raw in paths)
+            {
+                string path = RevealPath.Clean(raw);
+                if (!IsMediaExtension(ExtensionOf(path))) continue;
+                bool underRoot = false;
+                foreach (string root in roots)
+                {
+                    if (path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { underRoot = true; break; }
+                }
+                if (!underRoot) continue;
+
+                DateTime written;
+                try { written = File.GetLastWriteTime(path); } catch { continue; }
+                if (DateTime.Now - written > ViewerMaxAge) continue;
+
+                long key = Score(path, written);
+                if (key <= bestKey) continue;
+                bestKey = key;
+                best = path;
+            }
+            return best;
+        }
+        catch (Exception ex)
+        {
+            CoreLog.Swallow(ex, "微信：从句柄表找媒体");
+            return null;
+        }
+    }
+
+    private static string ExtensionOf(string? path)
+    {
+        try { return System.IO.Path.GetExtension(path ?? ""); } catch { return ""; }
     }
 
     /// <summary>要翻的几棵子树（4.x 与 3.x 各一套）。</summary>
@@ -262,7 +385,7 @@ internal static class WeChatMedia
     /// 剪枝靠**目录自己的写入时间**：一个 9 月之后再没被动过的月份目录，
     /// 里面不可能有"最近"的文件，直接整棵跳过。这条让 3 万文件的树通常只碰几十个目录。
     /// </summary>
-    private static void ScanSubtree(string subtree, DateTime now, int budgetMs, CancellationToken ct,
+    private static void ScanSubtree(string subtree, DateTime now, TimeSpan age, int budgetMs, CancellationToken ct,
         ref long bestKey, ref string? best)
     {
         var watch = Stopwatch.StartNew();
@@ -270,7 +393,7 @@ internal static class WeChatMedia
         stack.Push(subtree);
         int dirs = 0;
         int files = 0;
-        DateTime cutoff = now - MaxAge;
+        DateTime cutoff = now - age;
 
         while (stack.Count > 0)
         {
@@ -287,6 +410,7 @@ internal static class WeChatMedia
                 foreach (FileInfo file in info.EnumerateFiles())
                 {
                     if (++files > MaxFiles) break;
+                    if ((files & 0xFF) == 0 && watch.ElapsedMilliseconds > budgetMs) return;   // 每 256 个文件核一次预算（v1.7.18）
                     if (!IsMediaExtension(file.Extension)) continue;
 
                     DateTime written = file.LastWriteTime;

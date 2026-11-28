@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -315,7 +315,7 @@ internal static class ForegroundFileProbe
          * 详见 <see cref="WeChatMedia"/>。 */
         if (WeChatMedia.IsWeChatProcess(processName) || WeChatMedia.IsWeChatPath(exePath))
         {
-            string? media = WeChatMedia.FindCurrent(Math.Min(budgetMs, 400), ct);
+            string? media = WeChatMedia.FindForAnchor(hwnd, pid, Math.Min(budgetMs, 400), ct);
             if (media != null) return Ok(media, processName, hwnd, pid, "微信当前图片/视频");
             CoreLog.Info($"[收藏] 前台是微信，但没找到最近的图片/视频：{processName}");
         }
